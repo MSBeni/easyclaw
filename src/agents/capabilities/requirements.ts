@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { hasConfiguredExecApprovalDmRoute } from "../../infra/exec-approval-surface.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
 import { listConnectorsForContract } from "./registry.js";
-import type { CapabilityRegistry, PlannerStatus } from "./schema.js";
+import type { CapabilityRegistry, ConnectorDefinition, PlannerStatus } from "./schema.js";
 
 export const REQUIREMENT_CONFIDENCES = ["low", "medium", "high"] as const;
 
@@ -65,17 +65,6 @@ type RequirementGapPatch = Partial<
   Pick<RequirementSet, "missingInputs" | "setupGaps" | "policyGaps" | "unsupportedGaps">
 >;
 
-const CHANNEL_PATTERNS: Array<{ channel: string; pattern: RegExp }> = [
-  { channel: "discord", pattern: /\bdiscord\b/i },
-  { channel: "email", pattern: /\b(email|emails|gmail|mailbox|inbox)\b/i },
-  { channel: "matrix", pattern: /\bmatrix\b/i },
-  { channel: "slack", pattern: /\bslack\b/i },
-  { channel: "signal", pattern: /\bsignal\b/i },
-  { channel: "telegram", pattern: /\btelegram\b/i },
-  { channel: "msteams", pattern: /\b(microsoft teams|ms teams|msteams)\b/i },
-  { channel: "whatsapp", pattern: /\b(whatsapp|whats app)\b/i },
-];
-
 function dedupeStrings(values: string[]): string[] {
   return values.filter((value, index, all) => all.indexOf(value) === index);
 }
@@ -124,10 +113,75 @@ function createGap(params: RequirementGap): RequirementGap {
   };
 }
 
-function detectMentionedChannels(brief: string): string[] {
-  return CHANNEL_PATTERNS.filter((entry) => entry.pattern.test(brief))
-    .map((entry) => entry.channel)
-    .filter((channel, index, all) => all.indexOf(channel) === index);
+function normalizeWords(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function normalizeCompact(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function dedupeNonEmptyStrings(values: Array<string | undefined>): string[] {
+  return dedupeStrings(
+    values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)),
+  );
+}
+
+function isChatConnector(connector: ConnectorDefinition): boolean {
+  const sourceKind = connector.source.kind;
+  if (
+    sourceKind !== "builtin_channel" &&
+    sourceKind !== "channel_catalog" &&
+    sourceKind !== "external"
+  ) {
+    return false;
+  }
+  return (
+    connector.contracts.includes("ingress.chat") || connector.contracts.includes("message.send")
+  );
+}
+
+function listConnectorMatchTerms(connector: ConnectorDefinition): string[] {
+  const metadata = connector.metadata ?? {};
+  return dedupeNonEmptyStrings([
+    connector.source.id,
+    connector.label,
+    metadata.selectionLabel,
+    metadata.detailLabel,
+    ...(metadata.aliases ?? []),
+  ]);
+}
+
+function connectorMatchesBrief(brief: string, connector: ConnectorDefinition): boolean {
+  const normalizedBrief = ` ${normalizeWords(brief)} `;
+  const compactBrief = normalizeCompact(brief);
+  return listConnectorMatchTerms(connector).some((term) => {
+    const normalizedTerm = normalizeWords(term);
+    const compactTerm = normalizeCompact(term);
+    if (!compactTerm) {
+      return false;
+    }
+    return (
+      (normalizedTerm.length > 0 && normalizedBrief.includes(` ${normalizedTerm} `)) ||
+      (compactTerm.length > 3 && compactBrief.includes(compactTerm))
+    );
+  });
+}
+
+function detectMentionedChannels(
+  brief: string,
+  registry: CapabilityRegistry,
+): ConnectorDefinition[] {
+  return registry.connectors
+    .filter((connector) => isChatConnector(connector))
+    .filter((connector) => connectorMatchesBrief(brief, connector))
+    .filter(
+      (connector, index, all) =>
+        all.findIndex((entry) => entry.source.id === connector.source.id) === index,
+    );
 }
 
 function hasScheduleLanguage(brief: string): boolean {
@@ -320,9 +374,10 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     throw new Error("A requirement brief is required.");
   }
 
-  const registry = params.registry ?? buildOpenClawCapabilityRegistry({ includeCatalog: false });
+  const registry = params.registry ?? buildOpenClawCapabilityRegistry();
   const text = brief.toLowerCase();
-  const mentionedChannels = detectMentionedChannels(brief);
+  const mentionedChannels = detectMentionedChannels(brief, registry);
+  const mentionedChatChannelIds = mentionedChannels.map((connector) => connector.source.id);
   const intentTags = dedupeStrings(
     [
       hasAssistantLanguage(text) ? "assistant" : null,
@@ -394,26 +449,22 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
 
   if (
     supportRequest ||
-    (mentionedChannels.length > 0 && /\b(bot|responder|questions?)\b/i.test(brief))
+    (mentionedChatChannelIds.length > 0 && /\b(bot|responder|questions?)\b/i.test(brief))
   ) {
     triggers.push(
       createDescriptor({
         id: "chat-ingress",
         label: "Chat Ingress",
         detail:
-          mentionedChannels.length > 0
-            ? `Receive inbound chat messages from ${mentionedChannels
-                .filter((channel) => channel !== "email")
-                .join(", ")}.`
+          mentionedChatChannelIds.length > 0
+            ? `Receive inbound chat messages from ${mentionedChatChannelIds.join(", ")}.`
             : "Receive inbound chat messages.",
         contractIds: ["ingress.chat"],
-        connectorIds: mentionedChannels
-          .filter((channel) => channel !== "email")
-          .map((channel) => `channel:${channel}`),
+        connectorIds: mentionedChannels.map((connector) => connector.id),
         confidence: supportRequest ? "high" : "medium",
       }),
     );
-    if (supportRequest && mentionedChannels.filter((channel) => channel !== "email").length === 0) {
+    if (supportRequest && mentionedChatChannelIds.length === 0) {
       missingInputs.push(
         createGap({
           kind: "input",
@@ -552,7 +603,7 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
       );
     }
 
-    const outputChannels = mentionedChannels.filter((channel) => channel !== "email");
+    const outputChannels = mentionedChannels;
     if (outputChannels.length > 0 || /\b(send|deliver|post|share).*\b(me|for me)\b/i.test(brief)) {
       outputs.push(
         createDescriptor({
@@ -560,10 +611,12 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
           label: "Message Send",
           detail:
             outputChannels.length > 0
-              ? `Send the result through ${outputChannels.join(", ")}.`
+              ? `Send the result through ${outputChannels
+                  .map((connector) => connector.source.id)
+                  .join(", ")}.`
               : "Send the result to an owner-facing chat destination.",
           contractIds: ["message.send"],
-          connectorIds: outputChannels.map((channel) => `channel:${channel}`),
+          connectorIds: outputChannels.map((connector) => connector.id),
           confidence: outputChannels.length > 0 ? "high" : "medium",
         }),
       );
@@ -619,28 +672,15 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     );
   }
 
-  for (const channel of mentionedChannels.filter((value) => value !== "email")) {
-    const connectorId = `channel:${channel}`;
-    if (!registry.connectorsById.has(connectorId)) {
-      unsupportedGaps.push(
-        createGap({
-          kind: "unsupported",
-          code: `connector:${channel}`,
-          message: `No current connector matches the requested ${channel} surface.`,
-          contractIds: ["message.send", "ingress.chat"],
-          connectorIds: [connectorId],
-        }),
-      );
-      continue;
-    }
-    if (!isChannelConfigured(params.cfg, channel)) {
+  for (const connector of mentionedChannels) {
+    if (!isChannelConfigured(params.cfg, connector.source.id)) {
       setupGaps.push(
         createGap({
           kind: "setup",
-          code: `channel:${channel}`,
-          message: `Configure the ${channel} channel before using it in this workflow.`,
+          code: `channel:${connector.source.id}`,
+          message: `Configure the ${connector.source.id} channel before using it in this workflow.`,
           contractIds: ["ingress.chat", "message.send"],
-          connectorIds: [connectorId],
+          connectorIds: [connector.id],
         }),
       );
     }

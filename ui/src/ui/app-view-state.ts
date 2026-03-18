@@ -172,6 +172,9 @@ export type AppViewState = {
   builderApplying: boolean;
   builderApplyError: string | null;
   builderConfirmApply: boolean;
+  builderVerifyResult: import("./controllers/builder.ts").BuilderVerifyResult | null;
+  builderVerifying: boolean;
+  builderVerifyError: string | null;
   templatesSelectedId: string | null;
   templatesPanel: "gallery" | "detail" | "plan";
   templatesCatalog: import("./controllers/templates.ts").TemplateCatalogEntry[] | null;

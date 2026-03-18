@@ -126,6 +126,7 @@ export type ConnectorDefinition = {
     docsPath?: string;
     selectionLabel?: string;
     detailLabel?: string;
+    aliases?: string[];
     systemImage?: string;
     toolSectionId?: string;
     toolIds?: string[];
@@ -140,6 +141,7 @@ export type IntegrationInstance = {
   authRefs: string[];
   issues: string[];
   lastVerifiedAt?: string;
+  lastObservedAt?: string;
 };
 
 export type CapabilityRegistry = {

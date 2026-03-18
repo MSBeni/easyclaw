@@ -1,6 +1,7 @@
 import {
   applyAgentBlueprintBuilderPlan,
   compileAgentBlueprintBuilderPlan,
+  verifyAgentBlueprintBuilderPlan,
 } from "../../agents/blueprints/builder.js";
 import { loadConfig } from "../../config/config.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
@@ -59,6 +60,33 @@ export const builderHandlers: GatewayRequestHandlers = {
     try {
       const cfg = loadConfig();
       const result = await applyAgentBlueprintBuilderPlan({
+        brief: parsed.brief,
+        ...(parsed.templateId ? { templateId: parsed.templateId } : {}),
+        cfg,
+      });
+      respond(true, result, undefined);
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, String(error instanceof Error ? error.message : error)),
+      );
+    }
+  },
+
+  "agents.builder.verify": async ({ params, respond }) => {
+    const parsed = parseBuilderParams(params);
+    if (!parsed.brief) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agents.builder.verify requires a `brief` param."),
+      );
+      return;
+    }
+    try {
+      const cfg = loadConfig();
+      const result = await verifyAgentBlueprintBuilderPlan({
         brief: parsed.brief,
         ...(parsed.templateId ? { templateId: parsed.templateId } : {}),
         cfg,

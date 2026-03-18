@@ -4,6 +4,7 @@ import {
   agentsAddCommand,
   agentsBuilderApplyCommand,
   agentsBuilderPlanCommand,
+  agentsBuilderVerifyCommand,
   agentsBindingsCommand,
   agentsBindCommand,
   agentsDeleteCommand,
@@ -403,6 +404,10 @@ ${formatHelpExamples([
     'openclaw agents builder apply "Create me a daily briefing on Telegram" --yes',
     "Build and apply an agent directly from a natural-language brief.",
   ],
+  [
+    'openclaw agents builder verify "Create me a daily briefing on Telegram"',
+    "Run live connector verification for the inferred workflow.",
+  ],
 ])}
 `,
     );
@@ -415,6 +420,24 @@ ${formatHelpExamples([
     .action(async (brief, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentsBuilderPlanCommand(
+          {
+            brief: String(brief),
+            template: opts.template as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  builder
+    .command("verify <brief>")
+    .description("Run live verification for the inferred builder workflow")
+    .option("--template <id>", "Force a specific blueprint template")
+    .option("--json", "Output JSON instead of text", false)
+    .action(async (brief, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsBuilderVerifyCommand(
           {
             brief: String(brief),
             template: opts.template as string | undefined,

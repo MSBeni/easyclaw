@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { listCoreToolSections } from "../tool-catalog.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
 import {
   buildCapabilityRegistry,
@@ -123,5 +124,30 @@ describe("openclaw capability substrate", () => {
 
     expect(registry.connectorsById.get("channel:telegram")?.setup.onboarding).toBe(true);
     expect(registry.connectorsById.get("channel:slack")?.setup.onboarding).toBe(true);
+  });
+
+  it("covers every core OpenClaw tool section with at least one connector contract", () => {
+    const registry = buildOpenClawCapabilityRegistry({ includeCatalog: false });
+
+    for (const section of listCoreToolSections()) {
+      expect(registry.connectorsById.get(`tools:${section.id}`)?.contracts.length).toBeGreaterThan(
+        0,
+      );
+    }
+
+    expect(registry.connectorsById.get("tools:nodes")?.contracts).toContain("node.operate");
+    expect(registry.connectorsById.get("tools:sessions")?.contracts).toEqual(
+      expect.arrayContaining(["session.inspect", "session.message", "session.spawn"]),
+    );
+    expect(registry.connectorsById.get("tools:ui")?.contracts).toEqual(
+      expect.arrayContaining(["browser.operate", "canvas.operate"]),
+    );
+    expect(registry.connectorsById.get("tools:media")?.contracts).toEqual(
+      expect.arrayContaining([
+        "transform.image_understand",
+        "transform.synthesize_speech",
+        "transform.transcribe",
+      ]),
+    );
   });
 });

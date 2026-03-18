@@ -1,9 +1,42 @@
 import { describe, expect, it } from "vitest";
+import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
 import {
   applyRequirementQuestions,
   buildRequirementSet,
   type RequirementQuestion,
 } from "./requirements.js";
+import type { ConnectorDefinition } from "./schema.js";
+
+const EXTERNAL_ZALO_CONNECTOR: ConnectorDefinition = {
+  id: "channel:zalo",
+  label: "Zalo",
+  kind: "plugin",
+  summary: "External Zalo chat connector.",
+  contracts: ["ingress.chat", "delivery.chat", "message.send"],
+  riskClasses: ["communicative"],
+  source: {
+    kind: "external",
+    id: "zalo",
+  },
+  install: {
+    required: true,
+    strategy: "external",
+  },
+  setup: {
+    onboarding: true,
+    requiresConfig: true,
+    requiresAuth: true,
+  },
+  verification: {
+    supported: true,
+    probes: [],
+  },
+  metadata: {
+    aliases: ["zalo"],
+    detailLabel: "Zalo Bot",
+    selectionLabel: "Zalo",
+  },
+};
 
 describe("capability requirements", () => {
   it("extracts scheduled digest requirements and reports setup gaps", () => {
@@ -87,5 +120,22 @@ describe("capability requirements", () => {
       "question:binding-channel",
     );
     expect(withQuestions.plannerStatus).toBe("needs_input");
+  });
+
+  it("detects external chat connectors from the capability registry", () => {
+    const registry = buildOpenClawCapabilityRegistry({
+      includeCatalog: false,
+      extraConnectors: [EXTERNAL_ZALO_CONNECTOR],
+    });
+    const requirements = buildRequirementSet({
+      brief: "Create a daily summary bot that sends the result to Zalo.",
+      cfg: {},
+      registry,
+    });
+
+    expect(
+      requirements.outputs.find((entry) => entry.id === "message-output")?.connectorIds,
+    ).toContain("channel:zalo");
+    expect(requirements.setupGaps.map((gap) => gap.code)).toContain("channel:zalo");
   });
 });

@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "../../config/config.js";
+import { stableStringify } from "../stable-stringify.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
 import { listConnectorsForContract } from "./registry.js";
 import type { RequirementDescriptor, RequirementSet } from "./requirements.js";
@@ -44,7 +46,9 @@ export type PlannedSetupTask = {
   refs: string[];
 };
 
-export type PlannedVerificationStatus = "passed" | "blocked" | "needs_live_check";
+export type PlannedVerificationStatus = "passed" | "failed" | "blocked" | "needs_live_check";
+
+export type PlannedVerificationSource = "preflight" | "persisted" | "live";
 
 export type PlannedVerificationResult = {
   id: string;
@@ -54,10 +58,13 @@ export type PlannedVerificationResult = {
   probeLabel: string;
   status: PlannedVerificationStatus;
   detail: string;
+  source: PlannedVerificationSource;
+  checkedAt?: string;
 };
 
 export type RequirementPlannerResult = {
   status: PlannerStatus;
+  verificationFingerprint: string;
   selections: RequirementPlannerSelection[];
   integrations: PlannedIntegrationInstance[];
   setupTasks: PlannedSetupTask[];
@@ -72,6 +79,59 @@ type RequirementPlannerParams = {
 
 function dedupeStrings(values: string[]): string[] {
   return values.filter((value, index, all) => all.indexOf(value) === index);
+}
+
+function buildVerificationFingerprint(params: {
+  status: PlannerStatus;
+  selections: RequirementPlannerSelection[];
+  integrations: PlannedIntegrationInstance[];
+}): string {
+  return createHash("sha256")
+    .update(
+      stableStringify({
+        status: params.status,
+        selections: params.selections.map((selection) => ({
+          requirementId: selection.requirementId,
+          contractIds: selection.contractIds,
+          connectorId: selection.connectorId,
+          source: selection.source,
+        })),
+        integrations: params.integrations.map((integration) => ({
+          connectorId: integration.connectorId,
+          instanceId: integration.instanceId,
+          status: integration.status,
+          configRefs: integration.configRefs,
+          authRefs: integration.authRefs,
+          contracts: integration.contracts,
+          sourceKind: integration.sourceKind,
+        })),
+      }),
+    )
+    .digest("hex");
+}
+
+function sortSelections(selections: RequirementPlannerSelection[]): RequirementPlannerSelection[] {
+  return selections.toSorted((left, right) =>
+    `${left.requirementLabel}:${left.connectorLabel}`.localeCompare(
+      `${right.requirementLabel}:${right.connectorLabel}`,
+    ),
+  );
+}
+
+function sortSetupTasks(tasks: PlannedSetupTask[]): PlannedSetupTask[] {
+  return tasks.toSorted((left, right) =>
+    `${left.status}:${left.title}`.localeCompare(`${right.status}:${right.title}`),
+  );
+}
+
+function sortVerificationResults(
+  results: PlannedVerificationResult[],
+): PlannedVerificationResult[] {
+  return results.toSorted((left, right) =>
+    `${left.connectorLabel}:${left.probeLabel}`.localeCompare(
+      `${right.connectorLabel}:${right.probeLabel}`,
+    ),
+  );
 }
 
 function listRequirementDescriptors(requirements: RequirementSet): RequirementDescriptor[] {
@@ -122,6 +182,25 @@ function statusRank(status: IntegrationInstance["status"]): number {
     case "failed":
       return 0;
   }
+}
+
+function derivePlannerStatus(params: {
+  baseStatus: PlannerStatus;
+  integrations: PlannedIntegrationInstance[];
+  verifications: PlannedVerificationResult[];
+}): PlannerStatus {
+  if (params.baseStatus !== "ready") {
+    return params.baseStatus;
+  }
+  if (
+    params.verifications.some((result) => result.status === "failed") ||
+    params.integrations.some(
+      (integration) => integration.status === "degraded" || integration.status === "failed",
+    )
+  ) {
+    return "needs_setup";
+  }
+  return "ready";
 }
 
 function connectorConfigRefs(connector: ConnectorDefinition): string[] {
@@ -360,6 +439,7 @@ function buildVerificationResults(
           ? (integration.issues[0] ??
             `${integration.label} is not configured enough for a status check.`)
           : probe.successDescription,
+        source: "preflight",
       };
     }
 
@@ -374,6 +454,7 @@ function buildVerificationResults(
         detail:
           integration.issues[0] ??
           `${integration.label} still needs setup before ${probe.label.toLowerCase()} can run.`,
+        source: "preflight",
       };
     }
 
@@ -385,8 +466,31 @@ function buildVerificationResults(
       probeLabel: probe.label,
       status: "needs_live_check",
       detail: `${integration.label} looks configured, but ${probe.label.toLowerCase()} still needs a live runtime check.`,
+      source: "preflight",
     };
   });
+}
+
+function buildSetupTasksForIntegrations(params: {
+  integrations: PlannedIntegrationInstance[];
+  registry: CapabilityRegistry;
+}): PlannedSetupTask[] {
+  return sortSetupTasks(
+    params.integrations
+      .map((integration) => {
+        const connector = params.registry.connectorsById.get(integration.connectorId);
+        return connector ? buildSetupTask(connector, integration) : null;
+      })
+      .filter((task): task is PlannedSetupTask => Boolean(task)),
+  );
+}
+
+function buildPreflightVerificationResultsForIntegrations(
+  integrations: PlannedIntegrationInstance[],
+): PlannedVerificationResult[] {
+  return sortVerificationResults(
+    integrations.flatMap((integration) => buildVerificationResults(integration)),
+  );
 }
 
 function choosePreferredConnectorId(
@@ -501,30 +605,50 @@ export function buildRequirementPlannerResult(
     .filter((connector): connector is ConnectorDefinition => Boolean(connector))
     .map((connector) => describeIntegrationInstance(connector, params.cfg))
     .toSorted((left, right) => left.label.localeCompare(right.label));
-  const setupTasks = integrations
-    .map((integration) => {
-      const connector = registry.connectorsById.get(integration.connectorId);
-      return connector ? buildSetupTask(connector, integration) : null;
-    })
-    .filter((task): task is PlannedSetupTask => Boolean(task))
-    .toSorted((left, right) =>
-      `${left.status}:${left.title}`.localeCompare(`${right.status}:${right.title}`),
-    );
-  const verifications = integrations
-    .flatMap((integration) => buildVerificationResults(integration))
-    .toSorted((left, right) =>
-      `${left.connectorLabel}:${left.probeLabel}`.localeCompare(
-        `${right.connectorLabel}:${right.probeLabel}`,
-      ),
-    );
+  return rebuildRequirementPlannerResult({
+    status: params.requirements.plannerStatus,
+    selections,
+    integrations,
+    registry,
+  });
+}
+
+export function rebuildRequirementPlannerResult(params: {
+  status: PlannerStatus;
+  selections: RequirementPlannerSelection[];
+  integrations: PlannedIntegrationInstance[];
+  verifications?: PlannedVerificationResult[];
+  registry?: CapabilityRegistry;
+  verificationFingerprint?: string;
+}): RequirementPlannerResult {
+  const registry = params.registry ?? buildOpenClawCapabilityRegistry();
+  const selections = sortSelections(params.selections);
+  const integrations = params.integrations.toSorted((left, right) =>
+    left.label.localeCompare(right.label),
+  );
+  const setupTasks = buildSetupTasksForIntegrations({
+    integrations,
+    registry,
+  });
+  const verifications = params.verifications
+    ? sortVerificationResults(params.verifications)
+    : buildPreflightVerificationResultsForIntegrations(integrations);
+  const status = derivePlannerStatus({
+    baseStatus: params.status,
+    integrations,
+    verifications,
+  });
 
   return {
-    status: params.requirements.plannerStatus,
-    selections: selections.toSorted((left, right) =>
-      `${left.requirementLabel}:${left.connectorLabel}`.localeCompare(
-        `${right.requirementLabel}:${right.connectorLabel}`,
-      ),
-    ),
+    status,
+    verificationFingerprint:
+      params.verificationFingerprint ??
+      buildVerificationFingerprint({
+        status,
+        selections,
+        integrations,
+      }),
+    selections,
     integrations,
     setupTasks,
     verifications,

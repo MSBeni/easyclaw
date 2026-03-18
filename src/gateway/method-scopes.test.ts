@@ -12,6 +12,7 @@ describe("method scope resolution", () => {
     ["sessions.resolve", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["agents.builder.plan", ["operator.read"]],
+    ["agents.builder.verify", ["operator.read"]],
     ["agents.templates.plan", ["operator.read"]],
     ["poll", ["operator.write"]],
     ["agents.builder.apply", ["operator.admin"]],

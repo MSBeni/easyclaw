@@ -4048,6 +4048,140 @@
   margin-top: 12px;
 }
 
+/* Builder action buttons */
+.builder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.builder-actions__secondary {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+}
+
+/* Intent tags row */
+.builder-intent-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+/* Gaps section (warnings below requirement grid) */
+.builder-gaps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* Verification run summary */
+.builder-verify-summary {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.builder-verify-summary--ok {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.05) 0%, transparent 100%);
+}
+
+.builder-verify-summary--warn {
+  border-color: rgba(239, 68, 68, 0.2);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.04) 0%, transparent 100%);
+}
+
+.builder-verify-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.builder-verify-count {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.builder-verify-count--ok {
+  color: var(--ok);
+}
+
+.builder-verify-count--error {
+  color: var(--danger);
+}
+
+.builder-verify-count--warn {
+  color: var(--warn);
+}
+
+.builder-verify-count--muted {
+  color: var(--muted);
+}
+
+/* Builder "Configure →" link buttons */
+.builder-config-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.builder-config-link:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 1px 4px rgba(255, 92, 92, 0.15);
+}
+
+/* Row that holds a config ref + its configure link */
+.builder-config-link-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Row inside a callout that holds issue text + configure link */
+.builder-issue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.builder-issue-row > span {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .builder-actions__secondary {
+    border-left: none;
+    padding-left: 0;
+    flex-basis: 100%;
+  }
+}
+
 /* Builder brief textarea should use proportional font (natural language input) */
 .builder-brief-field textarea {
   font-family: inherit;

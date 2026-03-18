@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { agentsBuilderApplyCommand, agentsBuilderPlanCommand } from "./agents.js";
+import {
+  agentsBuilderApplyCommand,
+  agentsBuilderPlanCommand,
+  agentsBuilderVerifyCommand,
+} from "./agents.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const compileAgentBlueprintBuilderPlanMock = vi.hoisted(() => vi.fn());
 const applyAgentBlueprintBuilderPlanMock = vi.hoisted(() => vi.fn());
+const verifyAgentBlueprintBuilderPlanMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
@@ -14,6 +19,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 vi.mock("../agents/blueprints/builder.js", () => ({
   compileAgentBlueprintBuilderPlan: compileAgentBlueprintBuilderPlanMock,
   applyAgentBlueprintBuilderPlan: applyAgentBlueprintBuilderPlanMock,
+  verifyAgentBlueprintBuilderPlan: verifyAgentBlueprintBuilderPlanMock,
 }));
 
 const runtime = createTestRuntime();
@@ -26,6 +32,7 @@ describe("agents builder commands", () => {
     readConfigFileSnapshotMock.mockReset();
     compileAgentBlueprintBuilderPlanMock.mockReset();
     applyAgentBlueprintBuilderPlanMock.mockReset();
+    verifyAgentBlueprintBuilderPlanMock.mockReset();
     readConfigFileSnapshotMock.mockResolvedValue({
       valid: true,
       config: {},
@@ -310,5 +317,128 @@ describe("agents builder commands", () => {
       cfg: {},
     });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Applied blueprint"));
+  });
+
+  it("runs live verification and exits non-zero when probes fail", async () => {
+    verifyAgentBlueprintBuilderPlanMock.mockResolvedValue({
+      draft: {
+        brief: "Create a support bot on Telegram",
+        templateId: "support-responder",
+        displayName: "Support Responder",
+        confidence: "high",
+        plannerStatus: "needs_setup",
+        reasons: ["Matched support language."],
+        assumptions: [],
+        questions: [],
+        ready: false,
+        requirements: {
+          intentTags: ["support"],
+          triggers: [],
+          inputs: [],
+          transforms: [],
+          decisions: [],
+          actions: [],
+          outputs: [],
+          policies: [],
+          constraints: [],
+          missingInputs: [],
+          setupGaps: [],
+          policyGaps: [],
+          unsupportedGaps: [],
+        },
+        planning: {
+          selections: [],
+          integrations: [
+            {
+              connectorId: "channel:telegram",
+              instanceId: "channel:telegram",
+              status: "degraded",
+              configRefs: ["channels.telegram"],
+              authRefs: ["channels.telegram"],
+              issues: ["Live verification failed for Status probe: unauthorized"],
+              label: "Telegram",
+              kind: "channel",
+              sourceKind: "builtin_channel",
+              contracts: ["ingress.chat", "delivery.chat", "message.send"],
+              verification: [],
+            },
+          ],
+          setupTasks: [],
+          verifications: [
+            {
+              id: "channel:telegram:status",
+              connectorId: "channel:telegram",
+              connectorLabel: "Telegram",
+              probeKind: "status",
+              probeLabel: "Status probe",
+              status: "failed",
+              detail: "unauthorized",
+              source: "live",
+              checkedAt: "2026-03-18T12:00:00.000Z",
+            },
+          ],
+        },
+        extracted: {
+          agentId: "support",
+          name: "Support",
+          ingressChannels: ["telegram"],
+          sourceChannels: [],
+          deliveryTarget: null,
+          schedule: null,
+        },
+      },
+      verification: {
+        fingerprint: "abc123",
+        checkedAt: "2026-03-18T12:00:00.000Z",
+        passedCount: 0,
+        failedCount: 1,
+        blockedCount: 0,
+        unresolvedCount: 0,
+        results: [],
+      },
+      plan: {
+        manifest: {
+          templateId: "support-responder",
+          displayName: "Support Responder",
+          version: "0.1.0",
+          summary: "Support",
+        },
+        status: "ready",
+        issues: [],
+        agent: {
+          agentId: "support",
+          name: "Support",
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent",
+          modelSelection: { mode: "prompt-user" },
+        },
+        workspace: { notes: [], bootstrapFiles: [] },
+        runtime: {
+          skills: [],
+          tools: {
+            profile: "messaging",
+            allow: null,
+            deny: [],
+            customAllow: [],
+            customDeny: [],
+            byProvider: {},
+          },
+        },
+        routing: { bindings: [], sources: [] },
+        automation: { schedules: [] },
+        delivery: { targetSummary: null },
+        validation: {
+          prerequisites: [],
+          readinessChecks: [],
+          smokePrompts: [],
+          successCriteria: [],
+        },
+      },
+    });
+
+    await agentsBuilderVerifyCommand({ brief: "Create a support bot on Telegram" }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Live verification:"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

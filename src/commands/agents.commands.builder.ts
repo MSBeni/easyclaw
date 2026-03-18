@@ -1,6 +1,7 @@
 import {
   compileAgentBlueprintBuilderPlan,
   applyAgentBlueprintBuilderPlan,
+  verifyAgentBlueprintBuilderPlan,
   type AgentBlueprintBuilderDraftSummary,
 } from "../agents/blueprints/builder.js";
 import { readConfigFileSnapshot } from "../config/config.js";
@@ -19,6 +20,12 @@ type AgentsBuilderApplyOptions = {
   brief: string;
   template?: string;
   yes?: boolean;
+  json?: boolean;
+};
+
+type AgentsBuilderVerifyOptions = {
+  brief: string;
+  template?: string;
   json?: boolean;
 };
 
@@ -88,6 +95,9 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
     lines.push("Integrations:");
     for (const integration of draft.planning.integrations) {
       lines.push(`- ${integration.label}: ${integration.status}`);
+      if (integration.lastVerifiedAt) {
+        lines.push(`  last verified: ${integration.lastVerifiedAt}`);
+      }
       for (const issue of integration.issues) {
         lines.push(`  - ${issue}`);
       }
@@ -106,7 +116,11 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
   if (draft.planning.verifications.length > 0) {
     lines.push("Verification:");
     for (const result of draft.planning.verifications) {
-      lines.push(`- ${result.connectorLabel} / ${result.probeLabel}: ${result.status}`);
+      const suffix = result.checkedAt ? ` @ ${result.checkedAt}` : "";
+      const source = result.source ?? "preflight";
+      lines.push(
+        `- ${result.connectorLabel} / ${result.probeLabel}: ${result.status} (${source}${suffix})`,
+      );
       lines.push(`  ${result.detail}`);
     }
   }
@@ -126,6 +140,23 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
   }
   lines.push(`- ready: ${draft.ready ? "yes" : "no"}`);
   return lines.join("\n");
+}
+
+function formatVerificationSummary(run: {
+  checkedAt: string;
+  passedCount: number;
+  failedCount: number;
+  blockedCount: number;
+  unresolvedCount: number;
+}): string {
+  return [
+    "Live verification:",
+    `- checked at: ${run.checkedAt}`,
+    `- passed: ${run.passedCount}`,
+    `- failed: ${run.failedCount}`,
+    `- blocked: ${run.blockedCount}`,
+    `- unresolved: ${run.unresolvedCount}`,
+  ].join("\n");
 }
 
 export async function agentsBuilderPlanCommand(
@@ -180,6 +211,39 @@ export async function agentsBuilderApplyCommand(
     runtime.log(
       [formatBuilderDraft(result.draft), "", formatApplySummary(result.result)].join("\n"),
     );
+  } catch (error) {
+    runtime.error(error instanceof Error ? error.message : String(error));
+    runtime.exit(1);
+  }
+}
+
+export async function agentsBuilderVerifyCommand(
+  opts: AgentsBuilderVerifyOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
+  try {
+    const cfg = await loadPlanningConfig();
+    const result = await verifyAgentBlueprintBuilderPlan({
+      brief: opts.brief,
+      ...(opts.template ? { templateId: opts.template } : {}),
+      cfg,
+    });
+    if (opts.json) {
+      runtime.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    runtime.log(
+      [
+        formatBuilderDraft(result.draft),
+        "",
+        formatVerificationSummary(result.verification),
+        "",
+        formatAgentBlueprintPlan(result.plan),
+      ].join("\n"),
+    );
+    if (result.verification.failedCount > 0 || result.verification.blockedCount > 0) {
+      runtime.exit(1);
+    }
   } catch (error) {
     runtime.error(error instanceof Error ? error.message : String(error));
     runtime.exit(1);

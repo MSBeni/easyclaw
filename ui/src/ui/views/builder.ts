@@ -1,6 +1,12 @@
 import { html, nothing } from "lit";
 import type { AppViewState } from "../app-view-state.ts";
-import { applyBuilderPlan, loadBuilderPlan, type BuilderState } from "../controllers/builder.ts";
+import {
+  applyBuilderPlan,
+  loadBuilderPlan,
+  type BuilderState,
+  verifyBuilderPlan,
+} from "../controllers/builder.ts";
+import type { Tab } from "../navigation.ts";
 
 const BUILDER_TEMPLATE_OPTIONS = [
   { value: "", label: "Auto select" },
@@ -10,11 +16,193 @@ const BUILDER_TEMPLATE_OPTIONS = [
   { value: "research-agent", label: "Research Agent" },
 ] as const;
 
+// ---------------------------------------------------------------------------
+// Config ref → settings tab + section mapping
+// ---------------------------------------------------------------------------
+
+type ConfigTarget = {
+  tab: Tab;
+  section: string;
+  /** The state property to set (e.g. "communicationsActiveSection") */
+  sectionKey: string;
+};
+
+/**
+ * Maps config sections to their settings tab and section state property.
+ * The key is the first segment of a config ref (e.g. "channels" from "channels.telegram").
+ */
+const CONFIG_SECTION_MAP: Record<string, ConfigTarget> = {
+  // Communications tab
+  channels: {
+    tab: "communications",
+    section: "channels",
+    sectionKey: "communicationsActiveSection",
+  },
+  messages: {
+    tab: "communications",
+    section: "messages",
+    sectionKey: "communicationsActiveSection",
+  },
+  broadcast: {
+    tab: "communications",
+    section: "broadcast",
+    sectionKey: "communicationsActiveSection",
+  },
+  talk: { tab: "communications", section: "talk", sectionKey: "communicationsActiveSection" },
+  audio: { tab: "communications", section: "audio", sectionKey: "communicationsActiveSection" },
+  // AI & Agents tab
+  agents: { tab: "aiAgents", section: "agents", sectionKey: "aiAgentsActiveSection" },
+  models: { tab: "aiAgents", section: "models", sectionKey: "aiAgentsActiveSection" },
+  skills: { tab: "aiAgents", section: "skills", sectionKey: "aiAgentsActiveSection" },
+  tools: { tab: "aiAgents", section: "tools", sectionKey: "aiAgentsActiveSection" },
+  memory: { tab: "aiAgents", section: "memory", sectionKey: "aiAgentsActiveSection" },
+  session: { tab: "aiAgents", section: "session", sectionKey: "aiAgentsActiveSection" },
+  // Automation tab
+  commands: { tab: "automation", section: "commands", sectionKey: "automationActiveSection" },
+  hooks: { tab: "automation", section: "hooks", sectionKey: "automationActiveSection" },
+  bindings: { tab: "automation", section: "bindings", sectionKey: "automationActiveSection" },
+  cron: { tab: "automation", section: "cron", sectionKey: "automationActiveSection" },
+  approvals: { tab: "automation", section: "approvals", sectionKey: "automationActiveSection" },
+  plugins: { tab: "automation", section: "plugins", sectionKey: "automationActiveSection" },
+  // Infrastructure tab
+  gateway: { tab: "infrastructure", section: "gateway", sectionKey: "infrastructureActiveSection" },
+  web: { tab: "infrastructure", section: "web", sectionKey: "infrastructureActiveSection" },
+  browser: { tab: "infrastructure", section: "browser", sectionKey: "infrastructureActiveSection" },
+  nodeHost: {
+    tab: "infrastructure",
+    section: "nodeHost",
+    sectionKey: "infrastructureActiveSection",
+  },
+  canvasHost: {
+    tab: "infrastructure",
+    section: "canvasHost",
+    sectionKey: "infrastructureActiveSection",
+  },
+  discovery: {
+    tab: "infrastructure",
+    section: "discovery",
+    sectionKey: "infrastructureActiveSection",
+  },
+  media: { tab: "infrastructure", section: "media", sectionKey: "infrastructureActiveSection" },
+  // Core config tab
+  env: { tab: "config", section: "env", sectionKey: "configActiveSection" },
+  auth: { tab: "config", section: "auth", sectionKey: "configActiveSection" },
+  update: { tab: "config", section: "update", sectionKey: "configActiveSection" },
+  meta: { tab: "config", section: "meta", sectionKey: "configActiveSection" },
+  logging: { tab: "config", section: "logging", sectionKey: "configActiveSection" },
+};
+
+/**
+ * Map a connectorId like "platform:gmail-hook" or "channel:telegram" to a config ref
+ * like "hooks" or "channels.telegram" that can be resolved to a settings section.
+ */
+function connectorIdToConfigRef(connectorId: string): string | null {
+  if (!connectorId) {
+    return null;
+  }
+
+  // channel:telegram → channels.telegram
+  if (connectorId.startsWith("channel:")) {
+    return `channels.${connectorId.slice("channel:".length)}`;
+  }
+  // platform:gmail-hook, platform:gmail → hooks
+  if (connectorId.includes("gmail") || connectorId.includes("hook")) {
+    return "hooks";
+  }
+  // platform:core-model, platform:openai, platform:anthropic → models
+  if (
+    connectorId.includes("model") ||
+    connectorId.includes("openai") ||
+    connectorId.includes("anthropic") ||
+    connectorId.includes("ollama") ||
+    connectorId.includes("groq")
+  ) {
+    return "models";
+  }
+  // tools:automation, tools:cron → cron
+  if (connectorId.includes("automation") || connectorId.includes("cron")) {
+    return "cron";
+  }
+  // tools:messaging → channels
+  if (connectorId.includes("messaging")) {
+    return "channels";
+  }
+  // tools:browser → browser
+  if (connectorId.includes("browser")) {
+    return "browser";
+  }
+  // tools:memory → memory
+  if (connectorId.includes("memory")) {
+    return "memory";
+  }
+  // tools:skill → skills
+  if (connectorId.includes("skill")) {
+    return "skills";
+  }
+  // tools:command → commands
+  if (connectorId.includes("command")) {
+    return "commands";
+  }
+  // platform:web → web
+  if (connectorId.includes("web")) {
+    return "web";
+  }
+  // platform:signal → channels.signal, platform:discord → channels.discord, etc.
+  const knownChannels = [
+    "telegram",
+    "discord",
+    "slack",
+    "signal",
+    "whatsapp",
+    "imessage",
+    "matrix",
+    "msteams",
+  ];
+  for (const ch of knownChannels) {
+    if (connectorId.includes(ch)) {
+      return `channels.${ch}`;
+    }
+  }
+  // generic: try to extract a section from the id after ":"
+  const parts = connectorId.split(":");
+  if (parts.length >= 2) {
+    const section = parts[1].split("-")[0];
+    if (CONFIG_SECTION_MAP[section]) {
+      return section;
+    }
+  }
+  return null;
+}
+
+/** Resolve the first config ref from a list to a navigable config target, or null. */
+function resolveConfigTarget(refs: string[]): ConfigTarget | null {
+  for (const ref of refs) {
+    const firstSegment = ref.split(".")[0];
+    const target = CONFIG_SECTION_MAP[firstSegment];
+    if (target) {
+      return target;
+    }
+  }
+  return null;
+}
+
+/** Navigate to a config section. Sets the tab and the active section. */
+function navigateToConfig(state: AppViewState, refs: string[]) {
+  const target = resolveConfigTarget(refs);
+  if (!target) {
+    return;
+  }
+  // Set the section state before navigating so it's ready when the tab renders
+  (state as Record<string, unknown>)[target.sectionKey] = target.section;
+  state.setTab(target.tab);
+}
+
 export type BuilderProps = {
   state: AppViewState;
   onSetBrief: (brief: string) => void;
   onSetTemplate: (templateId: string) => void;
   onPlan: () => void;
+  onVerify: () => void;
   onConfirmApply: () => void;
   onCancelApply: () => void;
   onApply: () => void;
@@ -28,6 +216,10 @@ export function triggerBuilderApply(state: BuilderState) {
   void applyBuilderPlan(state);
 }
 
+export function triggerBuilderVerify(state: BuilderState) {
+  void verifyBuilderPlan(state);
+}
+
 export function renderBuilder(props: BuilderProps) {
   const { state } = props;
   const planResult = state.builderPlan;
@@ -39,7 +231,7 @@ export function renderBuilder(props: BuilderProps) {
   return html`
     <div class="builder-layout">
       <section class="card">
-        <div class="card-title" style="font-size:14px;">Describe The Agent</div>
+        <div class="card-title section-title">Describe The Agent</div>
         <div class="card-sub" style="margin-bottom:12px;">
           Write the job in plain English. The builder will extract requirements, choose the
           closest starter template, and show whether the workflow is ready, needs setup, or still
@@ -70,24 +262,45 @@ export function renderBuilder(props: BuilderProps) {
           </select>
         </label>
 
-        <div style="display:flex; gap:8px; margin-top:16px;">
+        <div class="builder-actions" style="margin-top:16px;">
           <button
             class="btn primary"
             ?disabled=${!state.builderBrief.trim() || state.builderPlanLoading}
             @click=${props.onPlan}
           >
-            ${state.builderPlanLoading ? "Planning..." : "Build Plan"}
+            ${
+              state.builderPlanLoading
+                ? html`
+                    <span class="loading-spinner" style="font-size: 13px">Planning...</span>
+                  `
+                : "Build Plan"
+            }
           </button>
           ${
             planResult
               ? html`
-                  <button
-                    class="btn"
-                    ?disabled=${state.builderPlanLoading}
-                    @click=${props.onPlan}
-                  >
-                    Rebuild
-                  </button>
+                  <div class="builder-actions__secondary">
+                    <button
+                      class="btn btn--sm"
+                      ?disabled=${state.builderVerifying}
+                      @click=${props.onVerify}
+                    >
+                      ${
+                        state.builderVerifying
+                          ? html`
+                              <span class="loading-spinner" style="font-size: 12px">Verifying...</span>
+                            `
+                          : "Run Live Verification"
+                      }
+                    </button>
+                    <button
+                      class="btn btn--sm"
+                      ?disabled=${state.builderPlanLoading}
+                      @click=${props.onPlan}
+                    >
+                      Rebuild
+                    </button>
+                  </div>
                 `
               : nothing
           }
@@ -98,6 +311,11 @@ export function renderBuilder(props: BuilderProps) {
             ? html`<div class="callout danger" style="margin-top:12px;">${state.builderPlanError}</div>`
             : nothing
         }
+        ${
+          state.builderVerifyError
+            ? html`<div class="callout danger" style="margin-top:12px;">${state.builderVerifyError}</div>`
+            : nothing
+        }
       </section>
 
       ${
@@ -106,7 +324,7 @@ export function renderBuilder(props: BuilderProps) {
               <section class="card">
                 <div class="builder-header">
                   <div>
-                    <div class="card-title" style="font-size:14px;">Suggested Template</div>
+                    <div class="card-title section-title">Suggested Template</div>
                     <div class="card-sub">${draft.displayName} (${draft.templateId})</div>
                   </div>
                   <span class="tpl-pill tpl-pill--muted">${draft.confidence}</span>
@@ -122,11 +340,22 @@ export function renderBuilder(props: BuilderProps) {
 
               <section class="card">
                 <div class="builder-header">
-                  <div class="card-title" style="font-size:14px;">Workflow Status</div>
+                  <div class="card-title section-title">Workflow Status</div>
                   <span class="tpl-pill ${plannerStatusPillClass(draft.plannerStatus)}">
-                    ${draft.plannerStatus}
+                    ${formatPlannerStatus(draft.plannerStatus)}
                   </span>
                 </div>
+                ${
+                  draft.requirements.intentTags.length > 0
+                    ? html`
+                        <div class="builder-intent-tags">
+                          ${draft.requirements.intentTags.map(
+                            (tag) => html`<span class="tpl-pill tpl-pill--muted">${tag}</span>`,
+                          )}
+                        </div>
+                      `
+                    : nothing
+                }
                 <div class="builder-grid">
                   ${builderRequirementList("Triggers", draft.requirements.triggers)}
                   ${builderRequirementList("Inputs", draft.requirements.inputs)}
@@ -135,40 +364,26 @@ export function renderBuilder(props: BuilderProps) {
                   ${builderRequirementList("Outputs", draft.requirements.outputs)}
                   ${builderRequirementList("Policies", draft.requirements.policies)}
                   ${builderRequirementList("Constraints", draft.requirements.constraints)}
-                  ${builderGapList("Needs Input", draft.requirements.missingInputs, "warn")}
-                  ${builderGapList("Needs Setup", draft.requirements.setupGaps, "warn")}
-                  ${builderGapList("Needs Policy", draft.requirements.policyGaps, "danger")}
-                  ${builderGapList("Unsupported", draft.requirements.unsupportedGaps, "danger")}
                 </div>
-                ${
-                  draft.requirements.intentTags.length > 0
-                    ? html`
-                        <div class="card-sub" style="margin-top:12px;">
-                          Intent tags: ${draft.requirements.intentTags.join(", ")}
-                        </div>
-                      `
-                    : nothing
-                }
+                ${renderGaps(state, draft)}
               </section>
 
               <section class="card">
                 <div class="builder-header">
-                  <div class="card-title" style="font-size:14px;">Connector Plan</div>
-                  <span class="tpl-pill ${plannerStatusPillClass(draft.plannerStatus)}">
-                    ${draft.plannerStatus}
-                  </span>
+                  <div class="card-title section-title">Connector Plan</div>
                 </div>
                 <div class="builder-grid">
                   ${builderSelectionList(draft.planning.selections)}
-                  ${builderIntegrationList(draft.planning.integrations)}
-                  ${builderSetupTaskList(draft.planning.setupTasks)}
-                  ${builderVerificationList(draft.planning.verifications)}
+                  ${builderIntegrationList(state, draft.planning.integrations)}
+                  ${builderSetupTaskList(state, draft.planning.setupTasks)}
+                  ${builderVerificationList(state, draft.planning.verifications)}
                 </div>
+                ${renderVerificationRunSummary(state)}
               </section>
 
               <section class="card">
                 <div class="builder-header">
-                  <div class="card-title" style="font-size:14px;">Blueprint Plan</div>
+                  <div class="card-title section-title">Blueprint Plan</div>
                   <span class="tpl-pill ${blueprintStatus === "ready" ? "tpl-pill--ok" : "tpl-pill--error"}">
                     ${blueprintStatus}
                   </span>
@@ -354,6 +569,27 @@ function builderQuestionList(questions: Array<{ prompt: string; required: boolea
   `;
 }
 
+/** Render gap callouts (warnings/errors) grouped together below the requirement grid */
+function renderGaps(state: AppViewState, draft: NonNullable<AppViewState["builderPlan"]>["draft"]) {
+  const { missingInputs, setupGaps, policyGaps, unsupportedGaps } = draft.requirements;
+  const hasGaps =
+    missingInputs.length > 0 ||
+    setupGaps.length > 0 ||
+    policyGaps.length > 0 ||
+    unsupportedGaps.length > 0;
+  if (!hasGaps) {
+    return nothing;
+  }
+  return html`
+    <div class="builder-gaps">
+      ${builderGapList("Needs Input", missingInputs, "warn", state)}
+      ${builderGapList("Needs Setup", setupGaps, "warn", state)}
+      ${builderGapList("Needs Policy", policyGaps, "danger", state)}
+      ${builderGapList("Unsupported", unsupportedGaps, "danger", state)}
+    </div>
+  `;
+}
+
 function builderRequirementList(title: string, values: Array<{ detail: string }>) {
   if (values.length === 0) {
     return nothing;
@@ -368,8 +604,9 @@ function builderRequirementList(title: string, values: Array<{ detail: string }>
 
 function builderGapList(
   title: string,
-  values: Array<{ message: string }>,
+  values: Array<{ code: string; message: string }>,
   tone: "warn" | "danger",
+  state?: AppViewState,
 ) {
   if (values.length === 0) {
     return nothing;
@@ -377,7 +614,28 @@ function builderGapList(
   return html`
     <div>
       <div class="label" style="margin-bottom:8px;">${title}</div>
-      ${values.map((value) => html`<div class="callout ${tone}">${value.message}</div>`)}
+      ${values.map((value) => {
+        // Try to resolve a config target from the gap code (e.g. "hooks.gmail_missing" → "hooks")
+        const codeRef = value.code?.split("_")[0]; // take part before first underscore
+        const configRef = codeRef ? resolveConfigTarget([codeRef]) : null;
+        return html`
+          <div class="callout ${tone} builder-issue-row">
+            <span>${value.message}</span>
+            ${
+              state && configRef
+                ? html`
+                    <button
+                      class="builder-config-link"
+                      @click=${() => navigateToConfig(state, [codeRef])}
+                    >
+                      Configure &rarr;
+                    </button>
+                  `
+                : nothing
+            }
+          </div>
+        `;
+      })}
     </div>
   `;
 }
@@ -410,40 +668,83 @@ function builderSelectionList(
 }
 
 function builderIntegrationList(
+  state: AppViewState,
   values: Array<{
     label: string;
     status: string;
     connectorId: string;
     issues: string[];
+    lastVerifiedAt?: string;
   }>,
 ) {
   if (values.length === 0) {
     return nothing;
   }
+  const OK_STATUSES = new Set(["verified", "authenticated", "configured"]);
   return html`
     <div>
       <div class="label" style="margin-bottom:8px;">Integrations</div>
-      ${values.map(
-        (value) => html`
+      ${values.map((value) => {
+        const configRef = connectorIdToConfigRef(value.connectorId);
+        const hasLink = configRef && resolveConfigTarget([configRef]);
+        const needsAction = !OK_STATUSES.has(value.status);
+        return html`
           <div class="tpl-plan-file">
             <span>
               ${value.label}
               <span class="mono">(${value.connectorId})</span>
             </span>
-            <span class="tpl-pill ${integrationStatusPillClass(value.status)}">${value.status}</span>
+            <span class="tpl-pill ${integrationStatusPillClass(value.status)}">${formatIntegrationStatus(value.status)}</span>
+            ${
+              hasLink && needsAction && value.issues.length === 0
+                ? html`
+                    <button
+                      class="builder-config-link"
+                      @click=${() => navigateToConfig(state, [configRef])}
+                    >
+                      Configure &rarr;
+                    </button>
+                  `
+                : nothing
+            }
           </div>
-          ${value.issues.map((issue) => html`<div class="callout warn">${issue}</div>`)}
-        `,
-      )}
+          ${
+            value.lastVerifiedAt
+              ? html`<div class="tpl-note">Last verified: ${value.lastVerifiedAt}</div>`
+              : nothing
+          }
+          ${value.issues.map(
+            (issue) => html`
+              <div class="callout warn builder-issue-row">
+                <span>${issue}</span>
+                ${
+                  hasLink
+                    ? html`
+                        <button
+                          class="builder-config-link"
+                          @click=${() => navigateToConfig(state, [configRef])}
+                        >
+                          Configure &rarr;
+                        </button>
+                      `
+                    : nothing
+                }
+              </div>
+            `,
+          )}
+        `;
+      })}
     </div>
   `;
 }
 
 function builderSetupTaskList(
+  state: AppViewState,
   values: Array<{
     title: string;
     detail: string;
     status: string;
+    connectorId: string;
     refs: string[];
   }>,
 ) {
@@ -453,30 +754,54 @@ function builderSetupTaskList(
   return html`
     <div>
       <div class="label" style="margin-bottom:8px;">Setup Tasks</div>
-      ${values.map(
-        (value) => html`
+      ${values.map((value) => {
+        // Resolve config target from refs first, fall back to connectorId
+        const refsTarget = value.refs.length > 0 ? resolveConfigTarget(value.refs) : null;
+        const connectorRef = connectorIdToConfigRef(value.connectorId);
+        const fallbackTarget = connectorRef ? resolveConfigTarget([connectorRef]) : null;
+        const canNavigate = value.status !== "completed" && (refsTarget || fallbackTarget);
+        const navRefs = refsTarget ? value.refs : connectorRef ? [connectorRef] : [];
+        return html`
           <div class="tpl-plan-file">
             <span>${value.title}</span>
             <span class="tpl-pill ${value.status === "completed" ? "tpl-pill--ok" : "tpl-pill--muted"}">${value.status}</span>
           </div>
-          <div class="tpl-note">${value.detail}</div>
+          <div class="tpl-note builder-issue-row">
+            <span>${value.detail}</span>
+            ${
+              canNavigate
+                ? html`
+                    <button
+                      class="builder-config-link"
+                      @click=${() => navigateToConfig(state, navRefs)}
+                    >
+                      Configure &rarr;
+                    </button>
+                  `
+                : nothing
+            }
+          </div>
           ${
             value.refs.length > 0
               ? html`<div class="tpl-note mono">${value.refs.join(", ")}</div>`
               : nothing
           }
-        `,
-      )}
+        `;
+      })}
     </div>
   `;
 }
 
 function builderVerificationList(
+  state: AppViewState,
   values: Array<{
+    connectorId?: string;
     connectorLabel: string;
     probeLabel: string;
     status: string;
     detail: string;
+    source?: string;
+    checkedAt?: string;
   }>,
 ) {
   if (values.length === 0) {
@@ -485,15 +810,66 @@ function builderVerificationList(
   return html`
     <div>
       <div class="label" style="margin-bottom:8px;">Verification</div>
-      ${values.map(
-        (value) => html`
+      ${values.map((value) => {
+        const isBlocked = value.status === "blocked" || value.status === "failed";
+        const configRef = value.connectorId ? connectorIdToConfigRef(value.connectorId) : null;
+        const hasLink = isBlocked && configRef && resolveConfigTarget([configRef]);
+        return html`
           <div class="tpl-plan-file">
             <span>${value.connectorLabel}: ${value.probeLabel}</span>
-            <span class="tpl-pill ${verificationStatusPillClass(value.status)}">${value.status}</span>
+            <span class="tpl-pill ${verificationStatusPillClass(value.status)}">${formatVerificationStatus(value.status)}</span>
           </div>
-          <div class="tpl-note">${value.detail}</div>
-        `,
-      )}
+          ${
+            value.source || value.checkedAt
+              ? html`
+                  <div class="tpl-note">
+                    ${value.source ?? "preflight"}${value.checkedAt ? ` @ ${value.checkedAt}` : ""}
+                  </div>
+                `
+              : nothing
+          }
+          <div class="tpl-note builder-issue-row">
+            <span>${value.detail}</span>
+            ${
+              hasLink
+                ? html`
+                    <button
+                      class="builder-config-link"
+                      @click=${() => navigateToConfig(state, [configRef])}
+                    >
+                      Configure &rarr;
+                    </button>
+                  `
+                : nothing
+            }
+          </div>
+        `;
+      })}
+    </div>
+  `;
+}
+
+function renderVerificationRunSummary(state: AppViewState) {
+  const run = state.builderVerifyResult?.verification;
+  if (!run) {
+    return nothing;
+  }
+  const allPassed = run.failedCount === 0 && run.blockedCount === 0 && run.unresolvedCount === 0;
+  return html`
+    <div class="builder-verify-summary ${allPassed ? "builder-verify-summary--ok" : "builder-verify-summary--warn"}">
+      <div class="builder-header" style="margin-bottom:8px;">
+        <div class="label">Latest Live Verification</div>
+        <span class="tpl-pill ${allPassed ? "tpl-pill--ok" : "tpl-pill--error"}">
+          ${allPassed ? "All Passed" : "Issues Found"}
+        </span>
+      </div>
+      <div class="builder-verify-counts">
+        <span class="builder-verify-count builder-verify-count--ok">${run.passedCount} passed</span>
+        ${run.failedCount > 0 ? html`<span class="builder-verify-count builder-verify-count--error">${run.failedCount} failed</span>` : nothing}
+        ${run.blockedCount > 0 ? html`<span class="builder-verify-count builder-verify-count--warn">${run.blockedCount} blocked</span>` : nothing}
+        ${run.unresolvedCount > 0 ? html`<span class="builder-verify-count builder-verify-count--muted">${run.unresolvedCount} unresolved</span>` : nothing}
+      </div>
+      <div class="card-sub" style="margin-top:4px;">Checked ${run.checkedAt}</div>
     </div>
   `;
 }
@@ -530,6 +906,46 @@ function kv(label: string, value: string) {
       <div>${value}</div>
     </div>
   `;
+}
+
+/** Map snake_case planner status to human-readable label */
+function formatPlannerStatus(status: string): string {
+  const labels: Record<string, string> = {
+    ready: "Ready",
+    needs_input: "Needs Input",
+    needs_setup: "Needs Setup",
+    partial: "Partial",
+    unsupported: "Unsupported",
+    unsafe_without_policy: "Needs Policy",
+    blocked: "Blocked",
+  };
+  return labels[status] ?? status;
+}
+
+/** Map snake_case integration status to human-readable label */
+function formatIntegrationStatus(status: string): string {
+  const labels: Record<string, string> = {
+    discovered: "Discovered",
+    install_required: "Install Required",
+    installed: "Installed",
+    configured: "Configured",
+    authenticated: "Authenticated",
+    verified: "Verified",
+    degraded: "Degraded",
+    failed: "Failed",
+  };
+  return labels[status] ?? status;
+}
+
+/** Map snake_case verification status to human-readable label */
+function formatVerificationStatus(status: string): string {
+  const labels: Record<string, string> = {
+    passed: "Passed",
+    failed: "Failed",
+    blocked: "Blocked",
+    needs_live_check: "Needs Check",
+  };
+  return labels[status] ?? status;
 }
 
 function plannerStatusPillClass(status: string): string {

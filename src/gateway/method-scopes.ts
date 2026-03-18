@@ -87,6 +87,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.files.list",
     "agents.files.get",
     "agents.builder.plan",
+    "agents.builder.verify",
     "agents.templates.catalog",
     "agents.templates.plan",
   ],

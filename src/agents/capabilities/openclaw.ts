@@ -89,6 +89,38 @@ export const OPENCLAW_CAPABILITY_CONTRACTS: CapabilityContract[] = [
     verification: [BROWSER_SESSION_PROBE],
   },
   {
+    id: "canvas.operate",
+    label: "Canvas Operate",
+    summary: "Control canvas-backed surfaces for diagrams and visual layouts.",
+    family: "action",
+    semanticVerbs: ["draw", "diagram", "render", "arrange"],
+    requiredInputs: ["canvas target", "visual task"],
+    producedOutputs: ["canvas state", "visual artifact"],
+    requiresTools: ["canvas"],
+    requiresToolSections: ["ui"],
+    configRequirements: [],
+    authRequirements: [],
+    setupHints: ["Use when the workflow needs a canvas rather than browser navigation."],
+    risk: "operator",
+    verification: [STATUS_PROBE],
+  },
+  {
+    id: "agent.inspect",
+    label: "Agent Inspect",
+    summary: "Inspect existing OpenClaw agents and their runtime posture.",
+    family: "agent",
+    semanticVerbs: ["list", "inspect", "review"],
+    requiredInputs: ["agent selector"],
+    producedOutputs: ["agent state"],
+    requiresTools: ["agents_list"],
+    requiresToolSections: ["agents"],
+    configRequirements: [],
+    authRequirements: [],
+    setupHints: ["Use to discover or inspect existing agent definitions."],
+    risk: "read_only",
+    verification: [STATUS_PROBE],
+  },
+  {
     id: "agent.manage",
     label: "Agent Manage",
     summary: "Create, update, and configure OpenClaw agents and their runtime shape.",
@@ -102,6 +134,22 @@ export const OPENCLAW_CAPABILITY_CONTRACTS: CapabilityContract[] = [
     authRequirements: [],
     setupHints: ["Use this when materializing or mutating agent configuration."],
     risk: "config_mutating",
+    verification: [STATUS_PROBE],
+  },
+  {
+    id: "automation.control",
+    label: "Automation Control",
+    summary: "Inspect or control automation runtime surfaces such as cron and gateway health.",
+    family: "action",
+    semanticVerbs: ["start", "stop", "restart", "probe", "inspect"],
+    requiredInputs: ["automation surface"],
+    producedOutputs: ["automation state"],
+    requiresTools: ["cron", "gateway"],
+    requiresToolSections: ["automation"],
+    configRequirements: ["automation runtime access"],
+    authRequirements: [],
+    setupHints: ["Use for automation health checks and runtime control flows."],
+    risk: "operator",
     verification: [STATUS_PROBE],
   },
   {
@@ -297,6 +345,22 @@ export const OPENCLAW_CAPABILITY_CONTRACTS: CapabilityContract[] = [
     verification: [SEND_TEST_PROBE],
   },
   {
+    id: "node.operate",
+    label: "Node Operate",
+    summary: "Inspect or control nodes, devices, and attached runtime endpoints.",
+    family: "action",
+    semanticVerbs: ["inspect", "list", "probe", "control"],
+    requiredInputs: ["node selector"],
+    producedOutputs: ["node state"],
+    requiresTools: ["nodes"],
+    requiresToolSections: ["nodes"],
+    configRequirements: ["node access configuration"],
+    authRequirements: [],
+    setupHints: ["Use for hardware, device, or remote-node aware workflows."],
+    risk: "operator",
+    verification: [STATUS_PROBE],
+  },
+  {
     id: "observability.trace",
     label: "Execution Trace",
     summary: "Record and expose workflow execution traces and run state.",
@@ -361,6 +425,38 @@ export const OPENCLAW_CAPABILITY_CONTRACTS: CapabilityContract[] = [
     verification: [STATUS_PROBE],
   },
   {
+    id: "session.inspect",
+    label: "Session Inspect",
+    summary: "Inspect existing sessions, history, and runtime session status.",
+    family: "session",
+    semanticVerbs: ["list", "inspect", "review", "status"],
+    requiredInputs: ["session selector"],
+    producedOutputs: ["session state"],
+    requiresTools: ["sessions_list", "sessions_history", "session_status"],
+    requiresToolSections: ["sessions"],
+    configRequirements: [],
+    authRequirements: [],
+    setupHints: ["Use to review conversation state and ongoing background work."],
+    risk: "read_only",
+    verification: [STATUS_PROBE],
+  },
+  {
+    id: "session.message",
+    label: "Session Message",
+    summary: "Send work or follow-up messages into an existing session.",
+    family: "session",
+    semanticVerbs: ["send", "continue", "handoff"],
+    requiredInputs: ["session selector", "message"],
+    producedOutputs: ["session update"],
+    requiresTools: ["sessions_send"],
+    requiresToolSections: ["sessions"],
+    configRequirements: [],
+    authRequirements: [],
+    setupHints: ["Use when the workflow needs to push work into an existing session."],
+    risk: "operator",
+    verification: [STATUS_PROBE],
+  },
+  {
     id: "transform.summarize",
     label: "Summarize",
     summary: "Transform source content into a concise structured summary.",
@@ -373,6 +469,38 @@ export const OPENCLAW_CAPABILITY_CONTRACTS: CapabilityContract[] = [
     configRequirements: ["model selection"],
     authRequirements: ["working model provider"],
     setupHints: ["Use for digests, briefings, and compressed output."],
+    risk: "read_only",
+    verification: [READ_TEST_PROBE],
+  },
+  {
+    id: "transform.image_understand",
+    label: "Image Understand",
+    summary: "Extract useful meaning from screenshots, photos, and other images.",
+    family: "transform",
+    semanticVerbs: ["inspect", "describe", "read"],
+    requiredInputs: ["image input"],
+    producedOutputs: ["image understanding"],
+    requiresTools: ["image"],
+    requiresToolSections: ["media"],
+    configRequirements: ["media pipeline"],
+    authRequirements: ["working vision-capable provider when required"],
+    setupHints: ["Use for screenshot analysis and image-backed workflows."],
+    risk: "read_only",
+    verification: [READ_TEST_PROBE],
+  },
+  {
+    id: "transform.synthesize_speech",
+    label: "Synthesize Speech",
+    summary: "Generate spoken audio from text output.",
+    family: "transform",
+    semanticVerbs: ["speak", "read aloud", "voice"],
+    requiredInputs: ["text input"],
+    producedOutputs: ["speech audio"],
+    requiresTools: ["tts"],
+    requiresToolSections: ["media"],
+    configRequirements: ["media pipeline"],
+    authRequirements: ["working speech-capable provider when required"],
+    setupHints: ["Use for voice delivery and spoken summaries."],
     risk: "read_only",
     verification: [READ_TEST_PROBE],
   },
@@ -395,17 +523,33 @@ export const OPENCLAW_CAPABILITY_CONTRACTS: CapabilityContract[] = [
 ];
 
 const TOOL_SECTION_CONTRACTS: Record<string, string[]> = {
-  agents: ["agent.manage"],
-  automation: ["schedule.trigger"],
+  agents: ["agent.inspect", "agent.manage"],
+  automation: ["automation.control", "schedule.trigger"],
   fs: ["fs.read", "fs.write"],
-  media: ["transform.transcribe"],
+  media: ["transform.image_understand", "transform.synthesize_speech", "transform.transcribe"],
   memory: ["memory.search"],
   messaging: ["message.send", "delivery.chat", "delivery.report"],
+  nodes: ["node.operate"],
   runtime: ["runtime.exec"],
-  sessions: ["session.spawn"],
-  ui: ["browser.operate"],
+  sessions: ["session.inspect", "session.message", "session.spawn"],
+  ui: ["browser.operate", "canvas.operate"],
   web: ["fetch.web", "ingest.feed"],
 };
+
+const CONTRACTS_BY_ID = new Map(
+  OPENCLAW_CAPABILITY_CONTRACTS.map((contract) => [contract.id, contract] as const),
+);
+
+function riskClassesForContracts(contractIds: string[]): ConnectorDefinition["riskClasses"] {
+  const riskClasses = new Set<ConnectorDefinition["riskClasses"][number]>();
+  for (const contractId of contractIds) {
+    const contract = CONTRACTS_BY_ID.get(contractId);
+    if (contract) {
+      riskClasses.add(contract.risk);
+    }
+  }
+  return Array.from(riskClasses.values()).toSorted();
+}
 
 function listToolConnectorDefinitions(): ConnectorDefinition[] {
   const connectors: ConnectorDefinition[] = [];
@@ -426,13 +570,7 @@ function listToolConnectorDefinitions(): ConnectorDefinition[] {
       kind: "tooling" as const,
       summary: `Core OpenClaw ${section.label.toLowerCase()} surface.`,
       contracts,
-      riskClasses: contracts.includes("fs.write")
-        ? ["read_only", "config_mutating"]
-        : contracts.includes("runtime.exec") || contracts.includes("browser.operate")
-          ? ["operator"]
-          : contracts.includes("message.send")
-            ? ["communicative"]
-            : ["read_only"],
+      riskClasses: riskClassesForContracts(contracts),
       source: {
         kind: "core_tool_section" as const,
         id: section.id,
@@ -548,6 +686,7 @@ function buildChannelConnectorDefinition(params: {
   docsPath?: string;
   selectionLabel?: string;
   detailLabel?: string;
+  aliases?: string[];
   systemImage?: string;
   onboarding: boolean;
   installRequired: boolean;
@@ -584,6 +723,7 @@ function buildChannelConnectorDefinition(params: {
       ...(params.docsPath ? { docsPath: params.docsPath } : {}),
       ...(params.selectionLabel ? { selectionLabel: params.selectionLabel } : {}),
       ...(params.detailLabel ? { detailLabel: params.detailLabel } : {}),
+      ...(params.aliases?.length ? { aliases: params.aliases } : {}),
       ...(params.systemImage ? { systemImage: params.systemImage } : {}),
     },
   };
@@ -598,6 +738,7 @@ function listBuiltInChannelConnectorDefinitions(): ConnectorDefinition[] {
       docsPath: channel.docsPath,
       selectionLabel: channel.selectionLabel,
       detailLabel: channel.detailLabel,
+      aliases: channel.aliases,
       systemImage: channel.systemImage,
       onboarding: Boolean(getChannelOnboardingAdapter(channel.id)),
       installRequired: false,
@@ -618,6 +759,7 @@ function listCatalogChannelConnectorDefinitions(
       docsPath: entry.meta.docsPath,
       selectionLabel: entry.meta.selectionLabel,
       detailLabel: entry.meta.detailLabel,
+      aliases: entry.meta.aliases,
       systemImage: entry.meta.systemImage,
       onboarding: Boolean(getChannelOnboardingAdapter(entry.id)),
       installRequired: true,

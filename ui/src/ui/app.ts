@@ -269,6 +269,10 @@ export class OpenClawApp extends LitElement {
   @state() builderApplying = false;
   @state() builderApplyError: string | null = null;
   @state() builderConfirmApply = false;
+  @state() builderVerifyResult: import("./controllers/builder.ts").BuilderVerifyResult | null =
+    null;
+  @state() builderVerifying = false;
+  @state() builderVerifyError: string | null = null;
   @state() templatesSelectedId: string | null = null;
   @state() templatesPanel: "gallery" | "detail" | "plan" = "gallery";
   @state() templatesCatalog: import("./controllers/templates.ts").TemplateCatalogEntry[] | null =

@@ -62,6 +62,7 @@ export type BuilderDraftSummary = {
       configRefs: string[];
       authRefs: string[];
       issues: string[];
+      lastVerifiedAt?: string;
       label: string;
       kind: string;
       sourceKind: string;
@@ -84,8 +85,10 @@ export type BuilderDraftSummary = {
       connectorLabel: string;
       probeKind: string;
       probeLabel: string;
-      status: "passed" | "blocked" | "needs_live_check";
+      status: "passed" | "failed" | "blocked" | "needs_live_check";
       detail: string;
+      source: "preflight" | "persisted" | "live";
+      checkedAt?: string;
     }>;
   };
   extracted: {
@@ -122,6 +125,20 @@ export type BuilderApplyResult = {
   };
 };
 
+export type BuilderVerifyResult = {
+  draft: BuilderDraftSummary;
+  plan: Record<string, unknown>;
+  verification: {
+    fingerprint: string;
+    checkedAt: string;
+    passedCount: number;
+    failedCount: number;
+    blockedCount: number;
+    unresolvedCount: number;
+    results: BuilderDraftSummary["planning"]["verifications"];
+  };
+};
+
 export type BuilderState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -134,6 +151,9 @@ export type BuilderState = {
   builderApplying: boolean;
   builderApplyError: string | null;
   builderConfirmApply: boolean;
+  builderVerifyResult: BuilderVerifyResult | null;
+  builderVerifying: boolean;
+  builderVerifyError: string | null;
 };
 
 type BuilderApplyState = BuilderState & AgentsState & CronState;
@@ -145,6 +165,8 @@ export async function loadBuilderPlan(state: BuilderState) {
   state.builderPlanLoading = true;
   state.builderPlanError = null;
   state.builderPlan = null;
+  state.builderVerifyResult = null;
+  state.builderVerifyError = null;
   try {
     const result = await state.client.request<BuilderPlanResult>("agents.builder.plan", {
       brief: state.builderBrief,
@@ -182,5 +204,31 @@ export async function applyBuilderPlan(state: BuilderState) {
     state.builderApplyError = String(error);
   } finally {
     state.builderApplying = false;
+  }
+}
+
+export async function verifyBuilderPlan(state: BuilderState) {
+  if (!state.client || !state.connected || !state.builderBrief.trim()) {
+    return;
+  }
+  state.builderVerifying = true;
+  state.builderVerifyError = null;
+  state.builderVerifyResult = null;
+  try {
+    const result = await state.client.request<BuilderVerifyResult>("agents.builder.verify", {
+      brief: state.builderBrief,
+      ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
+    });
+    state.builderVerifyResult = result ?? null;
+    if (result) {
+      state.builderPlan = {
+        draft: result.draft,
+        plan: result.plan,
+      };
+    }
+  } catch (error) {
+    state.builderVerifyError = String(error);
+  } finally {
+    state.builderVerifying = false;
   }
 }
