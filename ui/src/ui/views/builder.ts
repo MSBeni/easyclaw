@@ -161,6 +161,8 @@ export function renderBuilder(props: BuilderProps) {
                 <div class="builder-grid">
                   ${builderSelectionList(draft.planning.selections)}
                   ${builderIntegrationList(draft.planning.integrations)}
+                  ${builderSetupTaskList(draft.planning.setupTasks)}
+                  ${builderVerificationList(draft.planning.verifications)}
                 </div>
               </section>
 
@@ -437,6 +439,65 @@ function builderIntegrationList(
   `;
 }
 
+function builderSetupTaskList(
+  values: Array<{
+    title: string;
+    detail: string;
+    status: string;
+    refs: string[];
+  }>,
+) {
+  if (values.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Setup Tasks</div>
+      ${values.map(
+        (value) => html`
+          <div class="tpl-plan-file">
+            <span>${value.title}</span>
+            <span class="tpl-pill ${value.status === "completed" ? "tpl-pill--ok" : "tpl-pill--muted"}">${value.status}</span>
+          </div>
+          <div class="tpl-note">${value.detail}</div>
+          ${
+            value.refs.length > 0
+              ? html`<div class="tpl-note mono">${value.refs.join(", ")}</div>`
+              : nothing
+          }
+        `,
+      )}
+    </div>
+  `;
+}
+
+function builderVerificationList(
+  values: Array<{
+    connectorLabel: string;
+    probeLabel: string;
+    status: string;
+    detail: string;
+  }>,
+) {
+  if (values.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Verification</div>
+      ${values.map(
+        (value) => html`
+          <div class="tpl-plan-file">
+            <span>${value.connectorLabel}: ${value.probeLabel}</span>
+            <span class="tpl-pill ${verificationStatusPillClass(value.status)}">${value.status}</span>
+          </div>
+          <div class="tpl-note">${value.detail}</div>
+        `,
+      )}
+    </div>
+  `;
+}
+
 function builderExtracted(draft: NonNullable<AppViewState["builderPlan"]>["draft"]) {
   return html`
     <div>
@@ -486,6 +547,16 @@ function integrationStatusPillClass(status: string): string {
     return "tpl-pill--ok";
   }
   if (status === "install_required" || status === "discovered" || status === "installed") {
+    return "tpl-pill--muted";
+  }
+  return "tpl-pill--error";
+}
+
+function verificationStatusPillClass(status: string): string {
+  if (status === "passed") {
+    return "tpl-pill--ok";
+  }
+  if (status === "needs_live_check") {
     return "tpl-pill--muted";
   }
   return "tpl-pill--error";

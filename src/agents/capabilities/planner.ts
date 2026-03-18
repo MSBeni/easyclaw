@@ -29,10 +29,39 @@ export type PlannedIntegrationInstance = IntegrationInstance & {
   verification: VerificationProbe[];
 };
 
+export type PlannedSetupTaskStatus = "completed" | "pending";
+
+export type PlannedSetupTaskKind = "install" | "connect" | "configure" | "enable" | "policy";
+
+export type PlannedSetupTask = {
+  id: string;
+  connectorId: string;
+  connectorLabel: string;
+  kind: PlannedSetupTaskKind;
+  status: PlannedSetupTaskStatus;
+  title: string;
+  detail: string;
+  refs: string[];
+};
+
+export type PlannedVerificationStatus = "passed" | "blocked" | "needs_live_check";
+
+export type PlannedVerificationResult = {
+  id: string;
+  connectorId: string;
+  connectorLabel: string;
+  probeKind: VerificationProbe["kind"];
+  probeLabel: string;
+  status: PlannedVerificationStatus;
+  detail: string;
+};
+
 export type RequirementPlannerResult = {
   status: PlannerStatus;
   selections: RequirementPlannerSelection[];
   integrations: PlannedIntegrationInstance[];
+  setupTasks: PlannedSetupTask[];
+  verifications: PlannedVerificationResult[];
 };
 
 type RequirementPlannerParams = {
@@ -204,6 +233,162 @@ function describeIntegrationInstance(
   };
 }
 
+function describeConnectorAction(
+  connector: ConnectorDefinition,
+  integration: PlannedIntegrationInstance,
+): Pick<PlannedSetupTask, "kind" | "title" | "detail"> {
+  if (integration.status === "install_required") {
+    return {
+      kind: "install",
+      title: `Install ${connector.label}`,
+      detail:
+        connector.install.strategy === "npm"
+          ? `Install the ${connector.label} connector from the plugin catalog.`
+          : `Install the ${connector.label} connector before activation.`,
+    };
+  }
+
+  if (
+    connector.id === "platform:exec-approvals" ||
+    integration.issues.some((issue) => issue.includes("approval"))
+  ) {
+    return {
+      kind: "policy",
+      title:
+        integration.status === "configured"
+          ? `${connector.label} configured`
+          : `Configure ${connector.label}`,
+      detail:
+        integration.status === "configured"
+          ? `${connector.label} is configured for this workflow.`
+          : "Configure an approval route before letting this workflow act on the user's behalf.",
+    };
+  }
+
+  if (integration.status === "degraded" && integration.configRefs.length > 0) {
+    return {
+      kind: "enable",
+      title: `Enable ${connector.label}`,
+      detail:
+        integration.issues[0] ??
+        `Enable or repair ${connector.label} before this workflow can run successfully.`,
+    };
+  }
+
+  if (connector.setup.requiresAuth) {
+    return {
+      kind: "connect",
+      title:
+        integration.status === "authenticated" || integration.status === "verified"
+          ? `${connector.label} connected`
+          : `Connect ${connector.label}`,
+      detail:
+        integration.status === "authenticated" || integration.status === "verified"
+          ? `${connector.label} is connected and available to this workflow.`
+          : (integration.issues[0] ??
+            `Connect and authenticate ${connector.label} for this workflow.`),
+    };
+  }
+
+  return {
+    kind: "configure",
+    title:
+      integration.status === "configured" || integration.status === "installed"
+        ? `${connector.label} configured`
+        : `Configure ${connector.label}`,
+    detail:
+      integration.status === "configured" || integration.status === "installed"
+        ? `${connector.label} is ready for this workflow.`
+        : (integration.issues[0] ?? `Configure ${connector.label} for this workflow.`),
+  };
+}
+
+function buildSetupTask(
+  connector: ConnectorDefinition,
+  integration: PlannedIntegrationInstance,
+): PlannedSetupTask | null {
+  const interesting =
+    connector.install.required ||
+    connector.setup.requiresConfig ||
+    connector.setup.requiresAuth ||
+    integration.issues.length > 0 ||
+    integration.configRefs.length > 0 ||
+    integration.authRefs.length > 0;
+  if (!interesting) {
+    return null;
+  }
+
+  const action = describeConnectorAction(connector, integration);
+  const status: PlannedSetupTaskStatus =
+    integration.status === "authenticated" ||
+    integration.status === "verified" ||
+    integration.status === "configured" ||
+    integration.status === "installed"
+      ? "completed"
+      : "pending";
+
+  return {
+    id: `${connector.id}:setup`,
+    connectorId: connector.id,
+    connectorLabel: connector.label,
+    kind: action.kind,
+    status,
+    title: action.title,
+    detail: action.detail,
+    refs: dedupeStrings([...integration.configRefs, ...integration.authRefs]),
+  };
+}
+
+function buildVerificationResults(
+  integration: PlannedIntegrationInstance,
+): PlannedVerificationResult[] {
+  return integration.verification.map((probe) => {
+    const blocked =
+      integration.status === "install_required" ||
+      integration.status === "discovered" ||
+      integration.status === "degraded" ||
+      integration.status === "failed";
+    if (probe.kind === "status") {
+      return {
+        id: `${integration.connectorId}:${probe.kind}`,
+        connectorId: integration.connectorId,
+        connectorLabel: integration.label,
+        probeKind: probe.kind,
+        probeLabel: probe.label,
+        status: blocked ? "blocked" : "passed",
+        detail: blocked
+          ? (integration.issues[0] ??
+            `${integration.label} is not configured enough for a status check.`)
+          : probe.successDescription,
+      };
+    }
+
+    if (blocked) {
+      return {
+        id: `${integration.connectorId}:${probe.kind}`,
+        connectorId: integration.connectorId,
+        connectorLabel: integration.label,
+        probeKind: probe.kind,
+        probeLabel: probe.label,
+        status: "blocked",
+        detail:
+          integration.issues[0] ??
+          `${integration.label} still needs setup before ${probe.label.toLowerCase()} can run.`,
+      };
+    }
+
+    return {
+      id: `${integration.connectorId}:${probe.kind}`,
+      connectorId: integration.connectorId,
+      connectorLabel: integration.label,
+      probeKind: probe.kind,
+      probeLabel: probe.label,
+      status: "needs_live_check",
+      detail: `${integration.label} looks configured, but ${probe.label.toLowerCase()} still needs a live runtime check.`,
+    };
+  });
+}
+
 function choosePreferredConnectorId(
   contractId: string,
   registry: CapabilityRegistry,
@@ -316,6 +501,22 @@ export function buildRequirementPlannerResult(
     .filter((connector): connector is ConnectorDefinition => Boolean(connector))
     .map((connector) => describeIntegrationInstance(connector, params.cfg))
     .toSorted((left, right) => left.label.localeCompare(right.label));
+  const setupTasks = integrations
+    .map((integration) => {
+      const connector = registry.connectorsById.get(integration.connectorId);
+      return connector ? buildSetupTask(connector, integration) : null;
+    })
+    .filter((task): task is PlannedSetupTask => Boolean(task))
+    .toSorted((left, right) =>
+      `${left.status}:${left.title}`.localeCompare(`${right.status}:${right.title}`),
+    );
+  const verifications = integrations
+    .flatMap((integration) => buildVerificationResults(integration))
+    .toSorted((left, right) =>
+      `${left.connectorLabel}:${left.probeLabel}`.localeCompare(
+        `${right.connectorLabel}:${right.probeLabel}`,
+      ),
+    );
 
   return {
     status: params.requirements.plannerStatus,
@@ -325,5 +526,7 @@ export function buildRequirementPlannerResult(
       ),
     ),
     integrations,
+    setupTasks,
+    verifications,
   };
 }

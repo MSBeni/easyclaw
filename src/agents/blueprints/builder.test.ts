@@ -30,6 +30,14 @@ describe("agent blueprint builder", () => {
         "tools:automation",
       ]),
     );
+    expect(result.draft.planning.setupTasks.map((task) => task.connectorId)).toEqual(
+      expect.arrayContaining(["channel:slack", "platform:gmail-hook"]),
+    );
+    expect(
+      result.draft.planning.verifications.find(
+        (probe) => probe.connectorId === "platform:gmail-hook" && probe.probeKind === "status",
+      )?.status,
+    ).toBe("blocked");
     expect(result.plan.source?.kind).toBe("builder");
     expect(result.plan.status).toBe("ready");
   });
@@ -66,6 +74,7 @@ describe("agent blueprint builder", () => {
         (integration) => integration.connectorId === "channel:telegram",
       )?.status,
     ).toBe("discovered");
+    expect(draft.planning.setupTasks.map((task) => task.connectorId)).toContain("channel:telegram");
   });
 
   it("defaults to the personal assistant template and creates a dedicated agent", () => {
@@ -99,6 +108,10 @@ describe("agent blueprint builder", () => {
     expect(draft.planning.selections.map((selection) => selection.connectorId)).toEqual(
       expect.arrayContaining(["platform:exec-approvals", "tools:ui"]),
     );
+    expect(
+      draft.planning.setupTasks.find((task) => task.connectorId === "platform:exec-approvals")
+        ?.kind,
+    ).toBe("policy");
   });
 });
 

@@ -4,6 +4,8 @@ import {
   applyRequirementGaps,
   applyRequirementQuestions,
   buildRequirementPlannerResult,
+  type PlannedSetupTask,
+  type PlannedVerificationResult,
   buildRequirementSet,
   type PlannedIntegrationInstance,
   type RequirementPlannerSelection,
@@ -69,6 +71,8 @@ export type AgentBlueprintBuilderDraftSummary = {
   planning: {
     selections: RequirementPlannerSelection[];
     integrations: PlannedIntegrationInstance[];
+    setupTasks: PlannedSetupTask[];
+    verifications: PlannedVerificationResult[];
   };
   extracted: {
     agentId: string;
@@ -747,6 +751,8 @@ export function buildAgentBlueprintDraft(params: {
     planning: {
       selections: planning.selections,
       integrations: planning.integrations,
+      setupTasks: planning.setupTasks,
+      verifications: planning.verifications,
     },
     extracted: {
       agentId: normalizeAgentId(bundle.agent.agentId),

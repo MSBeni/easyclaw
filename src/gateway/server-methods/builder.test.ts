@@ -103,6 +103,19 @@ describe("builder gateway handlers", () => {
               verification: [],
             },
           ],
+          setupTasks: [
+            {
+              id: "tools:automation:setup",
+              connectorId: "tools:automation",
+              connectorLabel: "OpenClaw Automation Tools",
+              kind: "configure",
+              status: "completed",
+              title: "OpenClaw Automation Tools configured",
+              detail: "OpenClaw Automation Tools is ready for this workflow.",
+              refs: ["cron.enabled"],
+            },
+          ],
+          verifications: [],
         },
         extracted: {
           agentId: "daily-briefing",
@@ -191,6 +204,19 @@ describe("builder gateway handlers", () => {
               verification: [],
             },
           ],
+          setupTasks: [
+            {
+              id: "channel:telegram:setup",
+              connectorId: "channel:telegram",
+              connectorLabel: "Telegram",
+              kind: "connect",
+              status: "completed",
+              title: "Telegram connected",
+              detail: "Telegram is connected and available to this workflow.",
+              refs: ["channels.telegram"],
+            },
+          ],
+          verifications: [],
         },
         extracted: {
           agentId: "support",

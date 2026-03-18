@@ -93,6 +93,23 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
       }
     }
   }
+  if (draft.planning.setupTasks.length > 0) {
+    lines.push("Setup tasks:");
+    for (const task of draft.planning.setupTasks) {
+      lines.push(`- [${task.status}] ${task.title}`);
+      lines.push(`  ${task.detail}`);
+      if (task.refs.length > 0) {
+        lines.push(`  refs: ${task.refs.join(", ")}`);
+      }
+    }
+  }
+  if (draft.planning.verifications.length > 0) {
+    lines.push("Verification:");
+    for (const result of draft.planning.verifications) {
+      lines.push(`- ${result.connectorLabel} / ${result.probeLabel}: ${result.status}`);
+      lines.push(`  ${result.detail}`);
+    }
+  }
   lines.push("Extracted:");
   lines.push(`- agent: ${draft.extracted.name} (${draft.extracted.agentId})`);
   if (draft.extracted.ingressChannels.length > 0) {

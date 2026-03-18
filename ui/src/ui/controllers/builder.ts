@@ -68,6 +68,25 @@ export type BuilderDraftSummary = {
       contracts: string[];
       verification: Array<{ kind: string; label: string; successDescription: string }>;
     }>;
+    setupTasks: Array<{
+      id: string;
+      connectorId: string;
+      connectorLabel: string;
+      kind: "install" | "connect" | "configure" | "enable" | "policy";
+      status: "completed" | "pending";
+      title: string;
+      detail: string;
+      refs: string[];
+    }>;
+    verifications: Array<{
+      id: string;
+      connectorId: string;
+      connectorLabel: string;
+      probeKind: string;
+      probeLabel: string;
+      status: "passed" | "blocked" | "needs_live_check";
+      detail: string;
+    }>;
   };
   extracted: {
     agentId: string;

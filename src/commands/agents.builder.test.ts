@@ -96,6 +96,29 @@ describe("agents builder commands", () => {
               verification: [],
             },
           ],
+          setupTasks: [
+            {
+              id: "channel:telegram:setup",
+              connectorId: "channel:telegram",
+              connectorLabel: "Telegram",
+              kind: "connect",
+              status: "pending",
+              title: "Connect Telegram",
+              detail: "channel telegram is not configured",
+              refs: ["channels.telegram"],
+            },
+          ],
+          verifications: [
+            {
+              id: "channel:telegram:status",
+              connectorId: "channel:telegram",
+              connectorLabel: "Telegram",
+              probeKind: "status",
+              probeLabel: "Status probe",
+              status: "blocked",
+              detail: "channel telegram is not configured",
+            },
+          ],
         },
         extracted: {
           agentId: "support",
@@ -212,6 +235,19 @@ describe("agents builder commands", () => {
               verification: [],
             },
           ],
+          setupTasks: [
+            {
+              id: "tools:automation:setup",
+              connectorId: "tools:automation",
+              connectorLabel: "OpenClaw Automation Tools",
+              kind: "configure",
+              status: "completed",
+              title: "OpenClaw Automation Tools configured",
+              detail: "OpenClaw Automation Tools is ready for this workflow.",
+              refs: ["cron.enabled"],
+            },
+          ],
+          verifications: [],
         },
         extracted: {
           agentId: "daily-briefing",

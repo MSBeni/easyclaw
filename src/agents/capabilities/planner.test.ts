@@ -29,6 +29,14 @@ describe("capability planner", () => {
       plan.integrations.find((integration) => integration.connectorId === "platform:gmail-hook")
         ?.status,
     ).toBe("discovered");
+    expect(plan.setupTasks.map((task) => task.connectorId)).toEqual(
+      expect.arrayContaining(["channel:slack", "platform:gmail-hook"]),
+    );
+    expect(
+      plan.verifications.find(
+        (result) => result.connectorId === "platform:gmail-hook" && result.probeKind === "status",
+      )?.status,
+    ).toBe("blocked");
   });
 
   it("marks configured integrations as authenticated or configured", () => {
@@ -64,6 +72,14 @@ describe("capability planner", () => {
       plan.integrations.find((integration) => integration.connectorId === "platform:gmail-hook")
         ?.status,
     ).toBe("authenticated");
+    expect(plan.setupTasks.find((task) => task.connectorId === "platform:gmail-hook")?.status).toBe(
+      "completed",
+    );
+    expect(
+      plan.verifications.find(
+        (result) => result.connectorId === "platform:gmail-hook" && result.probeKind === "status",
+      )?.status,
+    ).toBe("passed");
   });
 
   it("selects approval and browser connectors for delegated risky actions", () => {
@@ -96,5 +112,8 @@ describe("capability planner", () => {
       plan.integrations.find((integration) => integration.connectorId === "platform:exec-approvals")
         ?.status,
     ).toBe("discovered");
+    expect(
+      plan.setupTasks.find((task) => task.connectorId === "platform:exec-approvals")?.kind,
+    ).toBe("policy");
   });
 });
