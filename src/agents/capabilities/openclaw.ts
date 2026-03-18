@@ -41,6 +41,36 @@ const BROWSER_SESSION_PROBE: VerificationProbe = {
   successDescription: "The browser-backed session is active and usable.",
 };
 
+function createPlatformConnector(params: {
+  id: string;
+  label: string;
+  summary: string;
+  contracts: string[];
+  riskClasses: ConnectorDefinition["riskClasses"];
+  setup: ConnectorDefinition["setup"];
+  verification: ConnectorDefinition["verification"];
+}): ConnectorDefinition {
+  return {
+    id: `platform:${params.id}`,
+    label: params.label,
+    kind: "integration",
+    summary: params.summary,
+    contracts: params.contracts,
+    riskClasses: params.riskClasses,
+    source: {
+      kind: "core_platform",
+      id: params.id,
+    },
+    install: {
+      required: false,
+      strategy: "none",
+    },
+    setup: params.setup,
+    verification: params.verification,
+    metadata: {},
+  };
+}
+
 export const OPENCLAW_CAPABILITY_CONTRACTS: CapabilityContract[] = [
   {
     id: "browser.operate",
@@ -426,6 +456,91 @@ function listToolConnectorDefinitions(): ConnectorDefinition[] {
   return connectors;
 }
 
+function listPlatformConnectorDefinitions(): ConnectorDefinition[] {
+  return [
+    createPlatformConnector({
+      id: "core-model",
+      label: "OpenClaw Core Model Runtime",
+      summary: "Model-backed reasoning and summarization surface.",
+      contracts: ["transform.summarize"],
+      riskClasses: ["read_only"],
+      setup: {
+        onboarding: false,
+        requiresConfig: true,
+        requiresAuth: true,
+      },
+      verification: {
+        supported: true,
+        probes: [STATUS_PROBE],
+      },
+    }),
+    createPlatformConnector({
+      id: "exec-approvals",
+      label: "OpenClaw Exec Approvals",
+      summary: "Approval routing for risky or externally mutating actions.",
+      contracts: ["approval.request"],
+      riskClasses: ["operator"],
+      setup: {
+        onboarding: false,
+        requiresConfig: true,
+        requiresAuth: false,
+      },
+      verification: {
+        supported: true,
+        probes: [STATUS_PROBE],
+      },
+    }),
+    createPlatformConnector({
+      id: "gmail-hook",
+      label: "Gmail Hook",
+      summary: "Built-in Gmail watch and webhook ingestion surface.",
+      contracts: ["ingest.email", "ingress.webhook"],
+      riskClasses: ["read_only"],
+      setup: {
+        onboarding: true,
+        requiresConfig: true,
+        requiresAuth: true,
+      },
+      verification: {
+        supported: true,
+        probes: [STATUS_PROBE, READ_TEST_PROBE],
+      },
+    }),
+    createPlatformConnector({
+      id: "observability",
+      label: "OpenClaw Observability",
+      summary: "Built-in trace, status, and execution visibility surface.",
+      contracts: ["observability.trace"],
+      riskClasses: ["read_only"],
+      setup: {
+        onboarding: false,
+        requiresConfig: false,
+        requiresAuth: false,
+      },
+      verification: {
+        supported: true,
+        probes: [],
+      },
+    }),
+    createPlatformConnector({
+      id: "webhook-runtime",
+      label: "OpenClaw Webhook Runtime",
+      summary: "Generic webhook and hook ingestion surface.",
+      contracts: ["ingress.webhook"],
+      riskClasses: ["communicative"],
+      setup: {
+        onboarding: false,
+        requiresConfig: true,
+        requiresAuth: true,
+      },
+      verification: {
+        supported: true,
+        probes: [STATUS_PROBE],
+      },
+    }),
+  ];
+}
+
 function buildChannelConnectorDefinition(params: {
   id: string;
   label: string;
@@ -525,6 +640,7 @@ export function listOpenClawConnectorDefinitions(
   const deduped = new Map<string, ConnectorDefinition>();
   const built = [
     ...listToolConnectorDefinitions(),
+    ...listPlatformConnectorDefinitions(),
     ...listBuiltInChannelConnectorDefinitions(),
     ...(options.includeCatalog === false
       ? []

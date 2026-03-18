@@ -98,6 +98,13 @@ describe("openclaw capability substrate", () => {
     expect(registry.connectorsById.get("channel:slack")?.contracts).toContain("delivery.chat");
     expect(registry.connectorsById.get("tools:web")?.contracts).toContain("fetch.web");
     expect(registry.connectorsById.get("tools:ui")?.contracts).toContain("browser.operate");
+    expect(registry.connectorsById.get("platform:gmail-hook")?.contracts).toContain("ingest.email");
+    expect(registry.connectorsById.get("platform:core-model")?.contracts).toContain(
+      "transform.summarize",
+    );
+    expect(registry.connectorsById.get("platform:exec-approvals")?.contracts).toContain(
+      "approval.request",
+    );
   });
 
   it("supports extension contracts and connectors", () => {

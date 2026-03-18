@@ -7,6 +7,14 @@ export type BuilderDraftSummary = {
   templateId: string;
   displayName: string;
   confidence: "low" | "medium" | "high";
+  plannerStatus:
+    | "ready"
+    | "needs_input"
+    | "needs_setup"
+    | "partial"
+    | "unsupported"
+    | "unsafe_without_policy"
+    | "blocked";
   reasons: string[];
   assumptions: string[];
   questions: Array<{
@@ -15,6 +23,21 @@ export type BuilderDraftSummary = {
     required: boolean;
   }>;
   ready: boolean;
+  requirements: {
+    intentTags: string[];
+    triggers: Array<{ detail: string }>;
+    inputs: Array<{ detail: string }>;
+    transforms: Array<{ detail: string }>;
+    decisions: Array<{ detail: string }>;
+    actions: Array<{ detail: string }>;
+    outputs: Array<{ detail: string }>;
+    policies: Array<{ detail: string }>;
+    constraints: Array<{ detail: string }>;
+    missingInputs: Array<{ code: string; message: string }>;
+    setupGaps: Array<{ code: string; message: string }>;
+    policyGaps: Array<{ code: string; message: string }>;
+    unsupportedGaps: Array<{ code: string; message: string }>;
+  };
   extracted: {
     agentId: string;
     name: string;

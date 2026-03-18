@@ -39,6 +39,7 @@ describe("agents builder commands", () => {
         templateId: "support-responder",
         displayName: "Support Responder",
         confidence: "high",
+        plannerStatus: "needs_input",
         reasons: ["Matched support language."],
         assumptions: [],
         questions: [
@@ -49,6 +50,26 @@ describe("agents builder commands", () => {
           },
         ],
         ready: false,
+        requirements: {
+          intentTags: ["support"],
+          triggers: [],
+          inputs: [],
+          transforms: [],
+          decisions: [],
+          actions: [],
+          outputs: [],
+          policies: [],
+          constraints: [],
+          missingInputs: [
+            {
+              code: "question:binding-channel",
+              message: "Which channel should this support responder watch?",
+            },
+          ],
+          setupGaps: [],
+          policyGaps: [],
+          unsupportedGaps: [],
+        },
         extracted: {
           agentId: "support",
           name: "Support",
@@ -118,10 +139,26 @@ describe("agents builder commands", () => {
         templateId: "daily-briefing",
         displayName: "Daily Briefing Agent",
         confidence: "high",
+        plannerStatus: "ready",
         reasons: ["Matched digest language."],
         assumptions: ["Defaulted digest delivery to Telegram @me."],
         questions: [],
         ready: true,
+        requirements: {
+          intentTags: ["scheduled", "summary"],
+          triggers: [{ detail: "Run on a recurring schedule." }],
+          inputs: [{ detail: "Read messages from a configured Gmail or inbox hook." }],
+          transforms: [{ detail: "Condense source material into a digest or briefing." }],
+          decisions: [],
+          actions: [],
+          outputs: [{ detail: "Deliver the result as a digest or briefing." }],
+          policies: [],
+          constraints: [],
+          missingInputs: [],
+          setupGaps: [],
+          policyGaps: [],
+          unsupportedGaps: [],
+        },
         extracted: {
           agentId: "daily-briefing",
           name: "Morning Brief",
@@ -180,6 +217,7 @@ describe("agents builder commands", () => {
 
     expect(applyAgentBlueprintBuilderPlanMock).toHaveBeenCalledWith({
       brief: "Create me a daily digest",
+      cfg: {},
     });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Applied blueprint"));
   });

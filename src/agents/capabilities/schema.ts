@@ -92,6 +92,7 @@ export type CapabilityContract = {
 
 export type ConnectorSourceKind =
   | "core_tool_section"
+  | "core_platform"
   | "builtin_channel"
   | "channel_catalog"
   | "external";

@@ -1,5 +1,13 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  applyRequirementGaps,
+  applyRequirementQuestions,
+  buildRequirementSet,
+  type RequirementGap,
+  type RequirementSet,
+} from "../capabilities/index.js";
+import type { PlannerStatus } from "../capabilities/schema.js";
 import { compileAgentBlueprintPlan, type AgentBlueprintPlan } from "./compiler.js";
 import {
   dailyBriefingBlueprint,
@@ -49,10 +57,12 @@ export type AgentBlueprintBuilderDraftSummary = {
   templateId: string;
   displayName: string;
   confidence: AgentBlueprintBuilderConfidence;
+  plannerStatus: PlannerStatus;
   reasons: string[];
   assumptions: string[];
   questions: AgentBlueprintBuilderQuestion[];
   ready: boolean;
+  requirements: RequirementSet;
   extracted: {
     agentId: string;
     name: string;
@@ -108,15 +118,6 @@ function containsAny(text: string, patterns: Array<string | RegExp>): boolean {
   );
 }
 
-function countSignals(text: string, patterns: Array<string | RegExp>): number {
-  return patterns.reduce((count, pattern) => {
-    if (typeof pattern === "string") {
-      return text.includes(pattern) ? count + 1 : count;
-    }
-    return pattern.test(text) ? count + 1 : count;
-  }, 0);
-}
-
 function titleCase(value: string): string {
   return value
     .split(/\s+/)
@@ -148,7 +149,10 @@ function slugifyName(value: string): string {
   );
 }
 
-function selectTemplate(brief: string, forcedTemplateId?: string): TemplateSelection {
+function selectTemplate(
+  requirements: RequirementSet,
+  forcedTemplateId?: string,
+): TemplateSelection {
   if (forcedTemplateId) {
     const forced = getAgentBlueprintTemplate(forcedTemplateId);
     if (!forced) {
@@ -161,7 +165,6 @@ function selectTemplate(brief: string, forcedTemplateId?: string): TemplateSelec
     };
   }
 
-  const text = brief.toLowerCase();
   const scores = new Map<string, number>([
     ["personal-assistant", 1],
     ["daily-briefing", 0],
@@ -177,71 +180,38 @@ function selectTemplate(brief: string, forcedTemplateId?: string): TemplateSelec
     reasons.get(templateId)?.push(reason);
   };
 
-  const supportSignals = countSignals(text, [
-    "support",
-    "customer",
-    "helpdesk",
-    "faq",
-    "ticket",
-    "billing",
-    /\bresponder\b/,
-    /\breply\b/,
-  ]);
-  if (supportSignals > 0) {
-    addScore(
-      "support-responder",
-      supportSignals * 2,
-      "Matched support or customer-service language.",
-    );
+  const hasSupport = requirements.intentTags.includes("support");
+  if (hasSupport) {
+    addScore("support-responder", 5, "Detected an inbound support or customer-response workflow.");
   }
 
-  const briefingSignals = countSignals(text, [
-    "digest",
-    "briefing",
-    "daily",
-    "morning",
-    "summarize",
-    "summary",
-    "emails",
-    "email",
-    "updates",
-  ]);
-  if (briefingSignals > 0) {
-    addScore(
-      "daily-briefing",
-      briefingSignals * 2,
-      "Matched scheduled summary or digest language.",
+  const hasBriefing =
+    requirements.requestedContractIds.includes("schedule.trigger") ||
+    requirements.transforms.some((entry) => entry.contractIds.includes("transform.summarize")) ||
+    requirements.inputs.some((entry) =>
+      entry.contractIds.some(
+        (contractId) => contractId === "ingest.email" || contractId === "ingest.feed",
+      ),
     );
+  if (hasBriefing) {
+    addScore("daily-briefing", 4, "Detected a scheduled digest, briefing, or summary workflow.");
   }
-  if (containsAny(text, ["weekday", "weekdays", "every morning", "each morning"])) {
+  if (requirements.requestedContractIds.includes("schedule.trigger")) {
     addScore("daily-briefing", 2, "Matched recurring schedule language.");
   }
 
-  const researchSignals = countSignals(text, [
-    "research",
-    "investigate",
-    "analysis",
-    "analyze",
-    "analyse",
-    "compare",
-    "competitor",
-    "sources",
-    "brief",
-  ]);
-  if (researchSignals > 0) {
-    addScore("research-agent", researchSignals * 2, "Matched research or synthesis language.");
+  const hasResearch =
+    requirements.intentTags.includes("research") ||
+    requirements.inputs.some((entry) => entry.contractIds.includes("fetch.web"));
+  if (hasResearch) {
+    addScore("research-agent", 4, "Detected research, analysis, or web-synthesis requirements.");
   }
 
-  const personalSignals = countSignals(text, [
-    "assistant",
-    "remind",
-    "planner",
-    "organize",
-    "personal",
-    "tasks",
-  ]);
-  if (personalSignals > 0) {
-    addScore("personal-assistant", personalSignals * 2, "Matched personal assistant language.");
+  const hasPersonal =
+    requirements.intentTags.includes("assistant") ||
+    requirements.actions.some((entry) => entry.contractIds.includes("browser.operate"));
+  if (hasPersonal) {
+    addScore("personal-assistant", 3, "Detected a general assistant or operator workflow.");
   }
 
   const ranked = Array.from(scores.entries()).toSorted((a, b) => b[1] - a[1]);
@@ -457,6 +427,22 @@ function withAgentIdentity(
   };
 }
 
+function ensureBuilderOwnedAgent(bundle: AgentBlueprintBundle): {
+  bundle: AgentBlueprintBundle;
+  assumptions: string[];
+} {
+  if (bundle.agent.agentId !== "main") {
+    return { bundle, assumptions: [] };
+  }
+  const next = structuredClone(bundle);
+  next.agent.agentId = "personal-assistant";
+  next.agent.name = next.manifest.displayName;
+  return {
+    bundle: next,
+    assumptions: ["Created a dedicated agent instead of overwriting the default main agent."],
+  };
+}
+
 function customizeDailyBriefing(
   bundle: AgentBlueprintBundle,
   brief: string,
@@ -605,6 +591,63 @@ function summarizeSourceChannels(bundle: AgentBlueprintBundle): string[] {
   return (bundle.ingress?.sources ?? []).map((source) => source.value);
 }
 
+function createBundleSetupGaps(
+  bundle: AgentBlueprintBundle,
+  cfg?: OpenClawConfig,
+): RequirementGap[] {
+  const gaps: RequirementGap[] = [];
+  const channels = new Set<string>();
+
+  for (const binding of bundle.ingress?.bindings ?? []) {
+    if (binding.channel && binding.channel !== "default") {
+      channels.add(binding.channel);
+    }
+  }
+  const deliveryChannel = bundle.delivery?.target?.channel;
+  if (deliveryChannel && deliveryChannel !== "default") {
+    channels.add(deliveryChannel);
+  }
+
+  for (const channel of channels) {
+    const entry = (cfg?.channels as Record<string, unknown> | undefined)?.[channel];
+    if (!entry || typeof entry !== "object") {
+      gaps.push({
+        kind: "setup",
+        code: `channel:${channel}`,
+        message: `Configure the ${channel} channel before applying this agent.`,
+        contractIds: ["ingress.chat", "message.send"],
+        connectorIds: [`channel:${channel}`],
+      });
+    }
+  }
+
+  const sources = summarizeSourceChannels(bundle);
+  if (sources.includes("gmail")) {
+    const gmail = cfg?.hooks?.gmail;
+    if (!(cfg?.hooks?.token && gmail?.account && gmail?.topic && gmail?.pushToken)) {
+      gaps.push({
+        kind: "setup",
+        code: "gmail-hook",
+        message: "Configure the Gmail hook before using Gmail as a builder source.",
+        contractIds: ["ingest.email", "ingress.webhook"],
+        connectorIds: ["platform:gmail-hook", "platform:webhook-runtime"],
+      });
+    }
+  }
+
+  if (bundle.automation?.schedules?.length && cfg?.cron?.enabled === false) {
+    gaps.push({
+      kind: "setup",
+      code: "cron-disabled",
+      message: "Enable cron before applying a scheduled builder workflow.",
+      contractIds: ["schedule.trigger"],
+      connectorIds: ["tools:automation"],
+    });
+  }
+
+  return gaps;
+}
+
 function createBuilderLoadedBlueprint(draft: AgentBlueprintBuilderDraft): LoadedAgentBlueprint {
   return {
     kind: "builder",
@@ -617,13 +660,18 @@ function createBuilderLoadedBlueprint(draft: AgentBlueprintBuilderDraft): Loaded
 export function buildAgentBlueprintDraft(params: {
   brief: string;
   templateId?: string;
+  cfg?: OpenClawConfig;
 }): AgentBlueprintBuilderDraft {
   const brief = params.brief.trim();
   if (!brief) {
     throw new Error("A builder brief is required.");
   }
 
-  const selection = selectTemplate(brief, params.templateId);
+  const extractedRequirements = buildRequirementSet({
+    brief,
+    cfg: params.cfg,
+  });
+  const selection = selectTemplate(extractedRequirements, params.templateId);
   const baseTemplate =
     getAgentBlueprintTemplate(selection.templateId) ??
     (() => {
@@ -633,6 +681,10 @@ export function buildAgentBlueprintDraft(params: {
   let bundle = structuredClone(baseTemplate);
   const assumptions: string[] = [];
   const questions: AgentBlueprintBuilderQuestion[] = [];
+
+  const owned = ensureBuilderOwnedAgent(bundle);
+  bundle = owned.bundle;
+  assumptions.push(...owned.assumptions);
 
   const renamed = withAgentIdentity(bundle, extractRequestedName(brief));
   bundle = renamed.bundle;
@@ -663,16 +715,24 @@ export function buildAgentBlueprintDraft(params: {
   const uniqueQuestions = questions.filter(
     (question, index, all) => all.findIndex((entry) => entry.id === question.id) === index,
   );
+  const requirements = applyRequirementGaps(
+    applyRequirementQuestions(extractedRequirements, uniqueQuestions),
+    {
+      setupGaps: createBundleSetupGaps(bundle, params.cfg),
+    },
+  );
 
   return {
     brief,
     templateId: selection.templateId,
     displayName: bundle.manifest.displayName,
     confidence: selection.confidence,
+    plannerStatus: requirements.plannerStatus,
     reasons: selection.reasons,
     assumptions,
     questions: uniqueQuestions,
-    ready: uniqueQuestions.every((question) => !question.required),
+    ready: requirements.plannerStatus === "ready",
+    requirements,
     extracted: {
       agentId: normalizeAgentId(bundle.agent.agentId),
       name: bundle.agent.name,
@@ -697,7 +757,10 @@ export async function compileAgentBlueprintBuilderPlan(params: {
   templateId?: string;
   cfg?: OpenClawConfig;
 }): Promise<AgentBlueprintBuilderPlan> {
-  const draft = buildAgentBlueprintDraft(params);
+  const draft = buildAgentBlueprintDraft({
+    ...params,
+    cfg: params.cfg,
+  });
   const plan = await compileAgentBlueprintPlan({
     bundle: draft.bundle,
     cfg: params.cfg,
@@ -716,17 +779,27 @@ export async function compileAgentBlueprintBuilderPlan(params: {
 export async function applyAgentBlueprintBuilderPlan(params: {
   brief: string;
   templateId?: string;
+  cfg?: OpenClawConfig;
 }): Promise<AgentBlueprintBuilderApplyResult> {
-  const draft = buildAgentBlueprintDraft(params);
-  if (!draft.ready) {
-    const prompts = draft.questions
-      .filter((question) => question.required)
-      .map((question) => question.prompt)
+  const cfg = params.cfg ?? loadConfig();
+  const draft = buildAgentBlueprintDraft({
+    ...params,
+    cfg,
+  });
+  if (draft.plannerStatus !== "ready") {
+    const blockers = [
+      ...draft.requirements.missingInputs,
+      ...draft.requirements.setupGaps,
+      ...draft.requirements.policyGaps,
+      ...draft.requirements.unsupportedGaps,
+    ]
+      .map((gap) => gap.message)
       .join(" ");
-    throw new Error(`Builder needs more detail before apply. ${prompts}`);
+    throw new Error(`Builder planner is ${draft.plannerStatus}. ${blockers}`.trim());
   }
   const plan = await compileAgentBlueprintPlan({
     bundle: draft.bundle,
+    cfg,
     source: {
       kind: "builder",
       value: draft.templateId,

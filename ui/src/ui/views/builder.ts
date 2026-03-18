@@ -34,15 +34,16 @@ export function renderBuilder(props: BuilderProps) {
   const draft = planResult?.draft ?? null;
   const plan = asObject(planResult?.plan);
   const issues = readObjectArray(plan, "issues");
-  const planStatus = readString(plan, "status", "ready");
+  const blueprintStatus = readString(plan, "status", "ready");
 
   return html`
     <div class="builder-layout">
       <section class="card">
         <div class="card-title" style="font-size:14px;">Describe The Agent</div>
         <div class="card-sub" style="margin-bottom:12px;">
-          Write the job in plain English. The builder will choose the closest starter template,
-          note any assumptions, and show the resulting plan before apply.
+          Write the job in plain English. The builder will extract requirements, choose the
+          closest starter template, and show whether the workflow is ready, needs setup, or still
+          needs policy/input before apply.
         </div>
 
         <label class="field builder-brief-field" style="margin-bottom:12px;">
@@ -121,9 +122,40 @@ export function renderBuilder(props: BuilderProps) {
 
               <section class="card">
                 <div class="builder-header">
-                  <div class="card-title" style="font-size:14px;">Plan Status</div>
-                  <span class="tpl-pill ${planStatus === "ready" ? "tpl-pill--ok" : "tpl-pill--error"}">
-                    ${planStatus}
+                  <div class="card-title" style="font-size:14px;">Workflow Status</div>
+                  <span class="tpl-pill ${plannerStatusPillClass(draft.plannerStatus)}">
+                    ${draft.plannerStatus}
+                  </span>
+                </div>
+                <div class="builder-grid">
+                  ${builderRequirementList("Triggers", draft.requirements.triggers)}
+                  ${builderRequirementList("Inputs", draft.requirements.inputs)}
+                  ${builderRequirementList("Transforms", draft.requirements.transforms)}
+                  ${builderRequirementList("Actions", draft.requirements.actions)}
+                  ${builderRequirementList("Outputs", draft.requirements.outputs)}
+                  ${builderRequirementList("Policies", draft.requirements.policies)}
+                  ${builderRequirementList("Constraints", draft.requirements.constraints)}
+                  ${builderGapList("Needs Input", draft.requirements.missingInputs, "warn")}
+                  ${builderGapList("Needs Setup", draft.requirements.setupGaps, "warn")}
+                  ${builderGapList("Needs Policy", draft.requirements.policyGaps, "danger")}
+                  ${builderGapList("Unsupported", draft.requirements.unsupportedGaps, "danger")}
+                </div>
+                ${
+                  draft.requirements.intentTags.length > 0
+                    ? html`
+                        <div class="card-sub" style="margin-top:12px;">
+                          Intent tags: ${draft.requirements.intentTags.join(", ")}
+                        </div>
+                      `
+                    : nothing
+                }
+              </section>
+
+              <section class="card">
+                <div class="builder-header">
+                  <div class="card-title" style="font-size:14px;">Blueprint Plan</div>
+                  <span class="tpl-pill ${blueprintStatus === "ready" ? "tpl-pill--ok" : "tpl-pill--error"}">
+                    ${blueprintStatus}
                   </span>
                 </div>
                 ${
@@ -146,12 +178,12 @@ export function renderBuilder(props: BuilderProps) {
                         </div>
                       `
                     : html`
-                        <div class="card-sub">No plan issues detected.</div>
+                        <div class="card-sub">No blueprint compilation issues were detected.</div>
                       `
                 }
               </section>
 
-              ${renderBuilderApplySection(props, state, draft, planStatus)}
+              ${renderBuilderApplySection(props, state, draft, blueprintStatus)}
             `
           : nothing
       }
@@ -256,7 +288,7 @@ function renderBuilderApplySection(
     `;
   }
 
-  const canApply = draft.ready && planStatus === "ready";
+  const canApply = draft.plannerStatus === "ready" && planStatus === "ready";
   return html`
     <section class="card" style="text-align:center; padding:24px;">
       <button class="btn primary" ?disabled=${!canApply} @click=${props.onConfirmApply}>
@@ -269,7 +301,7 @@ function renderBuilderApplySection(
             `
           : html`
               <div class="card-sub" style="margin-top: 8px">
-                Resolve required questions or plan issues before apply.
+                Resolve planner gaps or blueprint issues before apply.
               </div>
             `
       }
@@ -307,6 +339,34 @@ function builderQuestionList(questions: Array<{ prompt: string; required: boolea
   `;
 }
 
+function builderRequirementList(title: string, values: Array<{ detail: string }>) {
+  if (values.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">${title}</div>
+      ${values.map((value) => html`<div class="tpl-note">${value.detail}</div>`)}
+    </div>
+  `;
+}
+
+function builderGapList(
+  title: string,
+  values: Array<{ message: string }>,
+  tone: "warn" | "danger",
+) {
+  if (values.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">${title}</div>
+      ${values.map((value) => html`<div class="callout ${tone}">${value.message}</div>`)}
+    </div>
+  `;
+}
+
 function builderExtracted(draft: NonNullable<AppViewState["builderPlan"]>["draft"]) {
   return html`
     <div>
@@ -339,6 +399,16 @@ function kv(label: string, value: string) {
       <div>${value}</div>
     </div>
   `;
+}
+
+function plannerStatusPillClass(status: string): string {
+  if (status === "ready") {
+    return "tpl-pill--ok";
+  }
+  if (status === "needs_input" || status === "needs_setup") {
+    return "tpl-pill--muted";
+  }
+  return "tpl-pill--error";
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {

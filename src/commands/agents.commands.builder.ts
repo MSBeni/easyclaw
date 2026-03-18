@@ -31,7 +31,11 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
   const lines = [
     `Builder selection: ${draft.displayName} (${draft.templateId})`,
     `Confidence: ${draft.confidence}`,
+    `Planner status: ${draft.plannerStatus}`,
   ];
+  if (draft.requirements.intentTags.length > 0) {
+    lines.push(`Intent tags: ${draft.requirements.intentTags.join(", ")}`);
+  }
   if (draft.reasons.length > 0) {
     lines.push("Reasons:");
     for (const reason of draft.reasons) {
@@ -48,6 +52,28 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
     lines.push("Questions:");
     for (const question of draft.questions) {
       lines.push(`- ${question.required ? "[required]" : "[optional]"} ${question.prompt}`);
+    }
+  }
+  const requirementSections: Array<[string, string[]]> = [
+    ["Triggers", draft.requirements.triggers.map((entry) => entry.detail)],
+    ["Inputs", draft.requirements.inputs.map((entry) => entry.detail)],
+    ["Transforms", draft.requirements.transforms.map((entry) => entry.detail)],
+    ["Actions", draft.requirements.actions.map((entry) => entry.detail)],
+    ["Outputs", draft.requirements.outputs.map((entry) => entry.detail)],
+    ["Policies", draft.requirements.policies.map((entry) => entry.detail)],
+    ["Constraints", draft.requirements.constraints.map((entry) => entry.detail)],
+    ["Needs input", draft.requirements.missingInputs.map((entry) => entry.message)],
+    ["Needs setup", draft.requirements.setupGaps.map((entry) => entry.message)],
+    ["Needs policy", draft.requirements.policyGaps.map((entry) => entry.message)],
+    ["Unsupported", draft.requirements.unsupportedGaps.map((entry) => entry.message)],
+  ];
+  for (const [label, values] of requirementSections) {
+    if (values.length === 0) {
+      continue;
+    }
+    lines.push(`${label}:`);
+    for (const value of values) {
+      lines.push(`- ${value}`);
     }
   }
   lines.push("Extracted:");
@@ -86,7 +112,7 @@ export async function agentsBuilderPlanCommand(
     runtime.log(
       [formatBuilderDraft(result.draft), "", formatAgentBlueprintPlan(result.plan)].join("\n"),
     );
-    if (!result.draft.ready || result.plan.status !== "ready") {
+    if (result.draft.plannerStatus !== "ready" || result.plan.status !== "ready") {
       runtime.exit(1);
     }
   } catch (error) {
@@ -107,9 +133,11 @@ export async function agentsBuilderApplyCommand(
       runtime.exit(1);
       return;
     }
+    const cfg = await loadPlanningConfig();
     const result = await applyAgentBlueprintBuilderPlan({
       brief: opts.brief,
       ...(opts.template ? { templateId: opts.template } : {}),
+      cfg,
     });
     if (opts.json) {
       runtime.log(JSON.stringify(result, null, 2));

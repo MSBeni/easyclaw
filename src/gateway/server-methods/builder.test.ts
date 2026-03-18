@@ -57,10 +57,26 @@ describe("builder gateway handlers", () => {
         templateId: "daily-briefing",
         displayName: "Daily Briefing Agent",
         confidence: "high",
+        plannerStatus: "ready",
         reasons: ["Matched digest language."],
         assumptions: [],
         questions: [],
         ready: true,
+        requirements: {
+          intentTags: ["scheduled", "summary"],
+          triggers: [],
+          inputs: [],
+          transforms: [],
+          decisions: [],
+          actions: [],
+          outputs: [],
+          policies: [],
+          constraints: [],
+          missingInputs: [],
+          setupGaps: [],
+          policyGaps: [],
+          unsupportedGaps: [],
+        },
         extracted: {
           agentId: "daily-briefing",
           name: "Morning Brief",
@@ -102,10 +118,26 @@ describe("builder gateway handlers", () => {
         templateId: "support-responder",
         displayName: "Support Responder",
         confidence: "high",
+        plannerStatus: "ready",
         reasons: ["Matched support language."],
         assumptions: [],
         questions: [],
         ready: true,
+        requirements: {
+          intentTags: ["support"],
+          triggers: [],
+          inputs: [],
+          transforms: [],
+          decisions: [],
+          actions: [],
+          outputs: [],
+          policies: [],
+          constraints: [],
+          missingInputs: [],
+          setupGaps: [],
+          policyGaps: [],
+          unsupportedGaps: [],
+        },
         extracted: {
           agentId: "support",
           name: "Support",
@@ -131,6 +163,7 @@ describe("builder gateway handlers", () => {
 
     expect(mocks.applyAgentBlueprintBuilderPlan).toHaveBeenCalledWith({
       brief: "Create a support bot on Telegram",
+      cfg: { agents: { default: "main" } },
     });
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);

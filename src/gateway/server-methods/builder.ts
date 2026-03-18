@@ -57,9 +57,11 @@ export const builderHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const cfg = loadConfig();
       const result = await applyAgentBlueprintBuilderPlan({
         brief: parsed.brief,
         ...(parsed.templateId ? { templateId: parsed.templateId } : {}),
+        cfg,
       });
       respond(true, result, undefined);
     } catch (error) {
