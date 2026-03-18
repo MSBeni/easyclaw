@@ -76,6 +76,23 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
       lines.push(`- ${value}`);
     }
   }
+  if (draft.planning.selections.length > 0) {
+    lines.push("Connector selections:");
+    for (const selection of draft.planning.selections) {
+      lines.push(
+        `- ${selection.requirementLabel}: ${selection.connectorLabel} (${selection.connectorId}, ${selection.source})`,
+      );
+    }
+  }
+  if (draft.planning.integrations.length > 0) {
+    lines.push("Integrations:");
+    for (const integration of draft.planning.integrations) {
+      lines.push(`- ${integration.label}: ${integration.status}`);
+      for (const issue of integration.issues) {
+        lines.push(`  - ${issue}`);
+      }
+    }
+  }
   lines.push("Extracted:");
   lines.push(`- agent: ${draft.extracted.name} (${draft.extracted.agentId})`);
   if (draft.extracted.ingressChannels.length > 0) {

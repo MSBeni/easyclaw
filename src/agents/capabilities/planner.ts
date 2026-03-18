@@ -1,0 +1,329 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
+import { listConnectorsForContract } from "./registry.js";
+import type { RequirementDescriptor, RequirementSet } from "./requirements.js";
+import type {
+  CapabilityRegistry,
+  ConnectorDefinition,
+  IntegrationInstance,
+  PlannerStatus,
+  VerificationProbe,
+} from "./schema.js";
+
+export type RequirementPlannerSelectionSource = "explicit" | "preferred" | "fallback";
+
+export type RequirementPlannerSelection = {
+  requirementId: string;
+  requirementLabel: string;
+  contractIds: string[];
+  connectorId: string;
+  connectorLabel: string;
+  source: RequirementPlannerSelectionSource;
+};
+
+export type PlannedIntegrationInstance = IntegrationInstance & {
+  label: string;
+  kind: ConnectorDefinition["kind"];
+  sourceKind: ConnectorDefinition["source"]["kind"];
+  contracts: string[];
+  verification: VerificationProbe[];
+};
+
+export type RequirementPlannerResult = {
+  status: PlannerStatus;
+  selections: RequirementPlannerSelection[];
+  integrations: PlannedIntegrationInstance[];
+};
+
+type RequirementPlannerParams = {
+  requirements: RequirementSet;
+  cfg?: OpenClawConfig;
+  registry?: CapabilityRegistry;
+};
+
+function dedupeStrings(values: string[]): string[] {
+  return values.filter((value, index, all) => all.indexOf(value) === index);
+}
+
+function listRequirementDescriptors(requirements: RequirementSet): RequirementDescriptor[] {
+  return [
+    ...requirements.triggers,
+    ...requirements.inputs,
+    ...requirements.transforms,
+    ...requirements.decisions,
+    ...requirements.actions,
+    ...requirements.outputs,
+    ...requirements.policies,
+    ...requirements.constraints,
+  ];
+}
+
+function isChannelConfigured(cfg: OpenClawConfig | undefined, channel: string): boolean {
+  const channels = cfg?.channels as Record<string, unknown> | undefined;
+  const entry = channels?.[channel];
+  return Boolean(entry && typeof entry === "object");
+}
+
+function isGmailHookConfigured(cfg: OpenClawConfig | undefined): boolean {
+  const gmail = cfg?.hooks?.gmail;
+  return Boolean(cfg?.hooks?.token && gmail?.account && gmail?.topic && gmail?.pushToken);
+}
+
+function hasExecApprovalsConfigured(cfg: OpenClawConfig | undefined): boolean {
+  const exec = cfg?.approvals?.exec;
+  return Boolean(exec?.enabled && ((exec.targets?.length ?? 0) > 0 || exec.mode));
+}
+
+function statusRank(status: IntegrationInstance["status"]): number {
+  switch (status) {
+    case "verified":
+      return 7;
+    case "authenticated":
+      return 6;
+    case "configured":
+      return 5;
+    case "installed":
+      return 4;
+    case "discovered":
+      return 3;
+    case "install_required":
+      return 2;
+    case "degraded":
+      return 1;
+    case "failed":
+      return 0;
+  }
+}
+
+function connectorConfigRefs(connector: ConnectorDefinition): string[] {
+  if (connector.id.startsWith("channel:")) {
+    return [`channels.${connector.source.id}`];
+  }
+  switch (connector.id) {
+    case "platform:core-model":
+      return ["models"];
+    case "platform:exec-approvals":
+      return ["approvals.exec"];
+    case "platform:gmail-hook":
+      return ["hooks.gmail", "hooks.token"];
+    case "platform:webhook-runtime":
+      return ["hooks", "hooks.token"];
+    case "tools:automation":
+      return ["cron.enabled"];
+    case "tools:ui":
+      return ["browser.enabled"];
+    default:
+      return [];
+  }
+}
+
+function connectorAuthRefs(connector: ConnectorDefinition): string[] {
+  if (connector.id.startsWith("channel:")) {
+    return [`channels.${connector.source.id}`];
+  }
+  switch (connector.id) {
+    case "platform:core-model":
+      return ["auth", "models"];
+    case "platform:gmail-hook":
+      return ["hooks.token", "hooks.gmail.pushToken"];
+    case "platform:webhook-runtime":
+      return ["hooks.token"];
+    default:
+      return [];
+  }
+}
+
+function describeIntegrationInstance(
+  connector: ConnectorDefinition,
+  cfg?: OpenClawConfig,
+): PlannedIntegrationInstance {
+  let status: IntegrationInstance["status"] = "discovered";
+  const issues: string[] = [];
+
+  if (connector.source.kind === "core_tool_section") {
+    status = "installed";
+    if (connector.id === "tools:automation" && cfg?.cron?.enabled === false) {
+      status = "degraded";
+      issues.push("cron is disabled");
+    }
+    if (connector.id === "tools:ui" && cfg?.browser?.enabled === false) {
+      status = "degraded";
+      issues.push("browser control is disabled");
+    }
+  } else if (connector.source.kind === "builtin_channel") {
+    status = isChannelConfigured(cfg, connector.source.id) ? "authenticated" : "discovered";
+    if (status !== "authenticated") {
+      issues.push(`channel ${connector.source.id} is not configured`);
+    }
+  } else if (connector.source.kind === "channel_catalog") {
+    status = isChannelConfigured(cfg, connector.source.id) ? "authenticated" : "install_required";
+    if (status !== "authenticated") {
+      issues.push(`channel plugin ${connector.source.id} still needs install or setup`);
+    }
+  } else if (connector.source.kind === "core_platform") {
+    switch (connector.id) {
+      case "platform:core-model":
+        status = "configured";
+        break;
+      case "platform:exec-approvals":
+        status = hasExecApprovalsConfigured(cfg) ? "configured" : "discovered";
+        if (status !== "configured") {
+          issues.push("exec approval routing is not configured");
+        }
+        break;
+      case "platform:gmail-hook":
+        status = isGmailHookConfigured(cfg) ? "authenticated" : "discovered";
+        if (status !== "authenticated") {
+          issues.push("gmail hook is not configured");
+        }
+        break;
+      case "platform:webhook-runtime":
+        status = cfg?.hooks?.token ? "configured" : "discovered";
+        if (status !== "configured") {
+          issues.push("webhook runtime is missing hooks.token");
+        }
+        break;
+      default:
+        status = "installed";
+        break;
+    }
+  }
+
+  return {
+    connectorId: connector.id,
+    instanceId: connector.id,
+    status,
+    configRefs: connectorConfigRefs(connector),
+    authRefs: connectorAuthRefs(connector),
+    issues,
+    label: connector.label,
+    kind: connector.kind,
+    sourceKind: connector.source.kind,
+    contracts: connector.contracts,
+    verification: connector.verification.probes,
+  };
+}
+
+function choosePreferredConnectorId(
+  contractId: string,
+  registry: CapabilityRegistry,
+  cfg?: OpenClawConfig,
+): string[] {
+  const connectors = listConnectorsForContract(registry, contractId);
+  if (connectors.length === 0) {
+    return [];
+  }
+  const ranked = connectors.toSorted((left, right) => {
+    const leftRank = statusRank(describeIntegrationInstance(left, cfg).status);
+    const rightRank = statusRank(describeIntegrationInstance(right, cfg).status);
+    if (leftRank !== rightRank) {
+      return rightRank - leftRank;
+    }
+    return left.label.localeCompare(right.label);
+  });
+  return ranked[0] ? [ranked[0].id] : [];
+}
+
+function resolveConnectorIdsForDescriptor(
+  descriptor: RequirementDescriptor,
+  requirements: RequirementSet,
+  registry: CapabilityRegistry,
+  cfg?: OpenClawConfig,
+): {
+  connectorIds: string[];
+  source: RequirementPlannerSelectionSource;
+} {
+  const hasBlockingInputGap =
+    descriptor.connectorIds.length === 0 &&
+    requirements.missingInputs.some((gap) =>
+      gap.contractIds.some((contractId) => descriptor.contractIds.includes(contractId)),
+    );
+  if (hasBlockingInputGap) {
+    return {
+      connectorIds: [],
+      source: "fallback",
+    };
+  }
+
+  const explicitConnectorIds = descriptor.connectorIds.filter((connectorId) =>
+    registry.connectorsById.has(connectorId),
+  );
+  if (explicitConnectorIds.length > 0) {
+    return {
+      connectorIds: dedupeStrings(explicitConnectorIds),
+      source: "explicit",
+    };
+  }
+
+  const preferredConnectorIds = dedupeStrings(
+    descriptor.contractIds.flatMap((contractId) =>
+      choosePreferredConnectorId(contractId, registry, cfg),
+    ),
+  );
+  if (preferredConnectorIds.length > 0) {
+    return {
+      connectorIds: preferredConnectorIds,
+      source: "preferred",
+    };
+  }
+
+  return {
+    connectorIds: dedupeStrings(
+      descriptor.contractIds.flatMap((contractId) =>
+        listConnectorsForContract(registry, contractId).map((connector) => connector.id),
+      ),
+    ),
+    source: "fallback",
+  };
+}
+
+export function buildRequirementPlannerResult(
+  params: RequirementPlannerParams,
+): RequirementPlannerResult {
+  const registry = params.registry ?? buildOpenClawCapabilityRegistry();
+  const selections: RequirementPlannerSelection[] = [];
+  const selectedConnectorIds: string[] = [];
+
+  for (const descriptor of listRequirementDescriptors(params.requirements)) {
+    if (descriptor.contractIds.length === 0) {
+      continue;
+    }
+    const resolution = resolveConnectorIdsForDescriptor(
+      descriptor,
+      params.requirements,
+      registry,
+      params.cfg,
+    );
+    for (const connectorId of resolution.connectorIds) {
+      const connector = registry.connectorsById.get(connectorId);
+      if (!connector) {
+        continue;
+      }
+      selections.push({
+        requirementId: descriptor.id,
+        requirementLabel: descriptor.label,
+        contractIds: descriptor.contractIds,
+        connectorId,
+        connectorLabel: connector.label,
+        source: resolution.source,
+      });
+      selectedConnectorIds.push(connectorId);
+    }
+  }
+
+  const integrations = dedupeStrings(selectedConnectorIds)
+    .map((connectorId) => registry.connectorsById.get(connectorId))
+    .filter((connector): connector is ConnectorDefinition => Boolean(connector))
+    .map((connector) => describeIntegrationInstance(connector, params.cfg))
+    .toSorted((left, right) => left.label.localeCompare(right.label));
+
+  return {
+    status: params.requirements.plannerStatus,
+    selections: selections.toSorted((left, right) =>
+      `${left.requirementLabel}:${left.connectorLabel}`.localeCompare(
+        `${right.requirementLabel}:${right.connectorLabel}`,
+      ),
+    ),
+    integrations,
+  };
+}

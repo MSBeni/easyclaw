@@ -22,6 +22,14 @@ describe("agent blueprint builder", () => {
     expect(result.draft.requirements.setupGaps.map((gap) => gap.code)).toEqual(
       expect.arrayContaining(["gmail-hook", "channel:slack"]),
     );
+    expect(result.draft.planning.selections.map((selection) => selection.connectorId)).toEqual(
+      expect.arrayContaining([
+        "channel:slack",
+        "platform:core-model",
+        "platform:gmail-hook",
+        "tools:automation",
+      ]),
+    );
     expect(result.plan.source?.kind).toBe("builder");
     expect(result.plan.status).toBe("ready");
   });
@@ -53,6 +61,11 @@ describe("agent blueprint builder", () => {
     expect(draft.plannerStatus).toBe("needs_setup");
     expect(draft.ready).toBe(false);
     expect(draft.extracted.ingressChannels).toEqual(["telegram"]);
+    expect(
+      draft.planning.integrations.find(
+        (integration) => integration.connectorId === "channel:telegram",
+      )?.status,
+    ).toBe("discovered");
   });
 
   it("defaults to the personal assistant template and creates a dedicated agent", () => {
@@ -83,6 +96,9 @@ describe("agent blueprint builder", () => {
     expect(draft.templateId).toBe("personal-assistant");
     expect(draft.plannerStatus).toBe("unsafe_without_policy");
     expect(draft.requirements.policyGaps.map((gap) => gap.code)).toContain("approval-route");
+    expect(draft.planning.selections.map((selection) => selection.connectorId)).toEqual(
+      expect.arrayContaining(["platform:exec-approvals", "tools:ui"]),
+    );
   });
 });
 

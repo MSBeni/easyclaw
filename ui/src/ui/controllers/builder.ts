@@ -38,6 +38,37 @@ export type BuilderDraftSummary = {
     policyGaps: Array<{ code: string; message: string }>;
     unsupportedGaps: Array<{ code: string; message: string }>;
   };
+  planning: {
+    selections: Array<{
+      requirementId: string;
+      requirementLabel: string;
+      contractIds: string[];
+      connectorId: string;
+      connectorLabel: string;
+      source: "explicit" | "preferred" | "fallback";
+    }>;
+    integrations: Array<{
+      connectorId: string;
+      instanceId: string;
+      status:
+        | "discovered"
+        | "install_required"
+        | "installed"
+        | "configured"
+        | "authenticated"
+        | "verified"
+        | "degraded"
+        | "failed";
+      configRefs: string[];
+      authRefs: string[];
+      issues: string[];
+      label: string;
+      kind: string;
+      sourceKind: string;
+      contracts: string[];
+      verification: Array<{ kind: string; label: string; successDescription: string }>;
+    }>;
+  };
   extracted: {
     agentId: string;
     name: string;

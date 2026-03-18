@@ -3,7 +3,10 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   applyRequirementGaps,
   applyRequirementQuestions,
+  buildRequirementPlannerResult,
   buildRequirementSet,
+  type PlannedIntegrationInstance,
+  type RequirementPlannerSelection,
   type RequirementGap,
   type RequirementSet,
 } from "../capabilities/index.js";
@@ -63,6 +66,10 @@ export type AgentBlueprintBuilderDraftSummary = {
   questions: AgentBlueprintBuilderQuestion[];
   ready: boolean;
   requirements: RequirementSet;
+  planning: {
+    selections: RequirementPlannerSelection[];
+    integrations: PlannedIntegrationInstance[];
+  };
   extracted: {
     agentId: string;
     name: string;
@@ -721,6 +728,10 @@ export function buildAgentBlueprintDraft(params: {
       setupGaps: createBundleSetupGaps(bundle, params.cfg),
     },
   );
+  const planning = buildRequirementPlannerResult({
+    requirements,
+    cfg: params.cfg,
+  });
 
   return {
     brief,
@@ -733,6 +744,10 @@ export function buildAgentBlueprintDraft(params: {
     questions: uniqueQuestions,
     ready: requirements.plannerStatus === "ready",
     requirements,
+    planning: {
+      selections: planning.selections,
+      integrations: planning.integrations,
+    },
     extracted: {
       agentId: normalizeAgentId(bundle.agent.agentId),
       name: bundle.agent.name,

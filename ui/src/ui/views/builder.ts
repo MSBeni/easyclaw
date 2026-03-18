@@ -153,6 +153,19 @@ export function renderBuilder(props: BuilderProps) {
 
               <section class="card">
                 <div class="builder-header">
+                  <div class="card-title" style="font-size:14px;">Connector Plan</div>
+                  <span class="tpl-pill ${plannerStatusPillClass(draft.plannerStatus)}">
+                    ${draft.plannerStatus}
+                  </span>
+                </div>
+                <div class="builder-grid">
+                  ${builderSelectionList(draft.planning.selections)}
+                  ${builderIntegrationList(draft.planning.integrations)}
+                </div>
+              </section>
+
+              <section class="card">
+                <div class="builder-header">
                   <div class="card-title" style="font-size:14px;">Blueprint Plan</div>
                   <span class="tpl-pill ${blueprintStatus === "ready" ? "tpl-pill--ok" : "tpl-pill--error"}">
                     ${blueprintStatus}
@@ -367,6 +380,63 @@ function builderGapList(
   `;
 }
 
+function builderSelectionList(
+  values: Array<{
+    requirementLabel: string;
+    connectorLabel: string;
+    connectorId: string;
+    source: string;
+  }>,
+) {
+  if (values.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Selections</div>
+      ${values.map(
+        (value) => html`
+          <div class="tpl-note">
+            ${value.requirementLabel}: ${value.connectorLabel}
+            <span class="mono">(${value.connectorId})</span>
+            <span class="tpl-pill tpl-pill--muted">${value.source}</span>
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
+
+function builderIntegrationList(
+  values: Array<{
+    label: string;
+    status: string;
+    connectorId: string;
+    issues: string[];
+  }>,
+) {
+  if (values.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Integrations</div>
+      ${values.map(
+        (value) => html`
+          <div class="tpl-plan-file">
+            <span>
+              ${value.label}
+              <span class="mono">(${value.connectorId})</span>
+            </span>
+            <span class="tpl-pill ${integrationStatusPillClass(value.status)}">${value.status}</span>
+          </div>
+          ${value.issues.map((issue) => html`<div class="callout warn">${issue}</div>`)}
+        `,
+      )}
+    </div>
+  `;
+}
+
 function builderExtracted(draft: NonNullable<AppViewState["builderPlan"]>["draft"]) {
   return html`
     <div>
@@ -406,6 +476,16 @@ function plannerStatusPillClass(status: string): string {
     return "tpl-pill--ok";
   }
   if (status === "needs_input" || status === "needs_setup") {
+    return "tpl-pill--muted";
+  }
+  return "tpl-pill--error";
+}
+
+function integrationStatusPillClass(status: string): string {
+  if (status === "verified" || status === "authenticated" || status === "configured") {
+    return "tpl-pill--ok";
+  }
+  if (status === "install_required" || status === "discovered" || status === "installed") {
     return "tpl-pill--muted";
   }
   return "tpl-pill--error";

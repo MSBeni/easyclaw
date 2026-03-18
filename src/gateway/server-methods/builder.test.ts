@@ -77,6 +77,33 @@ describe("builder gateway handlers", () => {
           policyGaps: [],
           unsupportedGaps: [],
         },
+        planning: {
+          selections: [
+            {
+              requirementId: "schedule",
+              requirementLabel: "Scheduled Trigger",
+              contractIds: ["schedule.trigger"],
+              connectorId: "tools:automation",
+              connectorLabel: "OpenClaw Automation Tools",
+              source: "explicit",
+            },
+          ],
+          integrations: [
+            {
+              connectorId: "tools:automation",
+              instanceId: "tools:automation",
+              status: "installed",
+              configRefs: ["cron.enabled"],
+              authRefs: [],
+              issues: [],
+              label: "OpenClaw Automation Tools",
+              kind: "tooling",
+              sourceKind: "core_tool_section",
+              contracts: ["schedule.trigger"],
+              verification: [],
+            },
+          ],
+        },
         extracted: {
           agentId: "daily-briefing",
           name: "Morning Brief",
@@ -137,6 +164,33 @@ describe("builder gateway handlers", () => {
           setupGaps: [],
           policyGaps: [],
           unsupportedGaps: [],
+        },
+        planning: {
+          selections: [
+            {
+              requirementId: "chat-ingress",
+              requirementLabel: "Chat Ingress",
+              contractIds: ["ingress.chat"],
+              connectorId: "channel:telegram",
+              connectorLabel: "Telegram",
+              source: "explicit",
+            },
+          ],
+          integrations: [
+            {
+              connectorId: "channel:telegram",
+              instanceId: "channel:telegram",
+              status: "authenticated",
+              configRefs: ["channels.telegram"],
+              authRefs: ["channels.telegram"],
+              issues: [],
+              label: "Telegram",
+              kind: "channel",
+              sourceKind: "builtin_channel",
+              contracts: ["ingress.chat", "delivery.chat", "message.send"],
+              verification: [],
+            },
+          ],
         },
         extracted: {
           agentId: "support",
