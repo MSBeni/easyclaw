@@ -45,7 +45,7 @@ export function renderBuilder(props: BuilderProps) {
           note any assumptions, and show the resulting plan before apply.
         </div>
 
-        <label class="field" style="margin-bottom:12px;">
+        <label class="field builder-brief-field" style="margin-bottom:12px;">
           <span>Brief</span>
           <textarea
             rows="5"
@@ -168,8 +168,8 @@ function renderBuilderApplySection(
   if (state.builderApplyResult) {
     const result = state.builderApplyResult.result;
     return html`
-      <section class="card" style="border-left:3px solid var(--green, #22c55e);">
-        <div class="card-title" style="font-size:14px; color:var(--green, #22c55e);">
+      <section class="card applied-banner">
+        <div class="card-title section-title" style="color:var(--ok);">
           Builder Applied
         </div>
         <div class="builder-grid">
@@ -234,14 +234,16 @@ function renderBuilderApplySection(
 
   if (state.builderApplying) {
     return html`
-      <section class="card" style="text-align: center; padding: 30px">Applying builder plan...</section>
+      <section class="card">
+        <div class="loading-spinner" style="padding: 24px">Applying builder plan...</div>
+      </section>
     `;
   }
 
   if (state.builderConfirmApply) {
     return html`
-      <section class="card" style="border-left:3px solid var(--warn-fg, #f59e0b);">
-        <div class="card-title" style="font-size:14px;">Confirm Apply</div>
+      <section class="card confirm-banner">
+        <div class="card-title section-title">Confirm Apply</div>
         <div class="card-sub" style="margin-bottom:12px;">
           This will create or update <strong>${draft.displayName}</strong> from the builder
           plan and write config, workspace files, bindings, and cron jobs.

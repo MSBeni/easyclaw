@@ -58,14 +58,14 @@ export function renderTemplates(props: TemplatesProps) {
             )
           : html`
               <div class="tpl-detail-nav">
-                <button class="btn btn--small" @click=${props.onBackToGallery}>
+                <button class="btn btn--sm" @click=${props.onBackToGallery}>
                   &larr; All templates
                 </button>
                 <div class="tpl-detail-nav__tabs">
                   ${(["detail", "plan"] as const).map(
                     (p) => html`
                       <button
-                        class="btn btn--small ${panel === p ? "active" : ""}"
+                        class="btn btn--sm ${panel === p ? "active" : ""}"
                         @click=${() => props.onSelectPanel(p)}
                       >
                         ${p === "detail" ? "Details" : "Plan & Apply"}
@@ -94,7 +94,9 @@ function renderGallery(
 ) {
   if (loading && catalog.length === 0) {
     return html`
-      <div class="card" style="text-align: center; padding: 40px">Loading templates...</div>
+      <div class="card">
+        <div class="loading-spinner" style="padding: 32px">Loading templates...</div>
+      </div>
     `;
   }
   if (error) {
@@ -102,7 +104,13 @@ function renderGallery(
   }
   if (catalog.length === 0) {
     return html`
-      <div class="card" style="text-align: center; padding: 40px">No templates available.</div>
+      <div class="card">
+        <div class="empty-state">
+          <div class="empty-state__icon">\u{1F4E6}</div>
+          <div class="empty-state__title">No templates available</div>
+          <div class="empty-state__sub">Agent blueprint templates will appear here once registered.</div>
+        </div>
+      </div>
     `;
   }
 
@@ -130,10 +138,12 @@ function renderCard(entry: TemplateCatalogEntry, props: TemplatesProps) {
   const identity = readObject(agent, "identity");
 
   return html`
-    <div class="tpl-card card" @click=${() => props.onSelectTemplate(entry.templateId)}>
-      <div class="tpl-card-emoji">${emojiForIdentity(identity)}</div>
-      <div class="card-title" style="font-size:14px; margin-bottom:4px;">${entry.displayName}</div>
-      <div class="card-sub">${entry.summary}</div>
+    <button class="tpl-card" @click=${() => props.onSelectTemplate(entry.templateId)}>
+      <div class="tpl-card-header">
+        <span class="tpl-card-emoji">${emojiForIdentity(identity)}</span>
+        <span class="tpl-card-name">${entry.displayName}</span>
+      </div>
+      <div class="tpl-card-summary">${entry.summary}</div>
       <div class="tpl-card-meta">
         ${entry.tags.map((tag) => html`<span class="tpl-pill tpl-pill--muted">${tag}</span>`)}
         ${
@@ -142,7 +152,7 @@ function renderCard(entry: TemplateCatalogEntry, props: TemplatesProps) {
             : nothing
         }
       </div>
-    </div>
+    </button>
   `;
 }
 
@@ -401,7 +411,7 @@ function renderPlan(entry: TemplateCatalogEntry, state: AppViewState, props: Tem
             `,
           )}
           <button
-            class="btn btn--small"
+            class="btn btn--sm"
             style="margin-top:4px;"
             @click=${() => {
               if (state.templatesSelectedId) {
@@ -419,7 +429,9 @@ function renderPlan(entry: TemplateCatalogEntry, state: AppViewState, props: Tem
   if (planLoading) {
     return html`
       ${variablesSection}
-      <div class="card" style="text-align:center; padding:40px;">Compiling execution plan...</div>
+      <div class="card">
+        <div class="loading-spinner" style="padding:32px;">Compiling execution plan...</div>
+      </div>
     `;
   }
   if (planError) {
@@ -625,8 +637,8 @@ function renderApplySection(
   // Already applied successfully
   if (applyResult) {
     return html`
-      <section class="card" style="border-left:3px solid var(--green, #22c55e);">
-        <div class="card-title" style="font-size:14px; color:var(--green, #22c55e);">
+      <section class="card applied-banner">
+        <div class="card-title section-title" style="color:var(--ok);">
           Blueprint Applied
         </div>
         <div class="agents-overview-grid" style="margin-top:8px;">
@@ -709,14 +721,16 @@ function renderApplySection(
   // Applying in progress
   if (applying) {
     return html`
-      <section class="card" style="text-align: center; padding: 30px">Applying blueprint...</section>
+      <section class="card">
+        <div class="loading-spinner" style="padding: 24px">Applying blueprint...</div>
+      </section>
     `;
   }
 
   // Confirm dialog
   if (confirmApply) {
     return html`
-      <section class="card" style="border-left:3px solid var(--warn-fg, #f59e0b);">
+      <section class="card confirm-banner">
         <div class="card-title" style="font-size:14px;">Confirm Apply</div>
         <div class="card-sub" style="margin-bottom:12px;">
           This will create or update the agent <strong>${entry.displayName}</strong>,

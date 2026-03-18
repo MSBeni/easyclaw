@@ -1218,6 +1218,13 @@
   color: var(--ok);
 }
 
+.callout.warn,
+.callout.warning {
+  border-color: rgba(245, 158, 11, 0.25);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(245, 158, 11, 0.04) 100%);
+  color: var(--warn);
+}
+
 /* Compaction indicator */
 .compaction-indicator {
   align-self: center;
@@ -3823,6 +3830,7 @@
 
 .tpl-card:hover {
   border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 .tpl-card--selected {
@@ -3902,6 +3910,11 @@
 }
 
 .tpl-detail-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tpl-detail-nav__tabs {
   display: flex;
   gap: 4px;
 }
@@ -4010,7 +4023,7 @@
 .builder-layout {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .builder-header {
@@ -4018,6 +4031,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  margin-bottom: 4px;
 }
 
 .builder-grid {
@@ -4032,4 +4046,95 @@
   flex-direction: column;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* Builder brief textarea should use proportional font (natural language input) */
+.builder-brief-field textarea {
+  font-family: inherit;
+  min-height: 120px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+/* Section title used in Templates/Builder detail cards */
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+/* Success banner (applied state) */
+.applied-banner {
+  border-left: 3px solid var(--ok);
+}
+
+.applied-banner .card-title {
+  color: var(--ok);
+}
+
+/* Confirm banner */
+.confirm-banner {
+  border-left: 3px solid var(--warn);
+}
+
+/* ===========================================
+   Shared Loading Spinner
+   =========================================== */
+
+.loading-spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 14px;
+  justify-content: center;
+}
+
+.loading-spinner::before {
+  content: "";
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: spinner-rotate 0.7s linear infinite;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ===========================================
+   Empty State
+   =========================================== */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty-state__icon {
+  font-size: 36px;
+  line-height: 1;
+  opacity: 0.5;
+}
+
+.empty-state__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.empty-state__sub {
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 360px;
 }
