@@ -25,6 +25,16 @@ export type BuilderDraftSummary = {
   ready: boolean;
   requirements: {
     confidence: "low" | "medium" | "high";
+    workflow: {
+      primaryGoal: "assistant" | "briefing" | "operator" | "research" | "support";
+      executionMode: "bound-channel" | "direct" | "hybrid" | "scheduled" | "webhook";
+      triggerKinds: string[];
+      sourceKinds: string[];
+      transformKinds: string[];
+      actionKinds: string[];
+      deliveryKinds: string[];
+      requiresApproval: boolean;
+    };
     intentTags: string[];
     triggers: Array<{ detail: string }>;
     inputs: Array<{ detail: string }>;
@@ -40,6 +50,12 @@ export type BuilderDraftSummary = {
     unsupportedGaps: Array<{ code: string; message: string }>;
     ambiguities: string[];
     unsupportedRequests: string[];
+    unsupportedClassifications: Array<{
+      code: string;
+      kind: "action" | "capability" | "connector" | "delivery" | "policy";
+      label: string;
+      detail: string;
+    }>;
     missingDataFields: string[];
   };
   planning: {

@@ -113,6 +113,32 @@ describe("agent blueprint builder", () => {
         ?.kind,
     ).toBe("policy");
   });
+
+  it("shapes webhook-driven operator workflows from extracted requirements", () => {
+    const draft = buildAgentBlueprintDraft({
+      brief:
+        "Create a webhook-driven agent that reads PDFs from my workspace, checks memory for prior context, and spawns a subagent to summarize them.",
+      cfg: {
+        hooks: {
+          token: "hook-token",
+        },
+      },
+    });
+
+    expect(draft.templateId).toBe("personal-assistant");
+    expect(draft.requirements.workflow.executionMode).toBe("webhook");
+    expect(draft.requirements.workflow.sourceKinds).toEqual(
+      expect.arrayContaining(["file-source", "memory-source"]),
+    );
+    expect(draft.planning.selections.map((selection) => selection.connectorId)).toEqual(
+      expect.arrayContaining([
+        "platform:webhook-runtime",
+        "tools:fs",
+        "tools:memory",
+        "tools:sessions",
+      ]),
+    );
+  });
 });
 
 describe("builder schedule inference", () => {

@@ -194,19 +194,15 @@ function selectTemplate(
     reasons.get(templateId)?.push(reason);
   };
 
-  const hasSupport = requirements.intentTags.includes("support");
+  const hasSupport = requirements.workflow.primaryGoal === "support";
   if (hasSupport) {
     addScore("support-responder", 5, "Detected an inbound support or customer-response workflow.");
   }
 
   const hasBriefing =
-    requirements.requestedContractIds.includes("schedule.trigger") ||
-    requirements.transforms.some((entry) => entry.contractIds.includes("transform.summarize")) ||
-    requirements.inputs.some((entry) =>
-      entry.contractIds.some(
-        (contractId) => contractId === "ingest.email" || contractId === "ingest.feed",
-      ),
-    );
+    requirements.workflow.primaryGoal === "briefing" ||
+    requirements.workflow.executionMode === "scheduled" ||
+    requirements.workflow.executionMode === "hybrid";
   if (hasBriefing) {
     addScore("daily-briefing", 4, "Detected a scheduled digest, briefing, or summary workflow.");
   }
@@ -214,16 +210,14 @@ function selectTemplate(
     addScore("daily-briefing", 2, "Matched recurring schedule language.");
   }
 
-  const hasResearch =
-    requirements.intentTags.includes("research") ||
-    requirements.inputs.some((entry) => entry.contractIds.includes("fetch.web"));
+  const hasResearch = requirements.workflow.primaryGoal === "research";
   if (hasResearch) {
     addScore("research-agent", 4, "Detected research, analysis, or web-synthesis requirements.");
   }
 
   const hasPersonal =
-    requirements.intentTags.includes("assistant") ||
-    requirements.actions.some((entry) => entry.contractIds.includes("browser.operate"));
+    requirements.workflow.primaryGoal === "assistant" ||
+    requirements.workflow.primaryGoal === "operator";
   if (hasPersonal) {
     addScore("personal-assistant", 3, "Detected a general assistant or operator workflow.");
   }
@@ -327,7 +321,7 @@ function inferSchedule(brief: string): InferredSchedule | null {
 function inferDelivery(
   brief: string,
   outputChannels: string[],
-  templateId: string,
+  requirements: RequirementSet,
 ): InferredDelivery {
   const assumptions: string[] = [];
   const questions: AgentBlueprintBuilderQuestion[] = [];
@@ -390,11 +384,11 @@ function inferDelivery(
     };
   }
 
-  if (templateId === "daily-briefing") {
+  if (requirements.workflow.primaryGoal === "briefing") {
     assumptions.push("Defaulted delivery to Telegram @me.");
   }
   return {
-    ...(templateId === "daily-briefing"
+    ...(requirements.workflow.primaryGoal === "briefing"
       ? {
           channel: "telegram",
           to: DEFAULT_DIRECT_TARGET,
@@ -405,15 +399,21 @@ function inferDelivery(
   };
 }
 
-function inferBindings(channels: string[], templateId: string): InferredBindings {
+function inferBindings(channels: string[], requirements: RequirementSet): InferredBindings {
   const assumptions: string[] = [];
   const questions: AgentBlueprintBuilderQuestion[] = [];
 
-  if (templateId === "support-responder") {
+  if (
+    requirements.workflow.executionMode === "bound-channel" ||
+    requirements.workflow.executionMode === "hybrid"
+  ) {
     if (channels.length === 0) {
       questions.push({
         id: "binding-channel",
-        prompt: "Which channel should this support responder watch?",
+        prompt:
+          requirements.workflow.primaryGoal === "support"
+            ? "Which channel should this support responder watch?"
+            : "Which channel should this workflow watch?",
         required: true,
       });
       return { channels: [], assumptions, questions };
@@ -424,7 +424,11 @@ function inferBindings(channels: string[], templateId: string): InferredBindings
     return { channels, assumptions, questions };
   }
 
-  if (templateId === "personal-assistant" || templateId === "research-agent") {
+  if (
+    requirements.workflow.executionMode === "direct" ||
+    requirements.workflow.primaryGoal === "assistant" ||
+    requirements.workflow.primaryGoal === "research"
+  ) {
     return { channels: channels.slice(0, 1), assumptions, questions };
   }
 
@@ -534,7 +538,7 @@ function applyPlannerWorkflowShape(
   const ingressChannels = inferPlannerIngressChannels(params.planning);
   const outputChannels = inferPlannerDeliveryChannels(params.planning);
   const sourceChannels = inferPlannerSourceChannels(params.requirements, params.planning);
-  const bindings = inferBindings(ingressChannels, params.templateId);
+  const bindings = inferBindings(ingressChannels, params.requirements);
   assumptions.push(...bindings.assumptions);
   questions.push(...bindings.questions);
 
@@ -559,7 +563,7 @@ function applyPlannerWorkflowShape(
     assumptions.push("Kept the starter weekday morning schedule.");
   }
 
-  const delivery = inferDelivery(params.brief, outputChannels, params.templateId);
+  const delivery = inferDelivery(params.brief, outputChannels, params.requirements);
   questions.push(...delivery.questions);
   assumptions.push(...delivery.assumptions);
   if (delivery.channel || delivery.to) {
@@ -574,15 +578,17 @@ function applyPlannerWorkflowShape(
   }
 
   const interactionMode =
-    scheduleRequested && bindings.channels.length > 0
+    params.requirements.workflow.executionMode === "hybrid"
       ? "hybrid"
-      : scheduleRequested
+      : params.requirements.workflow.executionMode === "scheduled"
         ? "scheduled"
-        : params.requirements.intentTags.includes("support") && bindings.channels.length > 0
+        : params.requirements.workflow.executionMode === "webhook"
           ? "bound-channel"
           : bindings.channels.length > 0
-            ? "direct"
-            : next.ingress?.interactionMode;
+            ? "bound-channel"
+            : params.requirements.workflow.executionMode === "direct"
+              ? "direct"
+              : next.ingress?.interactionMode;
 
   if (interactionMode || bindings.channels.length > 0 || sourceChannels.length > 0) {
     next.ingress = {

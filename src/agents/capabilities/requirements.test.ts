@@ -63,6 +63,8 @@ describe("capability requirements", () => {
     expect(requirements.confidence).toBe("high");
     expect(requirements.ambiguities).toEqual([]);
     expect(requirements.missingDataFields).toEqual([]);
+    expect(requirements.workflow.primaryGoal).toBe("briefing");
+    expect(requirements.workflow.executionMode).toBe("scheduled");
     expect(requirements.plannerStatus).toBe("needs_setup");
   });
 
@@ -81,6 +83,8 @@ describe("capability requirements", () => {
     );
     expect(requirements.missingDataFields).toContain("approval-mode");
     expect(requirements.confidence).toBe("medium");
+    expect(requirements.workflow.primaryGoal).toBe("operator");
+    expect(requirements.workflow.requiresApproval).toBe(true);
     expect(requirements.plannerStatus).toBe("unsafe_without_policy");
   });
 
@@ -109,6 +113,8 @@ describe("capability requirements", () => {
     expect(requirements.confidence).toBe("high");
     expect(requirements.ambiguities).toEqual([]);
     expect(requirements.missingDataFields).toEqual([]);
+    expect(requirements.workflow.primaryGoal).toBe("briefing");
+    expect(requirements.workflow.executionMode).toBe("scheduled");
     expect(requirements.plannerStatus).toBe("ready");
   });
 
@@ -167,6 +173,7 @@ describe("capability requirements", () => {
       expect.arrayContaining(["delivery-destination", "schedule-time", "source-material"]),
     );
     expect(requirements.confidence).toBe("low");
+    expect(requirements.workflow.primaryGoal).toBe("briefing");
   });
 
   it("reports unsupported outbound email delivery requests explicitly", () => {
@@ -179,7 +186,38 @@ describe("capability requirements", () => {
     expect(requirements.unsupportedRequests).toContain(
       "Email delivery is not modeled as a supported outbound connector yet.",
     );
+    expect(requirements.unsupportedClassifications).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "email-delivery",
+          kind: "delivery",
+          label: "Unsupported Delivery",
+        }),
+      ]),
+    );
     expect(requirements.confidence).toBe("low");
     expect(requirements.plannerStatus).toBe("unsupported");
+  });
+
+  it("extracts webhook, file, memory, and delegation requirements", () => {
+    const requirements = buildRequirementSet({
+      brief:
+        "Create a webhook-driven agent that reads PDFs from my workspace, checks memory for prior context, and spawns a subagent to summarize them.",
+      cfg: {
+        hooks: {
+          token: "hook-token",
+        },
+      },
+    });
+
+    expect(requirements.triggers.map((entry) => entry.id)).toContain("webhook-ingress");
+    expect(requirements.inputs.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["file-source", "memory-source"]),
+    );
+    expect(requirements.actions.map((entry) => entry.id)).toContain("session-spawn");
+    expect(requirements.workflow.executionMode).toBe("webhook");
+    expect(requirements.workflow.sourceKinds).toEqual(
+      expect.arrayContaining(["file-source", "memory-source"]),
+    );
   });
 });

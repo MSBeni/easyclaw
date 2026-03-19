@@ -5,8 +5,32 @@ import { listConnectorsForContract } from "./registry.js";
 import type { CapabilityRegistry, ConnectorDefinition, PlannerStatus } from "./schema.js";
 
 export const REQUIREMENT_CONFIDENCES = ["low", "medium", "high"] as const;
+export const REQUIREMENT_WORKFLOW_GOALS = [
+  "assistant",
+  "briefing",
+  "operator",
+  "research",
+  "support",
+] as const;
+export const REQUIREMENT_EXECUTION_MODES = [
+  "bound-channel",
+  "direct",
+  "hybrid",
+  "scheduled",
+  "webhook",
+] as const;
+export const REQUIREMENT_UNSUPPORTED_KINDS = [
+  "action",
+  "capability",
+  "connector",
+  "delivery",
+  "policy",
+] as const;
 
 export type RequirementConfidence = (typeof REQUIREMENT_CONFIDENCES)[number];
+export type RequirementWorkflowGoal = (typeof REQUIREMENT_WORKFLOW_GOALS)[number];
+export type RequirementExecutionMode = (typeof REQUIREMENT_EXECUTION_MODES)[number];
+export type RequirementUnsupportedKind = (typeof REQUIREMENT_UNSUPPORTED_KINDS)[number];
 
 export type RequirementDescriptor = {
   id: string;
@@ -33,9 +57,30 @@ export type RequirementQuestion = {
   required: boolean;
 };
 
+export type RequirementUnsupportedClassification = {
+  code: string;
+  kind: RequirementUnsupportedKind;
+  label: string;
+  detail: string;
+  contractIds: string[];
+  connectorIds: string[];
+};
+
+export type RequirementWorkflowSummary = {
+  primaryGoal: RequirementWorkflowGoal;
+  executionMode: RequirementExecutionMode;
+  triggerKinds: string[];
+  sourceKinds: string[];
+  transformKinds: string[];
+  actionKinds: string[];
+  deliveryKinds: string[];
+  requiresApproval: boolean;
+};
+
 export type RequirementSet = {
   brief: string;
   confidence: RequirementConfidence;
+  workflow: RequirementWorkflowSummary;
   intentTags: string[];
   requestedContractIds: string[];
   supportedContractIds: string[];
@@ -55,6 +100,7 @@ export type RequirementSet = {
   unsupportedGaps: RequirementGap[];
   ambiguities: string[];
   unsupportedRequests: string[];
+  unsupportedClassifications: RequirementUnsupportedClassification[];
   missingDataFields: string[];
   plannerStatus: PlannerStatus;
 };
@@ -204,6 +250,10 @@ function hasSummaryLanguage(brief: string): boolean {
   return /\b(summariz(?:e|es|ed|ing)?|summary|digest|briefing|brief|recap)\b/i.test(brief);
 }
 
+function hasReportLanguage(brief: string): boolean {
+  return /\b(digest|briefing|brief|report|recap)\b/i.test(brief);
+}
+
 function hasResearchLanguage(brief: string): boolean {
   return /\b(research|investigate|analysis|analyze|analyse|compare|competitor|sources)\b/i.test(
     brief,
@@ -232,6 +282,20 @@ function hasWebLanguage(brief: string): boolean {
   return /https?:\/\/|\b(web|website|url|page|pages|article|articles|link|links)\b/i.test(brief);
 }
 
+function hasWebhookLanguage(brief: string): boolean {
+  return /\b(webhook|callback|endpoint|api post|http post|incoming hook)\b/i.test(brief);
+}
+
+function hasFileLanguage(brief: string): boolean {
+  return /\b(file|files|document|documents|pdf|markdown|csv|spreadsheet|workspace|folder)\b/i.test(
+    brief,
+  );
+}
+
+function hasMemoryLanguage(brief: string): boolean {
+  return /\b(memory|remember|history|context|previous conversation|past chats?)\b/i.test(brief);
+}
+
 function hasAudioLanguage(brief: string): boolean {
   return /\b(audio|podcast|episode|listen|transcrib|voice|recording)\b/i.test(brief);
 }
@@ -246,6 +310,20 @@ function hasSocialActionLanguage(brief: string): boolean {
 
 function hasOnBehalfLanguage(brief: string): boolean {
   return /\bon my behalf\b/i.test(brief);
+}
+
+function hasInboundChatLanguage(brief: string): boolean {
+  return /\b(watch|monitor|listen|respond|reply|incoming|inbound|questions?|messages?)\b/i.test(
+    brief,
+  );
+}
+
+function hasSessionSpawnLanguage(brief: string): boolean {
+  return /\b(subagent|sub-agent|delegate|parallel agent|spawn(?: another)? agent)\b/i.test(brief);
+}
+
+function hasNodeLanguage(brief: string): boolean {
+  return /\b(node|server|daemon|runtime|service|process)\b/i.test(brief);
 }
 
 function hasOutboundEmailDeliveryLanguage(brief: string): boolean {
@@ -270,6 +348,90 @@ function resolveRequirementConfidence(params: {
     return "low";
   }
   return "medium";
+}
+
+function classifyUnsupportedGap(gap: RequirementGap): RequirementUnsupportedClassification {
+  let kind: RequirementUnsupportedKind = "capability";
+  let label = "Unsupported Capability";
+
+  if (gap.code.startsWith("channel:")) {
+    kind = "connector";
+    label = "Unsupported Connector";
+  } else if (gap.code.includes("delivery")) {
+    kind = "delivery";
+    label = "Unsupported Delivery";
+  } else if (gap.code.includes("approval") || gap.code.includes("policy")) {
+    kind = "policy";
+    label = "Unsupported Policy";
+  } else if (gap.code.includes("action")) {
+    kind = "action";
+    label = "Unsupported Action";
+  }
+
+  return {
+    code: gap.code,
+    kind,
+    label,
+    detail: gap.message,
+    contractIds: gap.contractIds,
+    connectorIds: gap.connectorIds,
+  };
+}
+
+function resolveWorkflowSummary(params: {
+  intentTags: string[];
+  triggers: RequirementDescriptor[];
+  inputs: RequirementDescriptor[];
+  transforms: RequirementDescriptor[];
+  actions: RequirementDescriptor[];
+  outputs: RequirementDescriptor[];
+  policies: RequirementDescriptor[];
+  unsupportedGaps: RequirementGap[];
+}): RequirementWorkflowSummary {
+  const triggerKinds = dedupeStrings(params.triggers.map((entry) => entry.id)).toSorted();
+  const sourceKinds = dedupeStrings(params.inputs.map((entry) => entry.id)).toSorted();
+  const transformKinds = dedupeStrings(params.transforms.map((entry) => entry.id)).toSorted();
+  const actionKinds = dedupeStrings(params.actions.map((entry) => entry.id)).toSorted();
+  const deliveryKinds = dedupeStrings(params.outputs.map((entry) => entry.id)).toSorted();
+  const isBriefingWorkflow =
+    params.intentTags.includes("scheduled") ||
+    sourceKinds.includes("email-source") ||
+    sourceKinds.includes("feed-source") ||
+    deliveryKinds.includes("report-output");
+
+  const primaryGoal: RequirementWorkflowGoal = params.intentTags.includes("support")
+    ? "support"
+    : params.intentTags.includes("research")
+      ? "research"
+      : isBriefingWorkflow
+        ? "briefing"
+        : actionKinds.length > 0
+          ? "operator"
+          : "assistant";
+
+  const executionMode: RequirementExecutionMode =
+    triggerKinds.includes("schedule") && triggerKinds.some((kind) => kind !== "schedule")
+      ? "hybrid"
+      : triggerKinds.includes("schedule")
+        ? "scheduled"
+        : triggerKinds.includes("webhook-ingress")
+          ? "webhook"
+          : triggerKinds.includes("chat-ingress")
+            ? "bound-channel"
+            : "direct";
+
+  return {
+    primaryGoal,
+    executionMode,
+    triggerKinds,
+    sourceKinds,
+    transformKinds,
+    actionKinds,
+    deliveryKinds,
+    requiresApproval: params.policies.some((entry) =>
+      entry.contractIds.includes("approval.request"),
+    ),
+  };
 }
 
 function isChannelConfigured(cfg: OpenClawConfig | undefined, channel: string): boolean {
@@ -424,12 +586,17 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
       hasAudioLanguage(text) ? "audio" : null,
       hasFeedLanguage(text) ? "feed" : null,
       hasEmailSourceLanguage(brief) || hasOutboundEmailDeliveryLanguage(brief) ? "email" : null,
+      hasFileLanguage(text) ? "file" : null,
+      hasMemoryLanguage(text) ? "memory" : null,
+      hasWebhookLanguage(text) ? "webhook" : null,
       hasResearchLanguage(text) ? "research" : null,
       hasScheduleLanguage(text) ? "scheduled" : null,
       hasSupportLanguage(text) ? "support" : null,
       hasSummaryLanguage(text) ? "summary" : null,
       hasBrowserLanguage(text) || hasSocialActionLanguage(text) ? "browser" : null,
       hasSocialActionLanguage(text) ? "social-action" : null,
+      hasSessionSpawnLanguage(text) ? "delegation" : null,
+      hasNodeLanguage(text) ? "runtime" : null,
     ].filter((value): value is string => Boolean(value)),
   ).toSorted();
 
@@ -454,8 +621,13 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
   const researchRequest = hasResearchLanguage(text);
   const emailRequest = hasEmailSourceLanguage(brief);
   const feedRequest = hasFeedLanguage(text);
+  const fileRequest = hasFileLanguage(text);
+  const memoryRequest = hasMemoryLanguage(text);
+  const webhookRequest = hasWebhookLanguage(text);
   const webRequest = hasWebLanguage(text) || researchRequest;
   const audioRequest = hasAudioLanguage(text);
+  const sessionSpawnRequest = hasSessionSpawnLanguage(text);
+  const nodeRequest = hasNodeLanguage(text);
   const browserRequest =
     hasBrowserLanguage(text) || hasSocialActionLanguage(text) || /\b(x|twitter)\b/i.test(brief);
   const riskyActionRequest =
@@ -463,7 +635,10 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     /\b(follow|comment|post|retweet|like)\b/i.test(brief) ||
     (/\breply\b/i.test(brief) && hasOnBehalfLanguage(text));
   const deliveryRequest =
-    /\b(send|deliver|post|share|publish)\b/i.test(brief) || summaryRequest || supportRequest;
+    /\b(send|deliver|post|share|publish)\b/i.test(brief) ||
+    supportRequest ||
+    hasReportLanguage(brief) ||
+    (scheduleRequest && summaryRequest);
 
   if (scheduleRequest) {
     triggers.push(
@@ -493,10 +668,31 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     }
   }
 
-  if (
-    supportRequest ||
-    (mentionedChatChannelIds.length > 0 && /\b(bot|responder|questions?)\b/i.test(brief))
-  ) {
+  if (webhookRequest) {
+    triggers.push(
+      createDescriptor({
+        id: "webhook-ingress",
+        label: "Webhook Ingress",
+        detail: "Trigger the workflow from an incoming webhook or callback.",
+        contractIds: ["ingress.webhook"],
+        connectorIds: ["platform:webhook-runtime"],
+        confidence: "high",
+      }),
+    );
+    if (!params.cfg?.hooks?.token) {
+      setupGaps.push(
+        createGap({
+          kind: "setup",
+          code: "webhook-runtime",
+          message: "Configure hooks.token before using webhook-triggered workflows.",
+          contractIds: ["ingress.webhook"],
+          connectorIds: ["platform:webhook-runtime"],
+        }),
+      );
+    }
+  }
+
+  if (supportRequest || (mentionedChatChannelIds.length > 0 && hasInboundChatLanguage(brief))) {
     triggers.push(
       createDescriptor({
         id: "chat-ingress",
@@ -567,6 +763,32 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     );
   }
 
+  if (fileRequest) {
+    inputs.push(
+      createDescriptor({
+        id: "file-source",
+        label: "File Read",
+        detail: "Read files or documents from the workspace or local filesystem.",
+        contractIds: ["fs.read"],
+        connectorIds: ["tools:fs"],
+        confidence: "medium",
+      }),
+    );
+  }
+
+  if (memoryRequest) {
+    inputs.push(
+      createDescriptor({
+        id: "memory-source",
+        label: "Memory Search",
+        detail: "Retrieve saved memory or prior context for this workflow.",
+        contractIds: ["memory.search"],
+        connectorIds: ["tools:memory"],
+        confidence: "medium",
+      }),
+    );
+  }
+
   if (webRequest) {
     inputs.push(
       createDescriptor({
@@ -606,6 +828,32 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         contractIds: ["transform.transcribe"],
         connectorIds: ["tools:media"],
         confidence: "high",
+      }),
+    );
+  }
+
+  if (nodeRequest) {
+    actions.push(
+      createDescriptor({
+        id: "node-action",
+        label: "Node Operate",
+        detail: "Run or control a node-backed runtime surface for the workflow.",
+        contractIds: ["node.operate"],
+        connectorIds: ["tools:nodes"],
+        confidence: "medium",
+      }),
+    );
+  }
+
+  if (sessionSpawnRequest) {
+    actions.push(
+      createDescriptor({
+        id: "session-spawn",
+        label: "Session Spawn",
+        detail: "Delegate parts of the workflow to spawned sessions or subagents.",
+        contractIds: ["session.spawn"],
+        connectorIds: ["tools:sessions"],
+        confidence: "medium",
       }),
     );
   }
@@ -791,6 +1039,21 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
   const unsupportedRequests = dedupeStrings(
     normalizedUnsupportedGaps.map((gap) => gap.message),
   ).toSorted();
+  const unsupportedClassifications = normalizedUnsupportedGaps
+    .map((gap) => classifyUnsupportedGap(gap))
+    .toSorted((left, right) =>
+      `${left.kind}:${left.code}`.localeCompare(`${right.kind}:${right.code}`),
+    );
+  const workflow = resolveWorkflowSummary({
+    intentTags,
+    triggers,
+    inputs,
+    transforms,
+    actions,
+    outputs,
+    policies,
+    unsupportedGaps: normalizedUnsupportedGaps,
+  });
   const confidence = resolveRequirementConfidence({
     descriptorCount: descriptors.length,
     ambiguityCount: normalizedAmbiguities.length,
@@ -801,6 +1064,7 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
   return {
     brief,
     confidence,
+    workflow,
     intentTags,
     requestedContractIds: contractCoverage.requestedContractIds,
     supportedContractIds: contractCoverage.supportedContractIds,
@@ -820,6 +1084,7 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     unsupportedGaps: normalizedUnsupportedGaps,
     ambiguities: normalizedAmbiguities,
     unsupportedRequests,
+    unsupportedClassifications,
     missingDataFields: normalizedMissingDataFields,
     plannerStatus: resolvePlannerStatusFromGaps({
       missingInputs: normalizedMissingInputs,

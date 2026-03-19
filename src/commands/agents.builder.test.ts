@@ -59,6 +59,16 @@ describe("agents builder commands", () => {
         ready: false,
         requirements: {
           confidence: "medium",
+          workflow: {
+            primaryGoal: "support",
+            executionMode: "bound-channel",
+            triggerKinds: ["chat-ingress"],
+            sourceKinds: [],
+            transformKinds: [],
+            actionKinds: [],
+            deliveryKinds: [],
+            requiresApproval: false,
+          },
           intentTags: ["support"],
           triggers: [],
           inputs: [],
@@ -79,6 +89,7 @@ describe("agents builder commands", () => {
           unsupportedGaps: [],
           ambiguities: ["The workflow looks support-oriented, but no inbound channel was named."],
           unsupportedRequests: [],
+          unsupportedClassifications: [],
           missingDataFields: ["binding-channel"],
         },
         planning: {
@@ -207,6 +218,16 @@ describe("agents builder commands", () => {
         ready: true,
         requirements: {
           confidence: "high",
+          workflow: {
+            primaryGoal: "briefing",
+            executionMode: "scheduled",
+            triggerKinds: ["schedule"],
+            sourceKinds: ["email-source"],
+            transformKinds: ["summary-transform"],
+            actionKinds: [],
+            deliveryKinds: ["report-output"],
+            requiresApproval: false,
+          },
           intentTags: ["scheduled", "summary"],
           triggers: [{ detail: "Run on a recurring schedule." }],
           inputs: [{ detail: "Read messages from a configured Gmail or inbox hook." }],
@@ -222,6 +243,7 @@ describe("agents builder commands", () => {
           unsupportedGaps: [],
           ambiguities: [],
           unsupportedRequests: [],
+          unsupportedClassifications: [],
           missingDataFields: [],
         },
         planning: {
@@ -341,6 +363,16 @@ describe("agents builder commands", () => {
         ready: false,
         requirements: {
           confidence: "medium",
+          workflow: {
+            primaryGoal: "support",
+            executionMode: "bound-channel",
+            triggerKinds: ["chat-ingress"],
+            sourceKinds: [],
+            transformKinds: [],
+            actionKinds: [],
+            deliveryKinds: [],
+            requiresApproval: false,
+          },
           intentTags: ["support"],
           triggers: [],
           inputs: [],
@@ -356,6 +388,7 @@ describe("agents builder commands", () => {
           unsupportedGaps: [],
           ambiguities: [],
           unsupportedRequests: [],
+          unsupportedClassifications: [],
           missingDataFields: [],
         },
         planning: {

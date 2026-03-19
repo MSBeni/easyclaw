@@ -40,6 +40,8 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
     `Confidence: ${draft.confidence}`,
     `Planner status: ${draft.plannerStatus}`,
     `Requirement confidence: ${draft.requirements.confidence}`,
+    `Workflow goal: ${draft.requirements.workflow.primaryGoal}`,
+    `Workflow mode: ${draft.requirements.workflow.executionMode}`,
   ];
   if (draft.requirements.intentTags.length > 0) {
     lines.push(`Intent tags: ${draft.requirements.intentTags.join(", ")}`);

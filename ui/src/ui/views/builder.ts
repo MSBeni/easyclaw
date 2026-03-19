@@ -350,6 +350,12 @@ export function renderBuilder(props: BuilderProps) {
                     (tag) => html`<span class="tpl-pill tpl-pill--muted">${tag}</span>`,
                   )}
                   <span class="tpl-pill tpl-pill--muted">
+                    ${draft.requirements.workflow.primaryGoal}
+                  </span>
+                  <span class="tpl-pill tpl-pill--muted">
+                    ${draft.requirements.workflow.executionMode}
+                  </span>
+                  <span class="tpl-pill tpl-pill--muted">
                     extraction ${draft.requirements.confidence}
                   </span>
                 </div>
