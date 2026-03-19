@@ -58,6 +58,7 @@ describe("agents builder commands", () => {
         ],
         ready: false,
         requirements: {
+          confidence: "medium",
           intentTags: ["support"],
           triggers: [],
           inputs: [],
@@ -76,6 +77,9 @@ describe("agents builder commands", () => {
           setupGaps: [],
           policyGaps: [],
           unsupportedGaps: [],
+          ambiguities: ["The workflow looks support-oriented, but no inbound channel was named."],
+          unsupportedRequests: [],
+          missingDataFields: ["binding-channel"],
         },
         planning: {
           selections: [
@@ -202,6 +206,7 @@ describe("agents builder commands", () => {
         questions: [],
         ready: true,
         requirements: {
+          confidence: "high",
           intentTags: ["scheduled", "summary"],
           triggers: [{ detail: "Run on a recurring schedule." }],
           inputs: [{ detail: "Read messages from a configured Gmail or inbox hook." }],
@@ -215,6 +220,9 @@ describe("agents builder commands", () => {
           setupGaps: [],
           policyGaps: [],
           unsupportedGaps: [],
+          ambiguities: [],
+          unsupportedRequests: [],
+          missingDataFields: [],
         },
         planning: {
           selections: [
@@ -332,6 +340,7 @@ describe("agents builder commands", () => {
         questions: [],
         ready: false,
         requirements: {
+          confidence: "medium",
           intentTags: ["support"],
           triggers: [],
           inputs: [],
@@ -345,6 +354,9 @@ describe("agents builder commands", () => {
           setupGaps: [],
           policyGaps: [],
           unsupportedGaps: [],
+          ambiguities: [],
+          unsupportedRequests: [],
+          missingDataFields: [],
         },
         planning: {
           selections: [],

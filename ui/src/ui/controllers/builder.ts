@@ -24,6 +24,7 @@ export type BuilderDraftSummary = {
   }>;
   ready: boolean;
   requirements: {
+    confidence: "low" | "medium" | "high";
     intentTags: string[];
     triggers: Array<{ detail: string }>;
     inputs: Array<{ detail: string }>;
@@ -37,6 +38,9 @@ export type BuilderDraftSummary = {
     setupGaps: Array<{ code: string; message: string }>;
     policyGaps: Array<{ code: string; message: string }>;
     unsupportedGaps: Array<{ code: string; message: string }>;
+    ambiguities: string[];
+    unsupportedRequests: string[];
+    missingDataFields: string[];
   };
   planning: {
     selections: Array<{

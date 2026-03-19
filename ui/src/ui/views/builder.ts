@@ -345,17 +345,14 @@ export function renderBuilder(props: BuilderProps) {
                     ${formatPlannerStatus(draft.plannerStatus)}
                   </span>
                 </div>
-                ${
-                  draft.requirements.intentTags.length > 0
-                    ? html`
-                        <div class="builder-intent-tags">
-                          ${draft.requirements.intentTags.map(
-                            (tag) => html`<span class="tpl-pill tpl-pill--muted">${tag}</span>`,
-                          )}
-                        </div>
-                      `
-                    : nothing
-                }
+                <div class="builder-intent-tags">
+                  ${draft.requirements.intentTags.map(
+                    (tag) => html`<span class="tpl-pill tpl-pill--muted">${tag}</span>`,
+                  )}
+                  <span class="tpl-pill tpl-pill--muted">
+                    extraction ${draft.requirements.confidence}
+                  </span>
+                </div>
                 <div class="builder-grid">
                   ${builderRequirementList("Triggers", draft.requirements.triggers)}
                   ${builderRequirementList("Inputs", draft.requirements.inputs)}
@@ -364,6 +361,14 @@ export function renderBuilder(props: BuilderProps) {
                   ${builderRequirementList("Outputs", draft.requirements.outputs)}
                   ${builderRequirementList("Policies", draft.requirements.policies)}
                   ${builderRequirementList("Constraints", draft.requirements.constraints)}
+                  ${builderList("Ambiguities", draft.requirements.ambiguities)}
+                  ${builderList(
+                    "Missing Data",
+                    draft.requirements.missingDataFields.map((value) =>
+                      formatMissingDataField(value),
+                    ),
+                  )}
+                  ${builderList("Unsupported Requests", draft.requirements.unsupportedRequests)}
                 </div>
                 ${renderGaps(state, draft)}
               </section>
@@ -549,6 +554,14 @@ function builderList(title: string, values: string[]) {
       ${values.map((value) => html`<div class="tpl-note">${value}</div>`)}
     </div>
   `;
+}
+
+function formatMissingDataField(value: string): string {
+  return value
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function builderQuestionList(questions: Array<{ prompt: string; required: boolean }>) {

@@ -35,6 +35,7 @@ export type RequirementQuestion = {
 
 export type RequirementSet = {
   brief: string;
+  confidence: RequirementConfidence;
   intentTags: string[];
   requestedContractIds: string[];
   supportedContractIds: string[];
@@ -52,6 +53,9 @@ export type RequirementSet = {
   setupGaps: RequirementGap[];
   policyGaps: RequirementGap[];
   unsupportedGaps: RequirementGap[];
+  ambiguities: string[];
+  unsupportedRequests: string[];
+  missingDataFields: string[];
   plannerStatus: PlannerStatus;
 };
 
@@ -190,6 +194,12 @@ function hasScheduleLanguage(brief: string): boolean {
   );
 }
 
+function hasExactScheduleTime(brief: string): boolean {
+  return /\b(?:at|@)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b|\b\d{1,2}:\d{2}\s*(?:am|pm)\b/i.test(
+    brief,
+  );
+}
+
 function hasSummaryLanguage(brief: string): boolean {
   return /\b(summariz(?:e|es|ed|ing)?|summary|digest|briefing|brief|recap)\b/i.test(brief);
 }
@@ -212,6 +222,12 @@ function hasFeedLanguage(brief: string): boolean {
   return /\b(newsletter|feed|rss|substack|beehiiv)\b/i.test(brief);
 }
 
+function hasEmailSourceLanguage(brief: string): boolean {
+  return (
+    /\b(emails|gmail|mailbox|inbox)\b/i.test(brief) || /\bfrom\s+(?:my\s+)?email\b/i.test(brief)
+  );
+}
+
 function hasWebLanguage(brief: string): boolean {
   return /https?:\/\/|\b(web|website|url|page|pages|article|articles|link|links)\b/i.test(brief);
 }
@@ -230,6 +246,30 @@ function hasSocialActionLanguage(brief: string): boolean {
 
 function hasOnBehalfLanguage(brief: string): boolean {
   return /\bon my behalf\b/i.test(brief);
+}
+
+function hasOutboundEmailDeliveryLanguage(brief: string): boolean {
+  return /\b(?:email|mail)\s+(?:me|it|them|the result|the summary)\b|\b(?:by|via)\s+email\b|\bto\s+my\s+email\b/i.test(
+    brief,
+  );
+}
+
+function resolveRequirementConfidence(params: {
+  descriptorCount: number;
+  ambiguityCount: number;
+  missingDataCount: number;
+  unsupportedCount: number;
+}): RequirementConfidence {
+  if (params.descriptorCount === 0 || params.unsupportedCount > 0) {
+    return "low";
+  }
+  if (params.ambiguityCount === 0 && params.missingDataCount === 0 && params.descriptorCount >= 2) {
+    return "high";
+  }
+  if (params.ambiguityCount >= 3 || params.missingDataCount >= 3) {
+    return "low";
+  }
+  return "medium";
 }
 
 function isChannelConfigured(cfg: OpenClawConfig | undefined, channel: string): boolean {
@@ -383,7 +423,7 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
       hasAssistantLanguage(text) ? "assistant" : null,
       hasAudioLanguage(text) ? "audio" : null,
       hasFeedLanguage(text) ? "feed" : null,
-      /\b(email|emails|gmail|mailbox|inbox)\b/i.test(brief) ? "email" : null,
+      hasEmailSourceLanguage(brief) || hasOutboundEmailDeliveryLanguage(brief) ? "email" : null,
       hasResearchLanguage(text) ? "research" : null,
       hasScheduleLanguage(text) ? "scheduled" : null,
       hasSupportLanguage(text) ? "support" : null,
@@ -405,12 +445,14 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
   const setupGaps: RequirementGap[] = [];
   const policyGaps: RequirementGap[] = [];
   const unsupportedGaps: RequirementGap[] = [];
+  const ambiguities: string[] = [];
+  const missingDataFields: string[] = [];
 
   const supportRequest = hasSupportLanguage(text);
   const scheduleRequest = hasScheduleLanguage(text);
   const summaryRequest = hasSummaryLanguage(text);
   const researchRequest = hasResearchLanguage(text);
-  const emailRequest = /\b(email|emails|gmail|mailbox|inbox)\b/i.test(brief);
+  const emailRequest = hasEmailSourceLanguage(brief);
   const feedRequest = hasFeedLanguage(text);
   const webRequest = hasWebLanguage(text) || researchRequest;
   const audioRequest = hasAudioLanguage(text);
@@ -445,6 +487,10 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         }),
       );
     }
+    if (!hasExactScheduleTime(brief)) {
+      ambiguities.push("A recurring schedule was requested without an exact time.");
+      missingDataFields.push("schedule-time");
+    }
   }
 
   if (
@@ -465,6 +511,8 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
       }),
     );
     if (supportRequest && mentionedChatChannelIds.length === 0) {
+      ambiguities.push("The workflow looks support-oriented, but no inbound channel was named.");
+      missingDataFields.push("binding-channel");
       missingInputs.push(
         createGap({
           kind: "input",
@@ -473,6 +521,11 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
           contractIds: ["ingress.chat"],
           connectorIds: [],
         }),
+      );
+    }
+    if (mentionedChatChannelIds.length > 1) {
+      ambiguities.push(
+        "Multiple chat connectors were mentioned, so ingress and delivery roles may need confirmation.",
       );
     }
   }
@@ -538,6 +591,10 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         confidence: "high",
       }),
     );
+    if (!emailRequest && !feedRequest && !webRequest && !audioRequest) {
+      ambiguities.push("A summary was requested without a clearly stated source of material.");
+      missingDataFields.push("source-material");
+    }
   }
 
   if (audioRequest) {
@@ -587,6 +644,10 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         }),
       );
     }
+    if (!/\b(x|twitter)\b/i.test(brief) && !/https?:\/\//i.test(brief)) {
+      ambiguities.push("Browser-backed actions were requested without a specific site or URL.");
+      missingDataFields.push("browser-target");
+    }
   }
 
   if (deliveryRequest) {
@@ -621,6 +682,15 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         }),
       );
     }
+    if (
+      summaryRequest &&
+      outputChannels.length === 0 &&
+      !/\b(send|deliver|post|share).*\b(me|for me)\b/i.test(brief) &&
+      !supportRequest
+    ) {
+      ambiguities.push("The workflow implies delivery, but no destination channel was named.");
+      missingDataFields.push("delivery-destination");
+    }
   }
 
   if (riskyActionRequest) {
@@ -645,6 +715,10 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         }),
       );
     }
+    if (!/\b(auto(?:matically)?|approve|ask every time|draft)\b/i.test(brief)) {
+      ambiguities.push("Risky on-behalf actions were requested without an explicit approval mode.");
+      missingDataFields.push("approval-mode");
+    }
   }
 
   if (hasOnBehalfLanguage(text)) {
@@ -660,7 +734,7 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     );
   }
 
-  if (/\b(email|mail)\b/i.test(brief) && /\b(send|deliver|post)\b/i.test(brief) && !emailRequest) {
+  if (hasOutboundEmailDeliveryLanguage(brief)) {
     unsupportedGaps.push(
       createGap({
         kind: "unsupported",
@@ -712,9 +786,21 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
   const normalizedMissingInputs = dedupeGaps(missingInputs);
   const normalizedSetupGaps = dedupeGaps(setupGaps);
   const normalizedPolicyGaps = dedupeGaps(policyGaps);
+  const normalizedAmbiguities = dedupeStrings(ambiguities);
+  const normalizedMissingDataFields = dedupeStrings(missingDataFields).toSorted();
+  const unsupportedRequests = dedupeStrings(
+    normalizedUnsupportedGaps.map((gap) => gap.message),
+  ).toSorted();
+  const confidence = resolveRequirementConfidence({
+    descriptorCount: descriptors.length,
+    ambiguityCount: normalizedAmbiguities.length,
+    missingDataCount: normalizedMissingDataFields.length,
+    unsupportedCount: unsupportedRequests.length,
+  });
 
   return {
     brief,
+    confidence,
     intentTags,
     requestedContractIds: contractCoverage.requestedContractIds,
     supportedContractIds: contractCoverage.supportedContractIds,
@@ -732,6 +818,9 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     setupGaps: normalizedSetupGaps,
     policyGaps: normalizedPolicyGaps,
     unsupportedGaps: normalizedUnsupportedGaps,
+    ambiguities: normalizedAmbiguities,
+    unsupportedRequests,
+    missingDataFields: normalizedMissingDataFields,
     plannerStatus: resolvePlannerStatusFromGaps({
       missingInputs: normalizedMissingInputs,
       setupGaps: normalizedSetupGaps,

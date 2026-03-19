@@ -39,6 +39,7 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
     `Builder selection: ${draft.displayName} (${draft.templateId})`,
     `Confidence: ${draft.confidence}`,
     `Planner status: ${draft.plannerStatus}`,
+    `Requirement confidence: ${draft.requirements.confidence}`,
   ];
   if (draft.requirements.intentTags.length > 0) {
     lines.push(`Intent tags: ${draft.requirements.intentTags.join(", ")}`);
@@ -69,9 +70,12 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
     ["Outputs", draft.requirements.outputs.map((entry) => entry.detail)],
     ["Policies", draft.requirements.policies.map((entry) => entry.detail)],
     ["Constraints", draft.requirements.constraints.map((entry) => entry.detail)],
+    ["Ambiguities", draft.requirements.ambiguities],
+    ["Missing data", draft.requirements.missingDataFields],
     ["Needs input", draft.requirements.missingInputs.map((entry) => entry.message)],
     ["Needs setup", draft.requirements.setupGaps.map((entry) => entry.message)],
     ["Needs policy", draft.requirements.policyGaps.map((entry) => entry.message)],
+    ["Unsupported requests", draft.requirements.unsupportedRequests],
     ["Unsupported", draft.requirements.unsupportedGaps.map((entry) => entry.message)],
   ];
   for (const [label, values] of requirementSections) {

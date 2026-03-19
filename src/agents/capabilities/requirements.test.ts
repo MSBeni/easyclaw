@@ -60,6 +60,9 @@ describe("capability requirements", () => {
     expect(requirements.setupGaps.map((gap) => gap.code)).toEqual(
       expect.arrayContaining(["gmail-hook", "channel:slack"]),
     );
+    expect(requirements.confidence).toBe("high");
+    expect(requirements.ambiguities).toEqual([]);
+    expect(requirements.missingDataFields).toEqual([]);
     expect(requirements.plannerStatus).toBe("needs_setup");
   });
 
@@ -73,6 +76,11 @@ describe("capability requirements", () => {
     expect(requirements.actions.map((entry) => entry.id)).toContain("browser-action");
     expect(requirements.policies.map((entry) => entry.id)).toContain("approval-policy");
     expect(requirements.policyGaps.map((gap) => gap.code)).toContain("approval-route");
+    expect(requirements.ambiguities).toContain(
+      "Risky on-behalf actions were requested without an explicit approval mode.",
+    );
+    expect(requirements.missingDataFields).toContain("approval-mode");
+    expect(requirements.confidence).toBe("medium");
     expect(requirements.plannerStatus).toBe("unsafe_without_policy");
   });
 
@@ -98,6 +106,9 @@ describe("capability requirements", () => {
 
     expect(requirements.setupGaps).toEqual([]);
     expect(requirements.policyGaps).toEqual([]);
+    expect(requirements.confidence).toBe("high");
+    expect(requirements.ambiguities).toEqual([]);
+    expect(requirements.missingDataFields).toEqual([]);
     expect(requirements.plannerStatus).toBe("ready");
   });
 
@@ -137,5 +148,38 @@ describe("capability requirements", () => {
       requirements.outputs.find((entry) => entry.id === "message-output")?.connectorIds,
     ).toContain("channel:zalo");
     expect(requirements.setupGaps.map((gap) => gap.code)).toContain("channel:zalo");
+  });
+
+  it("surfaces ambiguous and missing requirement data explicitly", () => {
+    const requirements = buildRequirementSet({
+      brief: "Create a weekly digest agent.",
+      cfg: {},
+    });
+
+    expect(requirements.ambiguities).toEqual(
+      expect.arrayContaining([
+        "A recurring schedule was requested without an exact time.",
+        "A summary was requested without a clearly stated source of material.",
+        "The workflow implies delivery, but no destination channel was named.",
+      ]),
+    );
+    expect(requirements.missingDataFields).toEqual(
+      expect.arrayContaining(["delivery-destination", "schedule-time", "source-material"]),
+    );
+    expect(requirements.confidence).toBe("low");
+  });
+
+  it("reports unsupported outbound email delivery requests explicitly", () => {
+    const requirements = buildRequirementSet({
+      brief: "Create a daily summary and email me the result.",
+      cfg: {},
+    });
+
+    expect(requirements.unsupportedGaps.map((gap) => gap.code)).toContain("email-delivery");
+    expect(requirements.unsupportedRequests).toContain(
+      "Email delivery is not modeled as a supported outbound connector yet.",
+    );
+    expect(requirements.confidence).toBe("low");
+    expect(requirements.plannerStatus).toBe("unsupported");
   });
 });
