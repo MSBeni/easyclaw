@@ -1233,6 +1233,8 @@ export function renderApp(state: AppViewState) {
                     state.builderPlan = null;
                     state.builderApplyResult = null;
                     state.builderApplyError = null;
+                    state.builderVerifyResult = null;
+                    state.builderVerifyError = null;
                     state.builderConfirmApply = false;
                   },
                   onSetTemplate: (templateId) => {
@@ -1240,10 +1242,15 @@ export function renderApp(state: AppViewState) {
                     state.builderPlan = null;
                     state.builderApplyResult = null;
                     state.builderApplyError = null;
+                    state.builderVerifyResult = null;
+                    state.builderVerifyError = null;
                     state.builderConfirmApply = false;
                   },
                   onPlan: () => {
                     m.triggerBuilderPlan(state);
+                  },
+                  onVerify: () => {
+                    m.triggerBuilderVerify(state);
                   },
                   onConfirmApply: () => {
                     state.builderConfirmApply = true;

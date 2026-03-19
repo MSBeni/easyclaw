@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import type { AgentsState } from "./agents.ts";
-import { applyBuilderPlan, loadBuilderPlan, type BuilderState } from "./builder.ts";
+import {
+  applyBuilderPlan,
+  loadBuilderPlan,
+  type BuilderState,
+  verifyBuilderPlan,
+} from "./builder.ts";
 import type { CronState } from "./cron.ts";
 
 type ControllerState = BuilderState & AgentsState & CronState;
@@ -25,6 +30,9 @@ function createState(): {
     builderApplying: false,
     builderApplyError: null,
     builderConfirmApply: false,
+    builderVerifyResult: null,
+    builderVerifying: false,
+    builderVerifyError: null,
     agentsLoading: false,
     agentsError: null,
     agentsList: null,
@@ -170,5 +178,45 @@ describe("builder controller", () => {
       }),
     );
     expect(state.builderConfirmApply).toBe(false);
+  });
+
+  it("runs live verification and updates the current builder plan", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Create a daily digest";
+    request.mockResolvedValue({
+      draft: {
+        templateId: "daily-briefing",
+        planning: {
+          integrations: [],
+          verifications: [],
+        },
+      },
+      plan: { status: "ready" },
+      verification: {
+        fingerprint: "abc123",
+        checkedAt: "2026-03-18T12:00:00.000Z",
+        passedCount: 1,
+        failedCount: 0,
+        blockedCount: 0,
+        unresolvedCount: 0,
+        results: [],
+      },
+    });
+
+    await verifyBuilderPlan(state);
+
+    expect(request).toHaveBeenCalledWith("agents.builder.verify", {
+      brief: "Create a daily digest",
+    });
+    expect(state.builderVerifyResult).toEqual(
+      expect.objectContaining({
+        verification: expect.objectContaining({ passedCount: 1 }),
+      }),
+    );
+    expect(state.builderPlan).toEqual(
+      expect.objectContaining({
+        draft: expect.objectContaining({ templateId: "daily-briefing" }),
+      }),
+    );
   });
 });

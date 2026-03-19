@@ -1,11 +1,26 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { compileAgentBlueprintPlan, type AgentBlueprintPlan } from "./compiler.js";
 import {
-  dailyBriefingBlueprint,
-  researchAgentBlueprint,
-  supportResponderBlueprint,
-} from "./examples.js";
+  applyRequirementGaps,
+  applyRequirementQuestions,
+  buildRequirementPlannerResult,
+  hydrateRequirementPlannerIntegrationState,
+  hydrateRequirementPlannerVerificationState,
+  type PlannedSetupTask,
+  type PlannedVerificationResult,
+  buildRequirementSet,
+  type PlannedIntegrationInstance,
+  runRequirementPlannerLiveVerification,
+  type RequirementPlannerResult,
+  type RequirementPlannerVerificationRun,
+  type RequirementPlannerSelection,
+  type RequirementGap,
+  type RequirementSet,
+  writePlannerIntegrations,
+} from "../capabilities/index.js";
+import type { PlannerStatus } from "../capabilities/schema.js";
+import { compileAgentBlueprintPlan, type AgentBlueprintPlan } from "./compiler.js";
+import { researchAgentBlueprint } from "./examples.js";
 import type { LoadedAgentBlueprint } from "./files.js";
 import { applyAgentBlueprint, type AgentBlueprintApplyResult } from "./materialize.js";
 import { getAgentBlueprintTemplate } from "./registry.js";
@@ -25,17 +40,6 @@ const DAY_SPECS: Array<{ pattern: RegExp; day: string; label: string }> = [
   { pattern: /\bsunday\b/i, day: "0", label: "Sundays" },
 ];
 
-const CHANNEL_PATTERNS: Array<{ channel: string; pattern: RegExp }> = [
-  { channel: "discord", pattern: /\bdiscord\b/i },
-  { channel: "email", pattern: /\b(email|emails|gmail|mailbox|inbox)\b/i },
-  { channel: "matrix", pattern: /\bmatrix\b/i },
-  { channel: "slack", pattern: /\bslack\b/i },
-  { channel: "signal", pattern: /\bsignal\b/i },
-  { channel: "telegram", pattern: /\btelegram\b/i },
-  { channel: "msteams", pattern: /\b(microsoft teams|ms teams|msteams)\b/i },
-  { channel: "whatsapp", pattern: /\b(whatsapp|whats app)\b/i },
-];
-
 export type AgentBlueprintBuilderConfidence = "low" | "medium" | "high";
 
 export type AgentBlueprintBuilderQuestion = {
@@ -49,10 +53,18 @@ export type AgentBlueprintBuilderDraftSummary = {
   templateId: string;
   displayName: string;
   confidence: AgentBlueprintBuilderConfidence;
+  plannerStatus: PlannerStatus;
   reasons: string[];
   assumptions: string[];
   questions: AgentBlueprintBuilderQuestion[];
   ready: boolean;
+  requirements: RequirementSet;
+  planning: {
+    selections: RequirementPlannerSelection[];
+    integrations: PlannedIntegrationInstance[];
+    setupTasks: PlannedSetupTask[];
+    verifications: PlannedVerificationResult[];
+  };
   extracted: {
     agentId: string;
     name: string;
@@ -75,6 +87,12 @@ export type AgentBlueprintBuilderPlan = {
 export type AgentBlueprintBuilderApplyResult = {
   draft: AgentBlueprintBuilderDraftSummary;
   result: AgentBlueprintApplyResult;
+};
+
+export type AgentBlueprintBuilderVerifyResult = {
+  draft: AgentBlueprintBuilderDraftSummary;
+  plan: AgentBlueprintPlan;
+  verification: RequirementPlannerVerificationRun;
 };
 
 type TemplateSelection = {
@@ -102,19 +120,16 @@ type InferredBindings = {
   questions: AgentBlueprintBuilderQuestion[];
 };
 
+type InferredWorkflowShape = {
+  bundle: AgentBlueprintBundle;
+  assumptions: string[];
+  questions: AgentBlueprintBuilderQuestion[];
+};
+
 function containsAny(text: string, patterns: Array<string | RegExp>): boolean {
   return patterns.some((pattern) =>
     typeof pattern === "string" ? text.includes(pattern) : pattern.test(text),
   );
-}
-
-function countSignals(text: string, patterns: Array<string | RegExp>): number {
-  return patterns.reduce((count, pattern) => {
-    if (typeof pattern === "string") {
-      return text.includes(pattern) ? count + 1 : count;
-    }
-    return pattern.test(text) ? count + 1 : count;
-  }, 0);
 }
 
 function titleCase(value: string): string {
@@ -148,7 +163,10 @@ function slugifyName(value: string): string {
   );
 }
 
-function selectTemplate(brief: string, forcedTemplateId?: string): TemplateSelection {
+function selectTemplate(
+  requirements: RequirementSet,
+  forcedTemplateId?: string,
+): TemplateSelection {
   if (forcedTemplateId) {
     const forced = getAgentBlueprintTemplate(forcedTemplateId);
     if (!forced) {
@@ -161,7 +179,6 @@ function selectTemplate(brief: string, forcedTemplateId?: string): TemplateSelec
     };
   }
 
-  const text = brief.toLowerCase();
   const scores = new Map<string, number>([
     ["personal-assistant", 1],
     ["daily-briefing", 0],
@@ -177,71 +194,38 @@ function selectTemplate(brief: string, forcedTemplateId?: string): TemplateSelec
     reasons.get(templateId)?.push(reason);
   };
 
-  const supportSignals = countSignals(text, [
-    "support",
-    "customer",
-    "helpdesk",
-    "faq",
-    "ticket",
-    "billing",
-    /\bresponder\b/,
-    /\breply\b/,
-  ]);
-  if (supportSignals > 0) {
-    addScore(
-      "support-responder",
-      supportSignals * 2,
-      "Matched support or customer-service language.",
-    );
+  const hasSupport = requirements.intentTags.includes("support");
+  if (hasSupport) {
+    addScore("support-responder", 5, "Detected an inbound support or customer-response workflow.");
   }
 
-  const briefingSignals = countSignals(text, [
-    "digest",
-    "briefing",
-    "daily",
-    "morning",
-    "summarize",
-    "summary",
-    "emails",
-    "email",
-    "updates",
-  ]);
-  if (briefingSignals > 0) {
-    addScore(
-      "daily-briefing",
-      briefingSignals * 2,
-      "Matched scheduled summary or digest language.",
+  const hasBriefing =
+    requirements.requestedContractIds.includes("schedule.trigger") ||
+    requirements.transforms.some((entry) => entry.contractIds.includes("transform.summarize")) ||
+    requirements.inputs.some((entry) =>
+      entry.contractIds.some(
+        (contractId) => contractId === "ingest.email" || contractId === "ingest.feed",
+      ),
     );
+  if (hasBriefing) {
+    addScore("daily-briefing", 4, "Detected a scheduled digest, briefing, or summary workflow.");
   }
-  if (containsAny(text, ["weekday", "weekdays", "every morning", "each morning"])) {
+  if (requirements.requestedContractIds.includes("schedule.trigger")) {
     addScore("daily-briefing", 2, "Matched recurring schedule language.");
   }
 
-  const researchSignals = countSignals(text, [
-    "research",
-    "investigate",
-    "analysis",
-    "analyze",
-    "analyse",
-    "compare",
-    "competitor",
-    "sources",
-    "brief",
-  ]);
-  if (researchSignals > 0) {
-    addScore("research-agent", researchSignals * 2, "Matched research or synthesis language.");
+  const hasResearch =
+    requirements.intentTags.includes("research") ||
+    requirements.inputs.some((entry) => entry.contractIds.includes("fetch.web"));
+  if (hasResearch) {
+    addScore("research-agent", 4, "Detected research, analysis, or web-synthesis requirements.");
   }
 
-  const personalSignals = countSignals(text, [
-    "assistant",
-    "remind",
-    "planner",
-    "organize",
-    "personal",
-    "tasks",
-  ]);
-  if (personalSignals > 0) {
-    addScore("personal-assistant", personalSignals * 2, "Matched personal assistant language.");
+  const hasPersonal =
+    requirements.intentTags.includes("assistant") ||
+    requirements.actions.some((entry) => entry.contractIds.includes("browser.operate"));
+  if (hasPersonal) {
+    addScore("personal-assistant", 3, "Detected a general assistant or operator workflow.");
   }
 
   const ranked = Array.from(scores.entries()).toSorted((a, b) => b[1] - a[1]);
@@ -258,12 +242,6 @@ function selectTemplate(brief: string, forcedTemplateId?: string): TemplateSelec
       ? (reasons.get(winnerId) ?? [])
       : ["No strong template signals were found; defaulted to Personal Assistant."],
   };
-}
-
-function detectChannels(brief: string): string[] {
-  return CHANNEL_PATTERNS.filter((entry) => entry.pattern.test(brief))
-    .map((entry) => entry.channel)
-    .filter((channel, index, all) => all.indexOf(channel) === index);
 }
 
 function parseTime(brief: string): { hour: number; minute: number; assumed: boolean } | null {
@@ -346,11 +324,11 @@ function inferSchedule(brief: string): InferredSchedule | null {
   };
 }
 
-function inferDelivery(brief: string, templateId: string): InferredDelivery {
-  if (templateId !== "daily-briefing") {
-    return { assumptions: [], questions: [] };
-  }
-
+function inferDelivery(
+  brief: string,
+  outputChannels: string[],
+  templateId: string,
+): InferredDelivery {
   const assumptions: string[] = [];
   const questions: AgentBlueprintBuilderQuestion[] = [];
   const deliveryMatch = brief.match(
@@ -374,8 +352,36 @@ function inferDelivery(brief: string, templateId: string): InferredDelivery {
     return { channel, assumptions, questions };
   }
 
+  if (outputChannels.length > 0) {
+    const channel = outputChannels[0] ?? "telegram";
+    const explicitTarget = brief.match(/(?:^|\s)([#@][\w./-]+)/)?.[1];
+    if (explicitTarget) {
+      return {
+        channel,
+        to: explicitTarget,
+        assumptions,
+        questions,
+      };
+    }
+    if (DIRECT_DELIVERY_CHANNELS.has(channel)) {
+      assumptions.push(`Defaulted ${channel} delivery to ${DEFAULT_DIRECT_TARGET}.`);
+      return {
+        channel,
+        to: DEFAULT_DIRECT_TARGET,
+        assumptions,
+        questions,
+      };
+    }
+    questions.push({
+      id: "delivery-target",
+      prompt: `Which ${channel} destination should receive the result?`,
+      required: true,
+    });
+    return { channel, assumptions, questions };
+  }
+
   if (/\b(send|deliver|post).*\b(me|for me)\b/i.test(brief)) {
-    assumptions.push("Defaulted digest delivery to Telegram @me.");
+    assumptions.push("Defaulted delivery to Telegram @me.");
     return {
       channel: "telegram",
       to: DEFAULT_DIRECT_TARGET,
@@ -384,17 +390,22 @@ function inferDelivery(brief: string, templateId: string): InferredDelivery {
     };
   }
 
-  assumptions.push("Defaulted digest delivery to Telegram @me.");
+  if (templateId === "daily-briefing") {
+    assumptions.push("Defaulted delivery to Telegram @me.");
+  }
   return {
-    channel: "telegram",
-    to: DEFAULT_DIRECT_TARGET,
+    ...(templateId === "daily-briefing"
+      ? {
+          channel: "telegram",
+          to: DEFAULT_DIRECT_TARGET,
+        }
+      : {}),
     assumptions,
     questions,
   };
 }
 
-function inferBindings(brief: string, templateId: string): InferredBindings {
-  const channels = detectChannels(brief).filter((channel) => channel !== "email");
+function inferBindings(channels: string[], templateId: string): InferredBindings {
   const assumptions: string[] = [];
   const questions: AgentBlueprintBuilderQuestion[] = [];
 
@@ -420,23 +431,6 @@ function inferBindings(brief: string, templateId: string): InferredBindings {
   return { channels: [], assumptions, questions };
 }
 
-function inferSourceChannels(brief: string): string[] {
-  const sources: string[] = [];
-  if (/\b(email|emails|gmail|mailbox|inbox)\b/i.test(brief)) {
-    sources.push("gmail");
-  }
-  if (/\bslack\b/i.test(brief) && !sources.includes("slack")) {
-    sources.push("slack");
-  }
-  if (/\btelegram\b/i.test(brief) && !sources.includes("telegram")) {
-    sources.push("telegram");
-  }
-  if (/\bdiscord\b/i.test(brief) && !sources.includes("discord")) {
-    sources.push("discord");
-  }
-  return sources;
-}
-
 function withAgentIdentity(
   bundle: AgentBlueprintBundle,
   requestedName: string | null,
@@ -457,19 +451,96 @@ function withAgentIdentity(
   };
 }
 
-function customizeDailyBriefing(
-  bundle: AgentBlueprintBundle,
-  brief: string,
-): {
+function ensureBuilderOwnedAgent(bundle: AgentBlueprintBundle): {
   bundle: AgentBlueprintBundle;
   assumptions: string[];
-  questions: AgentBlueprintBuilderQuestion[];
 } {
+  if (bundle.agent.agentId !== "main") {
+    return { bundle, assumptions: [] };
+  }
+  const next = structuredClone(bundle);
+  next.agent.agentId = "personal-assistant";
+  next.agent.name = next.manifest.displayName;
+  return {
+    bundle: next,
+    assumptions: ["Created a dedicated agent instead of overwriting the default main agent."],
+  };
+}
+
+function connectorChannelId(connectorId: string): string | null {
+  if (!connectorId.startsWith("channel:")) {
+    return null;
+  }
+  return connectorId.replace(/^channel:/, "");
+}
+
+function dedupeChannels(values: string[]): string[] {
+  return values.filter((value, index, all) => all.indexOf(value) === index);
+}
+
+function inferPlannerIngressChannels(planning: RequirementPlannerResult): string[] {
+  return dedupeChannels(
+    planning.selections
+      .filter((selection) => selection.contractIds.includes("ingress.chat"))
+      .map((selection) => connectorChannelId(selection.connectorId))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function inferPlannerDeliveryChannels(planning: RequirementPlannerResult): string[] {
+  return dedupeChannels(
+    planning.selections
+      .filter(
+        (selection) =>
+          selection.requirementId === "message-output" ||
+          selection.contractIds.includes("message.send"),
+      )
+      .map((selection) => connectorChannelId(selection.connectorId))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function inferPlannerSourceChannels(
+  requirements: RequirementSet,
+  planning: RequirementPlannerResult,
+): string[] {
+  const sources: string[] = [];
+  if (requirements.inputs.some((entry) => entry.contractIds.includes("ingest.email"))) {
+    sources.push("gmail");
+  }
+  if (requirements.inputs.some((entry) => entry.contractIds.includes("ingest.feed"))) {
+    sources.push(
+      ...planning.selections
+        .filter((selection) => selection.requirementId === "feed-source")
+        .map((selection) => connectorChannelId(selection.connectorId))
+        .filter((value): value is string => Boolean(value)),
+    );
+  }
+  return dedupeChannels(sources);
+}
+
+function applyPlannerWorkflowShape(
+  bundle: AgentBlueprintBundle,
+  params: {
+    brief: string;
+    templateId: string;
+    requirements: RequirementSet;
+    planning: RequirementPlannerResult;
+  },
+): InferredWorkflowShape {
   const next = structuredClone(bundle);
   const assumptions: string[] = [];
   const questions: AgentBlueprintBuilderQuestion[] = [];
-  const schedule = inferSchedule(brief);
-  if (schedule) {
+  const ingressChannels = inferPlannerIngressChannels(params.planning);
+  const outputChannels = inferPlannerDeliveryChannels(params.planning);
+  const sourceChannels = inferPlannerSourceChannels(params.requirements, params.planning);
+  const bindings = inferBindings(ingressChannels, params.templateId);
+  assumptions.push(...bindings.assumptions);
+  questions.push(...bindings.questions);
+
+  const scheduleRequested = params.requirements.requestedContractIds.includes("schedule.trigger");
+  const schedule = scheduleRequested ? inferSchedule(params.brief) : null;
+  if (scheduleRequested && schedule) {
     next.automation = {
       schedules: [
         {
@@ -484,98 +555,75 @@ function customizeDailyBriefing(
         `Used ${schedule.description} because the brief did not specify an exact schedule.`,
       );
     }
-  } else {
+  } else if (scheduleRequested) {
     assumptions.push("Kept the starter weekday morning schedule.");
   }
 
-  const delivery = inferDelivery(brief, "daily-briefing");
+  const delivery = inferDelivery(params.brief, outputChannels, params.templateId);
   questions.push(...delivery.questions);
   assumptions.push(...delivery.assumptions);
-  next.delivery = {
-    mode: "digest",
-    format: "brief",
-    ...(delivery.channel || delivery.to
-      ? {
-          target: {
-            ...(delivery.channel ? { channel: delivery.channel } : {}),
-            ...(delivery.to ? { to: delivery.to } : {}),
-          },
-        }
-      : {}),
-  };
+  if (delivery.channel || delivery.to) {
+    next.delivery = {
+      ...next.delivery,
+      target: {
+        ...next.delivery?.target,
+        ...(delivery.channel ? { channel: delivery.channel } : {}),
+        ...(delivery.to ? { to: delivery.to } : {}),
+      },
+    };
+  }
 
-  const sourceChannels = inferSourceChannels(brief);
+  const interactionMode =
+    scheduleRequested && bindings.channels.length > 0
+      ? "hybrid"
+      : scheduleRequested
+        ? "scheduled"
+        : params.requirements.intentTags.includes("support") && bindings.channels.length > 0
+          ? "bound-channel"
+          : bindings.channels.length > 0
+            ? "direct"
+            : next.ingress?.interactionMode;
+
+  if (interactionMode || bindings.channels.length > 0 || sourceChannels.length > 0) {
+    next.ingress = {
+      interactionMode: interactionMode ?? "direct",
+      ...(bindings.channels.length > 0
+        ? {
+            bindings: bindings.channels.map((channel) => ({ channel })),
+          }
+        : {}),
+      ...(sourceChannels.length > 0
+        ? {
+            sources: sourceChannels.map((channel) => ({
+              kind: "channel" as const,
+              value: channel,
+            })),
+          }
+        : {}),
+    };
+  }
+
   if (sourceChannels.length > 0) {
-    next.ingress = {
-      interactionMode: "scheduled",
-      sources: sourceChannels.map((channel) => ({ kind: "channel" as const, value: channel })),
-    };
-    assumptions.push(`Used sources inferred from the brief: ${sourceChannels.join(", ")}.`);
+    assumptions.push(`Used sources inferred from the planner: ${sourceChannels.join(", ")}.`);
   }
 
-  return { bundle: next, assumptions, questions };
-}
-
-function customizeSupportResponder(
-  bundle: AgentBlueprintBundle,
-  brief: string,
-): {
-  bundle: AgentBlueprintBundle;
-  assumptions: string[];
-  questions: AgentBlueprintBuilderQuestion[];
-} {
-  const next = structuredClone(bundle);
-  const bindings = inferBindings(brief, "support-responder");
-  if (bindings.channels.length > 0) {
-    next.ingress = {
-      interactionMode: "bound-channel",
-      bindings: bindings.channels.map((channel) => ({ channel })),
+  if (params.requirements.policyGaps.some((gap) => gap.contractIds.includes("approval.request"))) {
+    next.safety = {
+      ...next.safety,
+      externalActionPolicy: "ask-first",
     };
   }
-  return { bundle: next, assumptions: bindings.assumptions, questions: bindings.questions };
-}
 
-function customizePersonalAgent(
-  bundle: AgentBlueprintBundle,
-  brief: string,
-): {
-  bundle: AgentBlueprintBundle;
-  assumptions: string[];
-  questions: AgentBlueprintBuilderQuestion[];
-} {
-  const next = structuredClone(bundle);
-  const bindings = inferBindings(brief, "personal-assistant");
-  if (bindings.channels.length > 0) {
-    next.ingress = {
-      interactionMode: "direct",
-      bindings: bindings.channels.map((channel) => ({ channel })),
-    };
-  }
-  return { bundle: next, assumptions: bindings.assumptions, questions: bindings.questions };
-}
-
-function customizeResearchAgent(
-  bundle: AgentBlueprintBundle,
-  brief: string,
-): {
-  bundle: AgentBlueprintBundle;
-  assumptions: string[];
-  questions: AgentBlueprintBuilderQuestion[];
-} {
-  const next = structuredClone(bundle);
-  const bindings = inferBindings(brief, "research-agent");
-  if (bindings.channels.length > 0) {
-    next.ingress = {
-      interactionMode: "direct",
-      bindings: bindings.channels.map((channel) => ({ channel })),
-    };
-  }
-  if (/\bno subagents\b/i.test(brief)) {
+  if (
+    params.templateId === researchAgentBlueprint.manifest.templateId &&
+    /\bno subagents\b/i.test(params.brief)
+  ) {
     next.runtime.subagents = {
       enabled: false,
     };
   }
-  return { bundle: next, assumptions: bindings.assumptions, questions: bindings.questions };
+
+  return { bundle: next, assumptions, questions };
 }
 
 function summarizeDeliveryTarget(bundle: AgentBlueprintBundle): string | null {
@@ -605,6 +653,63 @@ function summarizeSourceChannels(bundle: AgentBlueprintBundle): string[] {
   return (bundle.ingress?.sources ?? []).map((source) => source.value);
 }
 
+function createBundleSetupGaps(
+  bundle: AgentBlueprintBundle,
+  cfg?: OpenClawConfig,
+): RequirementGap[] {
+  const gaps: RequirementGap[] = [];
+  const channels = new Set<string>();
+
+  for (const binding of bundle.ingress?.bindings ?? []) {
+    if (binding.channel && binding.channel !== "default") {
+      channels.add(binding.channel);
+    }
+  }
+  const deliveryChannel = bundle.delivery?.target?.channel;
+  if (deliveryChannel && deliveryChannel !== "default") {
+    channels.add(deliveryChannel);
+  }
+
+  for (const channel of channels) {
+    const entry = (cfg?.channels as Record<string, unknown> | undefined)?.[channel];
+    if (!entry || typeof entry !== "object") {
+      gaps.push({
+        kind: "setup",
+        code: `channel:${channel}`,
+        message: `Configure the ${channel} channel before applying this agent.`,
+        contractIds: ["ingress.chat", "message.send"],
+        connectorIds: [`channel:${channel}`],
+      });
+    }
+  }
+
+  const sources = summarizeSourceChannels(bundle);
+  if (sources.includes("gmail")) {
+    const gmail = cfg?.hooks?.gmail;
+    if (!(cfg?.hooks?.token && gmail?.account && gmail?.topic && gmail?.pushToken)) {
+      gaps.push({
+        kind: "setup",
+        code: "gmail-hook",
+        message: "Configure the Gmail hook before using Gmail as a builder source.",
+        contractIds: ["ingest.email", "ingress.webhook"],
+        connectorIds: ["platform:gmail-hook", "platform:webhook-runtime"],
+      });
+    }
+  }
+
+  if (bundle.automation?.schedules?.length && cfg?.cron?.enabled === false) {
+    gaps.push({
+      kind: "setup",
+      code: "cron-disabled",
+      message: "Enable cron before applying a scheduled builder workflow.",
+      contractIds: ["schedule.trigger"],
+      connectorIds: ["tools:automation"],
+    });
+  }
+
+  return gaps;
+}
+
 function createBuilderLoadedBlueprint(draft: AgentBlueprintBuilderDraft): LoadedAgentBlueprint {
   return {
     kind: "builder",
@@ -614,16 +719,61 @@ function createBuilderLoadedBlueprint(draft: AgentBlueprintBuilderDraft): Loaded
   };
 }
 
-export function buildAgentBlueprintDraft(params: {
+function withDraftPlanning(
+  draft: AgentBlueprintBuilderDraft,
+  planning: RequirementPlannerResult,
+): AgentBlueprintBuilderDraft {
+  return {
+    ...draft,
+    plannerStatus: planning.status,
+    ready: planning.status === "ready",
+    planning: {
+      selections: planning.selections,
+      integrations: planning.integrations,
+      setupTasks: planning.setupTasks,
+      verifications: planning.verifications,
+    },
+  };
+}
+
+async function hydratePersistedPlanningState(
+  planning: RequirementPlannerResult,
+  env?: NodeJS.ProcessEnv,
+): Promise<RequirementPlannerResult> {
+  const withIntegrationState = await hydrateRequirementPlannerIntegrationState(planning, env);
+  const withVerificationState = await hydrateRequirementPlannerVerificationState(
+    withIntegrationState,
+    env,
+  );
+  await writePlannerIntegrations({
+    integrations: withVerificationState.integrations,
+    env,
+  });
+  return withVerificationState;
+}
+
+function buildAgentBlueprintDraftInternal(params: {
   brief: string;
   templateId?: string;
-}): AgentBlueprintBuilderDraft {
+  cfg?: OpenClawConfig;
+}): {
+  draft: AgentBlueprintBuilderDraft;
+  planning: RequirementPlannerResult;
+} {
   const brief = params.brief.trim();
   if (!brief) {
     throw new Error("A builder brief is required.");
   }
 
-  const selection = selectTemplate(brief, params.templateId);
+  const extractedRequirements = buildRequirementSet({
+    brief,
+    cfg: params.cfg,
+  });
+  const selection = selectTemplate(extractedRequirements, params.templateId);
+  const initialPlanning = buildRequirementPlannerResult({
+    requirements: extractedRequirements,
+    cfg: params.cfg,
+  });
   const baseTemplate =
     getAgentBlueprintTemplate(selection.templateId) ??
     (() => {
@@ -634,45 +784,55 @@ export function buildAgentBlueprintDraft(params: {
   const assumptions: string[] = [];
   const questions: AgentBlueprintBuilderQuestion[] = [];
 
+  const owned = ensureBuilderOwnedAgent(bundle);
+  bundle = owned.bundle;
+  assumptions.push(...owned.assumptions);
+
   const renamed = withAgentIdentity(bundle, extractRequestedName(brief));
   bundle = renamed.bundle;
   assumptions.push(...renamed.assumptions);
 
-  if (selection.templateId === dailyBriefingBlueprint.manifest.templateId) {
-    const customized = customizeDailyBriefing(bundle, brief);
-    bundle = customized.bundle;
-    assumptions.push(...customized.assumptions);
-    questions.push(...customized.questions);
-  } else if (selection.templateId === supportResponderBlueprint.manifest.templateId) {
-    const customized = customizeSupportResponder(bundle, brief);
-    bundle = customized.bundle;
-    assumptions.push(...customized.assumptions);
-    questions.push(...customized.questions);
-  } else if (selection.templateId === researchAgentBlueprint.manifest.templateId) {
-    const customized = customizeResearchAgent(bundle, brief);
-    bundle = customized.bundle;
-    assumptions.push(...customized.assumptions);
-    questions.push(...customized.questions);
-  } else {
-    const customized = customizePersonalAgent(bundle, brief);
-    bundle = customized.bundle;
-    assumptions.push(...customized.assumptions);
-    questions.push(...customized.questions);
-  }
+  const customized = applyPlannerWorkflowShape(bundle, {
+    brief,
+    templateId: selection.templateId,
+    requirements: extractedRequirements,
+    planning: initialPlanning,
+  });
+  bundle = customized.bundle;
+  assumptions.push(...customized.assumptions);
+  questions.push(...customized.questions);
 
   const uniqueQuestions = questions.filter(
     (question, index, all) => all.findIndex((entry) => entry.id === question.id) === index,
   );
+  const requirements = applyRequirementGaps(
+    applyRequirementQuestions(extractedRequirements, uniqueQuestions),
+    {
+      setupGaps: createBundleSetupGaps(bundle, params.cfg),
+    },
+  );
+  const planning = buildRequirementPlannerResult({
+    requirements,
+    cfg: params.cfg,
+  });
 
-  return {
+  const draft: AgentBlueprintBuilderDraft = {
     brief,
     templateId: selection.templateId,
     displayName: bundle.manifest.displayName,
     confidence: selection.confidence,
+    plannerStatus: planning.status,
     reasons: selection.reasons,
     assumptions,
     questions: uniqueQuestions,
-    ready: uniqueQuestions.every((question) => !question.required),
+    ready: planning.status === "ready",
+    requirements,
+    planning: {
+      selections: planning.selections,
+      integrations: planning.integrations,
+      setupTasks: planning.setupTasks,
+      verifications: planning.verifications,
+    },
     extracted: {
       agentId: normalizeAgentId(bundle.agent.agentId),
       name: bundle.agent.name,
@@ -683,6 +843,16 @@ export function buildAgentBlueprintDraft(params: {
     },
     bundle,
   };
+
+  return { draft, planning };
+}
+
+export function buildAgentBlueprintDraft(params: {
+  brief: string;
+  templateId?: string;
+  cfg?: OpenClawConfig;
+}): AgentBlueprintBuilderDraft {
+  return buildAgentBlueprintDraftInternal(params).draft;
 }
 
 function stripBundleFromDraft(
@@ -697,7 +867,12 @@ export async function compileAgentBlueprintBuilderPlan(params: {
   templateId?: string;
   cfg?: OpenClawConfig;
 }): Promise<AgentBlueprintBuilderPlan> {
-  const draft = buildAgentBlueprintDraft(params);
+  const built = buildAgentBlueprintDraftInternal({
+    ...params,
+    cfg: params.cfg,
+  });
+  const planning = await hydratePersistedPlanningState(built.planning);
+  const draft = withDraftPlanning(built.draft, planning);
   const plan = await compileAgentBlueprintPlan({
     bundle: draft.bundle,
     cfg: params.cfg,
@@ -716,17 +891,28 @@ export async function compileAgentBlueprintBuilderPlan(params: {
 export async function applyAgentBlueprintBuilderPlan(params: {
   brief: string;
   templateId?: string;
+  cfg?: OpenClawConfig;
 }): Promise<AgentBlueprintBuilderApplyResult> {
-  const draft = buildAgentBlueprintDraft(params);
-  if (!draft.ready) {
-    const prompts = draft.questions
-      .filter((question) => question.required)
-      .map((question) => question.prompt)
+  const cfg = params.cfg ?? loadConfig();
+  const built = buildAgentBlueprintDraftInternal({
+    ...params,
+    cfg,
+  });
+  const draft = withDraftPlanning(built.draft, await hydratePersistedPlanningState(built.planning));
+  if (draft.plannerStatus !== "ready") {
+    const blockers = [
+      ...draft.requirements.missingInputs,
+      ...draft.requirements.setupGaps,
+      ...draft.requirements.policyGaps,
+      ...draft.requirements.unsupportedGaps,
+    ]
+      .map((gap) => gap.message)
       .join(" ");
-    throw new Error(`Builder needs more detail before apply. ${prompts}`);
+    throw new Error(`Builder planner is ${draft.plannerStatus}. ${blockers}`.trim());
   }
   const plan = await compileAgentBlueprintPlan({
     bundle: draft.bundle,
+    cfg,
     source: {
       kind: "builder",
       value: draft.templateId,
@@ -746,8 +932,39 @@ export async function applyAgentBlueprintBuilderPlan(params: {
   };
 }
 
+export async function verifyAgentBlueprintBuilderPlan(params: {
+  brief: string;
+  templateId?: string;
+  cfg?: OpenClawConfig;
+}): Promise<AgentBlueprintBuilderVerifyResult> {
+  const cfg = params.cfg ?? loadConfig();
+  const built = buildAgentBlueprintDraftInternal({
+    ...params,
+    cfg,
+  });
+  const verificationResult = await runRequirementPlannerLiveVerification({
+    planning: built.planning,
+    cfg,
+  });
+  const draft = withDraftPlanning(built.draft, verificationResult.planning);
+  const plan = await compileAgentBlueprintPlan({
+    bundle: draft.bundle,
+    cfg,
+    source: {
+      kind: "builder",
+      value: draft.templateId,
+      format: null,
+    },
+  });
+  return {
+    draft: stripBundleFromDraft(draft),
+    plan,
+    verification: verificationResult.run,
+  };
+}
+
 export const __testing = {
-  customizeDailyBriefing,
+  applyPlannerWorkflowShape,
   inferBindings,
   inferDelivery,
   inferSchedule,

@@ -7,6 +7,7 @@ const agentsBindingsCommandMock = vi.fn();
 const agentsBindCommandMock = vi.fn();
 const agentsBuilderApplyCommandMock = vi.fn();
 const agentsBuilderPlanCommandMock = vi.fn();
+const agentsBuilderVerifyCommandMock = vi.fn();
 const agentsDeleteCommandMock = vi.fn();
 const agentsListCommandMock = vi.fn();
 const agentsSetIdentityCommandMock = vi.fn();
@@ -32,6 +33,7 @@ vi.mock("../../commands/agents.js", () => ({
   agentsAddCommand: agentsAddCommandMock,
   agentsBuilderApplyCommand: agentsBuilderApplyCommandMock,
   agentsBuilderPlanCommand: agentsBuilderPlanCommandMock,
+  agentsBuilderVerifyCommand: agentsBuilderVerifyCommandMock,
   agentsBindingsCommand: agentsBindingsCommandMock,
   agentsBindCommand: agentsBindCommandMock,
   agentsDeleteCommand: agentsDeleteCommandMock,
@@ -75,6 +77,7 @@ describe("registerAgentCommands", () => {
     agentsAddCommandMock.mockResolvedValue(undefined);
     agentsBuilderApplyCommandMock.mockResolvedValue(undefined);
     agentsBuilderPlanCommandMock.mockResolvedValue(undefined);
+    agentsBuilderVerifyCommandMock.mockResolvedValue(undefined);
     agentsBindingsCommandMock.mockResolvedValue(undefined);
     agentsBindCommandMock.mockResolvedValue(undefined);
     agentsDeleteCommandMock.mockResolvedValue(undefined);
@@ -195,6 +198,18 @@ describe("registerAgentCommands", () => {
         brief: "Create me a daily digest",
         template: undefined,
         yes: true,
+        json: true,
+      },
+      runtime,
+    );
+  });
+
+  it("forwards agents builder verify options", async () => {
+    await runCli(["agents", "builder", "verify", "Create a support bot on Telegram", "--json"]);
+    expect(agentsBuilderVerifyCommandMock).toHaveBeenCalledWith(
+      {
+        brief: "Create a support bot on Telegram",
+        template: undefined,
         json: true,
       },
       runtime,

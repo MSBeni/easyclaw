@@ -14,10 +14,30 @@ describe("agent blueprint builder", () => {
     });
 
     expect(result.draft.templateId).toBe("daily-briefing");
-    expect(result.draft.ready).toBe(true);
+    expect(result.draft.plannerStatus).toBe("needs_setup");
+    expect(result.draft.ready).toBe(false);
     expect(result.draft.extracted.sourceChannels).toContain("gmail");
     expect(result.draft.extracted.deliveryTarget).toContain("slack");
     expect(result.draft.extracted.schedule).toContain("0 9");
+    expect(result.draft.requirements.setupGaps.map((gap) => gap.code)).toEqual(
+      expect.arrayContaining(["gmail-hook", "channel:slack"]),
+    );
+    expect(result.draft.planning.selections.map((selection) => selection.connectorId)).toEqual(
+      expect.arrayContaining([
+        "channel:slack",
+        "platform:core-model",
+        "platform:gmail-hook",
+        "tools:automation",
+      ]),
+    );
+    expect(result.draft.planning.setupTasks.map((task) => task.connectorId)).toEqual(
+      expect.arrayContaining(["channel:slack", "platform:gmail-hook"]),
+    );
+    expect(
+      result.draft.planning.verifications.find(
+        (probe) => probe.connectorId === "platform:gmail-hook" && probe.probeKind === "status",
+      )?.status,
+    ).toBe("blocked");
     expect(result.plan.source?.kind).toBe("builder");
     expect(result.plan.status).toBe("ready");
   });
@@ -28,6 +48,7 @@ describe("agent blueprint builder", () => {
     });
 
     expect(draft.templateId).toBe("support-responder");
+    expect(draft.plannerStatus).toBe("needs_input");
     expect(draft.ready).toBe(false);
     expect(draft.questions).toEqual(
       expect.arrayContaining([
@@ -45,11 +66,18 @@ describe("agent blueprint builder", () => {
     });
 
     expect(draft.templateId).toBe("support-responder");
-    expect(draft.ready).toBe(true);
+    expect(draft.plannerStatus).toBe("needs_setup");
+    expect(draft.ready).toBe(false);
     expect(draft.extracted.ingressChannels).toEqual(["telegram"]);
+    expect(
+      draft.planning.integrations.find(
+        (integration) => integration.connectorId === "channel:telegram",
+      )?.status,
+    ).toBe("discovered");
+    expect(draft.planning.setupTasks.map((task) => task.connectorId)).toContain("channel:telegram");
   });
 
-  it("defaults to the personal assistant template when the brief is broad", () => {
+  it("defaults to the personal assistant template and creates a dedicated agent", () => {
     const draft = buildAgentBlueprintDraft({
       brief: "I want an assistant that keeps me organized.",
     });
@@ -57,6 +85,33 @@ describe("agent blueprint builder", () => {
     expect(draft.templateId).toBe("personal-assistant");
     expect(draft.ready).toBe(true);
     expect(draft.questions).toEqual([]);
+    expect(draft.extracted.agentId).toBe("personal-assistant");
+    expect(draft.extracted.name).toBe("Personal Assistant");
+  });
+
+  it("reports risky browser actions as unsafe without approval routing", () => {
+    const draft = buildAgentBlueprintDraft({
+      brief:
+        "Create a bot on Telegram that opens links on X, follows the account, and comments on my behalf.",
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+          },
+        },
+      },
+    });
+
+    expect(draft.templateId).toBe("personal-assistant");
+    expect(draft.plannerStatus).toBe("unsafe_without_policy");
+    expect(draft.requirements.policyGaps.map((gap) => gap.code)).toContain("approval-route");
+    expect(draft.planning.selections.map((selection) => selection.connectorId)).toEqual(
+      expect.arrayContaining(["platform:exec-approvals", "tools:ui"]),
+    );
+    expect(
+      draft.planning.setupTasks.find((task) => task.connectorId === "platform:exec-approvals")
+        ?.kind,
+    ).toBe("policy");
   });
 });
 
