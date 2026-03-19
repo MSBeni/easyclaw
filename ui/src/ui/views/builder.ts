@@ -387,6 +387,8 @@ export function renderBuilder(props: BuilderProps) {
                   ${builderSelectionList(draft.planning.selections)}
                   ${builderTopologyCard(draft.planning.topology)}
                   ${builderAlternativeList(draft.planning.alternatives)}
+                  ${builderVariantList(draft.planning.variants)}
+                  ${builderRuntimeGraphList(draft.planning.graph)}
                   ${builderIntegrationList(state, draft.planning.integrations)}
                   ${builderSetupTaskList(state, draft.planning.setupTasks)}
                   ${builderVerificationList(state, draft.planning.verifications)}
@@ -424,6 +426,7 @@ export function renderBuilder(props: BuilderProps) {
                         <div class="card-sub">No blueprint compilation issues were detected.</div>
                       `
                 }
+                ${builderGraphPlanList(planResult?.graphPlans ?? [])}
               </section>
 
               ${renderBuilderApplySection(props, state, draft, blueprintStatus)}
@@ -452,6 +455,24 @@ function renderBuilderApplySection(
           ${kv("Name", result.agent.name)}
           ${kv("Workspace", result.agent.workspaceDir)}
         </div>
+        ${
+          state.builderApplyResult.graphResults.length > 1
+            ? html`
+                <div class="label" style="margin-top:12px;">Runtime Graph Nodes</div>
+                ${state.builderApplyResult.graphResults.map(
+                  (node) => html`
+                    <div class="tpl-plan-file">
+                      <span>
+                        ${node.entry ? "Entry" : "Worker"} ${node.roleId}
+                        <span class="mono">(${node.result.agent.agentId})</span>
+                      </span>
+                      <span class="tpl-pill tpl-pill--ok">${node.result.status}</span>
+                    </div>
+                  `,
+                )}
+              `
+            : nothing
+        }
         ${
           result.workspace.files.length > 0
             ? html`
@@ -750,6 +771,155 @@ function builderAlternativeList(
           </div>
         `;
       })}
+    </div>
+  `;
+}
+
+function builderVariantList(
+  values: Array<{
+    label: string;
+    selected: boolean;
+    status: string;
+    reason: string;
+    connectorIds: string[];
+    topology: { mode: string };
+  }>,
+) {
+  if (values.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Plan Variants</div>
+      ${values.map(
+        (value) => html`
+          <div class="tpl-note">
+            <strong>${value.selected ? "Selected" : value.label}:</strong>
+            ${value.selected ? value.label : ""}
+            <span class="tpl-pill ${plannerStatusPillClass(value.status)}">${formatPlannerStatus(value.status)}</span>
+            <span class="tpl-pill tpl-pill--muted">${value.topology.mode}</span>
+          </div>
+          <div class="tpl-note">${value.reason}</div>
+          ${
+            value.connectorIds.length > 0
+              ? html`
+                  <div class="tpl-note">
+                    <span class="mono">${value.connectorIds.join(", ")}</span>
+                  </div>
+                `
+              : nothing
+          }
+        `,
+      )}
+    </div>
+  `;
+}
+
+function builderRuntimeGraphList(graph: {
+  mode: string;
+  nodes: Array<{
+    id: string;
+    label: string;
+    entry: boolean;
+    templateId: string;
+    agentId: string;
+    interactionMode: string;
+    connectorIds: string[];
+    responsibilities: string[];
+    deliveryTarget: string | null;
+    schedule: string | null;
+  }>;
+  edges: Array<{ fromNodeId: string; toNodeId: string; kind: string; label: string }>;
+}) {
+  if (graph.nodes.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Runtime Graph</div>
+      <div class="tpl-note">
+        <span class="tpl-pill tpl-pill--muted">${graph.mode}</span>
+        ${graph.nodes.length} node${graph.nodes.length === 1 ? "" : "s"}
+      </div>
+      ${graph.nodes.map(
+        (node) => html`
+          <div class="tpl-note">
+            <strong>${node.entry ? "Entry" : node.label}:</strong>
+            ${node.agentId}
+            <span class="tpl-pill tpl-pill--muted">${node.templateId}</span>
+            <span class="tpl-pill tpl-pill--muted">${node.interactionMode}</span>
+          </div>
+          ${
+            node.responsibilities.length > 0
+              ? html`<div class="tpl-note">${node.responsibilities.join(" ")}</div>`
+              : nothing
+          }
+          ${
+            node.connectorIds.length > 0
+              ? html`<div class="tpl-note"><span class="mono">${node.connectorIds.join(", ")}</span></div>`
+              : nothing
+          }
+          ${
+            node.deliveryTarget || node.schedule
+              ? html`
+                  <div class="tpl-note">
+                    ${node.deliveryTarget ? `delivery ${node.deliveryTarget}` : ""}
+                    ${node.deliveryTarget && node.schedule ? " · " : ""}
+                    ${node.schedule ? `schedule ${node.schedule}` : ""}
+                  </div>
+                `
+              : nothing
+          }
+        `,
+      )}
+      ${
+        graph.edges.length > 0
+          ? html`
+              <div class="label" style="margin:8px 0 4px;">Edges</div>
+              ${graph.edges.map(
+                (edge) => html`
+                  <div class="tpl-note">
+                    <span class="mono">${edge.fromNodeId}</span> ${edge.kind}
+                    <span class="mono">${edge.toNodeId}</span> ${edge.label}
+                  </div>
+                `,
+              )}
+            `
+          : nothing
+      }
+    </div>
+  `;
+}
+
+function builderGraphPlanList(
+  graphPlans: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    templateId: string;
+    plan: Record<string, unknown>;
+  }>,
+) {
+  if (graphPlans.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="builder-grid" style="margin-top:12px;">
+      <div>
+        <div class="label" style="margin-bottom:8px;">Node Plans</div>
+        ${graphPlans.map((node) => {
+          const status = readString(asObject(node.plan), "status", "ready");
+          return html`
+            <div class="tpl-plan-file">
+              <span>
+                ${node.entry ? "Entry" : "Worker"} ${node.roleId}
+                <span class="mono">(${node.templateId})</span>
+              </span>
+              <span class="tpl-pill ${status === "ready" ? "tpl-pill--ok" : "tpl-pill--error"}">${status}</span>
+            </div>
+          `;
+        })}
+      </div>
     </div>
   `;
 }

@@ -89,6 +89,41 @@ export type BuilderDraftSummary = {
         reason: string;
       }>;
     }>;
+    variants: Array<{
+      id: string;
+      label: string;
+      reason: string;
+      selected: boolean;
+      status:
+        | "ready"
+        | "needs_input"
+        | "needs_setup"
+        | "partial"
+        | "unsupported"
+        | "unsafe_without_policy"
+        | "blocked";
+      score: number;
+      selections: Array<{
+        requirementId: string;
+        requirementLabel: string;
+        contractIds: string[];
+        connectorId: string;
+        connectorLabel: string;
+        source: "explicit" | "preferred" | "fallback";
+      }>;
+      connectorIds: string[];
+      topology: {
+        mode: "single-agent" | "multi-agent";
+        reason: string;
+        roles: Array<{
+          id: string;
+          label: string;
+          contractIds: string[];
+          connectorIds: string[];
+          responsibilities: string[];
+        }>;
+      };
+    }>;
     integrations: Array<{
       connectorId: string;
       instanceId: string;
@@ -143,6 +178,31 @@ export type BuilderDraftSummary = {
         responsibilities: string[];
       }>;
     };
+    graph: {
+      mode: "single-agent" | "multi-agent";
+      entryNodeId: string;
+      nodes: Array<{
+        id: string;
+        roleId: string;
+        label: string;
+        templateId: string;
+        entry: boolean;
+        agentId: string;
+        name: string;
+        interactionMode: string;
+        connectorIds: string[];
+        responsibilities: string[];
+        deliveryTarget: string | null;
+        schedule: string | null;
+      }>;
+      edges: Array<{
+        id: string;
+        fromNodeId: string;
+        toNodeId: string;
+        kind: "delegates" | "reports";
+        label: string;
+      }>;
+    };
   };
   extracted: {
     agentId: string;
@@ -157,6 +217,13 @@ export type BuilderDraftSummary = {
 export type BuilderPlanResult = {
   draft: BuilderDraftSummary;
   plan: Record<string, unknown>;
+  graphPlans: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    templateId: string;
+    plan: Record<string, unknown>;
+  }>;
 };
 
 export type BuilderApplyResult = {
@@ -176,11 +243,18 @@ export type BuilderApplyResult = {
     automation: { jobs: Array<{ name: string; id: string; status: string }> };
     warnings: Array<{ code: string; message: string }>;
   };
+  graphResults: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    result: BuilderApplyResult["result"];
+  }>;
 };
 
 export type BuilderVerifyResult = {
   draft: BuilderDraftSummary;
   plan: Record<string, unknown>;
+  graphPlans: BuilderPlanResult["graphPlans"];
   verification: {
     fingerprint: string;
     checkedAt: string;
@@ -277,6 +351,7 @@ export async function verifyBuilderPlan(state: BuilderState) {
       state.builderPlan = {
         draft: result.draft,
         plan: result.plan,
+        graphPlans: result.graphPlans,
       };
     }
   } catch (error) {

@@ -104,6 +104,7 @@ describe("agents builder commands", () => {
             },
           ],
           alternatives: [],
+          variants: [],
           integrations: [
             {
               connectorId: "channel:telegram",
@@ -146,6 +147,12 @@ describe("agents builder commands", () => {
             mode: "single-agent",
             reason: "Current constraints fit a single coordinating agent.",
             roles: [],
+          },
+          graph: {
+            mode: "single-agent",
+            entryNodeId: "primary",
+            nodes: [],
+            edges: [],
           },
         },
         extracted: {
@@ -195,6 +202,7 @@ describe("agents builder commands", () => {
           successCriteria: [],
         },
       },
+      graphPlans: [],
     });
 
     await agentsBuilderPlanCommand({ brief: "Build me a support bot" }, runtime);
@@ -264,6 +272,7 @@ describe("agents builder commands", () => {
             },
           ],
           alternatives: [],
+          variants: [],
           integrations: [
             {
               connectorId: "tools:automation",
@@ -296,6 +305,12 @@ describe("agents builder commands", () => {
             mode: "single-agent",
             reason: "Current constraints fit a single coordinating agent.",
             roles: [],
+          },
+          graph: {
+            mode: "single-agent",
+            entryNodeId: "primary",
+            nodes: [],
+            edges: [],
           },
         },
         extracted: {
@@ -344,6 +359,7 @@ describe("agents builder commands", () => {
         automation: { jobs: [] },
         warnings: [],
       },
+      graphResults: [],
     });
 
     await agentsBuilderApplyCommand(
@@ -406,6 +422,7 @@ describe("agents builder commands", () => {
         planning: {
           selections: [],
           alternatives: [],
+          variants: [],
           integrations: [
             {
               connectorId: "channel:telegram",
@@ -439,6 +456,12 @@ describe("agents builder commands", () => {
             mode: "single-agent",
             reason: "Current constraints fit a single coordinating agent.",
             roles: [],
+          },
+          graph: {
+            mode: "single-agent",
+            entryNodeId: "primary",
+            nodes: [],
+            edges: [],
           },
         },
         extracted: {
@@ -497,6 +520,7 @@ describe("agents builder commands", () => {
           successCriteria: [],
         },
       },
+      graphPlans: [],
     });
 
     await agentsBuilderVerifyCommand({ brief: "Create a support bot on Telegram" }, runtime);

@@ -150,6 +150,8 @@ describe("capability planner", () => {
         }),
       ]),
     );
+    expect(plan.variants.length).toBeGreaterThan(0);
+    expect(plan.variants[0]?.selected).toBe(true);
   });
 
   it("switches to a multi-agent topology when delegation is explicit", () => {
@@ -180,6 +182,25 @@ describe("capability planner", () => {
     expect(plan.topology.mode).toBe("multi-agent");
     expect(plan.topology.roles.map((role) => role.id)).toEqual(
       expect.arrayContaining(["coordinator", "worker"]),
+    );
+  });
+
+  it("builds multiple viable end-to-end plan variants", () => {
+    const requirements = buildRequirementSet({
+      brief: "Create a daily summary bot that sends the result to Telegram or Slack.",
+      cfg: {},
+    });
+    const plan = buildRequirementPlannerResult({
+      requirements,
+      cfg: {},
+    });
+
+    expect(plan.variants.length).toBeGreaterThan(1);
+    expect(plan.variants.map((variant) => variant.connectorIds.join(","))).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("channel:telegram"),
+        expect.stringContaining("channel:slack"),
+      ]),
     );
   });
 });

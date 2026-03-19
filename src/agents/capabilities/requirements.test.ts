@@ -220,4 +220,26 @@ describe("capability requirements", () => {
       expect.arrayContaining(["file-source", "memory-source"]),
     );
   });
+
+  it("flags mixed trigger and mixed workflow combinations explicitly", () => {
+    const requirements = buildRequirementSet({
+      brief:
+        "Create a webhook that also responds to support questions on Telegram and sends a scheduled daily digest.",
+      cfg: {},
+    });
+
+    expect(requirements.unsupportedGaps.map((gap) => gap.code)).toEqual(
+      expect.arrayContaining([
+        "workflow:multi-external-trigger",
+        "workflow:mixed-support-briefing",
+      ]),
+    );
+    expect(requirements.unsupportedRequests).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("multiple external trigger surfaces"),
+        expect.stringContaining("Support-response flows and scheduled briefing"),
+      ]),
+    );
+    expect(requirements.plannerStatus).toBe("partial");
+  });
 });

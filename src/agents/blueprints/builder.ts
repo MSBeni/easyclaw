@@ -62,10 +62,12 @@ export type AgentBlueprintBuilderDraftSummary = {
   planning: {
     selections: RequirementPlannerSelection[];
     alternatives: RequirementPlannerResult["alternatives"];
+    variants: RequirementPlannerResult["variants"];
     integrations: PlannedIntegrationInstance[];
     setupTasks: PlannedSetupTask[];
     verifications: PlannedVerificationResult[];
     topology: RequirementPlannerResult["topology"];
+    graph: AgentBlueprintBuilderRuntimeGraphSummary;
   };
   extracted: {
     agentId: string;
@@ -79,21 +81,77 @@ export type AgentBlueprintBuilderDraftSummary = {
 
 export type AgentBlueprintBuilderDraft = AgentBlueprintBuilderDraftSummary & {
   bundle: AgentBlueprintBundle;
+  runtimeGraph: AgentBlueprintBuilderRuntimeGraphDraft;
+};
+
+export type AgentBlueprintBuilderRuntimeGraphNodeSummary = {
+  id: string;
+  roleId: string;
+  label: string;
+  templateId: string;
+  entry: boolean;
+  agentId: string;
+  name: string;
+  interactionMode: string;
+  connectorIds: string[];
+  responsibilities: string[];
+  deliveryTarget: string | null;
+  schedule: string | null;
+};
+
+export type AgentBlueprintBuilderRuntimeGraphEdge = {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  kind: "delegates" | "reports";
+  label: string;
+};
+
+export type AgentBlueprintBuilderRuntimeGraphSummary = {
+  mode: RequirementPlannerResult["topology"]["mode"];
+  entryNodeId: string;
+  nodes: AgentBlueprintBuilderRuntimeGraphNodeSummary[];
+  edges: AgentBlueprintBuilderRuntimeGraphEdge[];
+};
+
+type AgentBlueprintBuilderRuntimeGraphNodeDraft = AgentBlueprintBuilderRuntimeGraphNodeSummary & {
+  bundle: AgentBlueprintBundle;
+};
+
+type AgentBlueprintBuilderRuntimeGraphDraft = {
+  mode: RequirementPlannerResult["topology"]["mode"];
+  entryNodeId: string;
+  nodes: AgentBlueprintBuilderRuntimeGraphNodeDraft[];
+  edges: AgentBlueprintBuilderRuntimeGraphEdge[];
 };
 
 export type AgentBlueprintBuilderPlan = {
   draft: AgentBlueprintBuilderDraftSummary;
   plan: AgentBlueprintPlan;
+  graphPlans: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    templateId: string;
+    plan: AgentBlueprintPlan;
+  }>;
 };
 
 export type AgentBlueprintBuilderApplyResult = {
   draft: AgentBlueprintBuilderDraftSummary;
   result: AgentBlueprintApplyResult;
+  graphResults: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    result: AgentBlueprintApplyResult;
+  }>;
 };
 
 export type AgentBlueprintBuilderVerifyResult = {
   draft: AgentBlueprintBuilderDraftSummary;
   plan: AgentBlueprintPlan;
+  graphPlans: AgentBlueprintBuilderPlan["graphPlans"];
   verification: RequirementPlannerVerificationRun;
 };
 
@@ -732,6 +790,224 @@ function createBuilderLoadedBlueprint(draft: AgentBlueprintBuilderDraft): Loaded
   };
 }
 
+function summarizeRuntimeGraphNode(
+  node: AgentBlueprintBuilderRuntimeGraphNodeDraft,
+): AgentBlueprintBuilderRuntimeGraphNodeSummary {
+  const { bundle: _bundle, ...summary } = node;
+  return summary;
+}
+
+function summarizeRuntimeGraph(
+  graph: AgentBlueprintBuilderRuntimeGraphDraft,
+): AgentBlueprintBuilderRuntimeGraphSummary {
+  return {
+    mode: graph.mode,
+    entryNodeId: graph.entryNodeId,
+    nodes: graph.nodes.map((node) => summarizeRuntimeGraphNode(node)),
+    edges: graph.edges,
+  };
+}
+
+function roleTemplateId(params: {
+  roleId: string;
+  planning: RequirementPlannerResult;
+  requirements: RequirementSet;
+  fallbackTemplateId: string;
+}): string {
+  if (params.roleId === "coordinator") {
+    return params.fallbackTemplateId;
+  }
+  if (
+    params.requirements.workflow.primaryGoal === "research" ||
+    params.requirements.inputs.length > 0 ||
+    params.requirements.transforms.length > 0
+  ) {
+    return "research-agent";
+  }
+  return "personal-assistant";
+}
+
+function createRuntimeGraphRoleBundle(params: {
+  role: RequirementPlannerResult["topology"]["roles"][number];
+  baseBundle: AgentBlueprintBundle;
+  fallbackTemplateId: string;
+  planning: RequirementPlannerResult;
+  requirements: RequirementSet;
+  entry: boolean;
+}): AgentBlueprintBundle {
+  if (params.entry) {
+    const next = structuredClone(params.baseBundle);
+    if (params.planning.topology.mode === "multi-agent") {
+      next.runtime.subagents = {
+        enabled: true,
+        mode: "inherit",
+      };
+      next.workspace.notes = [
+        ...(next.workspace.notes ?? []),
+        `Coordinate delegated work for the ${params.baseBundle.agent.name} workflow.`,
+      ];
+    }
+    return next;
+  }
+
+  const templateId = roleTemplateId({
+    roleId: params.role.id,
+    planning: params.planning,
+    requirements: params.requirements,
+    fallbackTemplateId: params.fallbackTemplateId,
+  });
+  const template = getAgentBlueprintTemplate(templateId);
+  const next = structuredClone(template ?? params.baseBundle);
+  next.agent.agentId = normalizeAgentId(`${params.baseBundle.agent.agentId}-${params.role.id}`);
+  next.agent.name = `${params.baseBundle.agent.name} ${params.role.label}`;
+  next.runtime.subagents = {
+    enabled: false,
+  };
+  next.ingress = {
+    interactionMode: "direct",
+    ...(params.baseBundle.ingress?.sources?.length
+      ? {
+          sources: structuredClone(params.baseBundle.ingress.sources),
+        }
+      : {}),
+  };
+  next.automation = undefined;
+  next.delivery = undefined;
+  next.workspace.notes = [
+    ...(next.workspace.notes ?? []),
+    `Act as the ${params.role.label.toLowerCase()} for ${params.baseBundle.agent.name}.`,
+    ...params.role.responsibilities,
+  ];
+  next.validation = {
+    ...next.validation,
+    successCriteria: [
+      ...(next.validation?.successCriteria ?? []),
+      `Supports the coordinator agent ${params.baseBundle.agent.name}.`,
+    ],
+  };
+  return next;
+}
+
+function buildRuntimeGraphDraft(params: {
+  bundle: AgentBlueprintBundle;
+  templateId: string;
+  planning: RequirementPlannerResult;
+  requirements: RequirementSet;
+}): AgentBlueprintBuilderRuntimeGraphDraft {
+  if (params.planning.topology.mode === "single-agent") {
+    const node: AgentBlueprintBuilderRuntimeGraphNodeDraft = {
+      id: "primary",
+      roleId: "primary",
+      label: "Primary Agent",
+      templateId: params.templateId,
+      entry: true,
+      agentId: normalizeAgentId(params.bundle.agent.agentId),
+      name: params.bundle.agent.name,
+      interactionMode: params.bundle.ingress?.interactionMode ?? "direct",
+      connectorIds: dedupeChannels(
+        params.planning.selections.map((selection) => selection.connectorId),
+      ),
+      responsibilities: ["Handle the workflow end to end in one agent runtime."],
+      deliveryTarget: summarizeDeliveryTarget(params.bundle),
+      schedule: summarizeSchedule(params.bundle),
+      bundle: structuredClone(params.bundle),
+    };
+    return {
+      mode: "single-agent",
+      entryNodeId: node.id,
+      nodes: [node],
+      edges: [],
+    };
+  }
+
+  const roles = params.planning.topology.roles;
+  const entryRoleId =
+    roles.find((role) => role.id === "coordinator")?.id ?? roles[0]?.id ?? "primary";
+  const nodes = roles.map((role) => {
+    const entry = role.id === entryRoleId;
+    const roleBundle = createRuntimeGraphRoleBundle({
+      role,
+      baseBundle: params.bundle,
+      fallbackTemplateId: params.templateId,
+      planning: params.planning,
+      requirements: params.requirements,
+      entry,
+    });
+    return {
+      id: role.id,
+      roleId: role.id,
+      label: role.label,
+      templateId: entry
+        ? params.templateId
+        : roleTemplateId({
+            roleId: role.id,
+            planning: params.planning,
+            requirements: params.requirements,
+            fallbackTemplateId: params.templateId,
+          }),
+      entry,
+      agentId: normalizeAgentId(roleBundle.agent.agentId),
+      name: roleBundle.agent.name,
+      interactionMode: roleBundle.ingress?.interactionMode ?? "direct",
+      connectorIds: role.connectorIds,
+      responsibilities: role.responsibilities,
+      deliveryTarget: summarizeDeliveryTarget(roleBundle),
+      schedule: summarizeSchedule(roleBundle),
+      bundle: roleBundle,
+    } satisfies AgentBlueprintBuilderRuntimeGraphNodeDraft;
+  });
+
+  const edges = nodes
+    .filter((node) => !node.entry)
+    .flatMap((node) => [
+      {
+        id: `${entryRoleId}->${node.id}:delegates`,
+        fromNodeId: entryRoleId,
+        toNodeId: node.id,
+        kind: "delegates" as const,
+        label: `Delegate ${node.label.toLowerCase()} work`,
+      },
+      {
+        id: `${node.id}->${entryRoleId}:reports`,
+        fromNodeId: node.id,
+        toNodeId: entryRoleId,
+        kind: "reports" as const,
+        label: `Report results back to ${entryRoleId}`,
+      },
+    ]);
+
+  return {
+    mode: params.planning.topology.mode,
+    entryNodeId: entryRoleId,
+    nodes,
+    edges,
+  };
+}
+
+async function compileRuntimeGraphPlans(params: {
+  graph: AgentBlueprintBuilderRuntimeGraphDraft;
+  cfg?: OpenClawConfig;
+  templateId: string;
+}): Promise<AgentBlueprintBuilderPlan["graphPlans"]> {
+  return Promise.all(
+    params.graph.nodes.map(async (node) => ({
+      nodeId: node.id,
+      roleId: node.roleId,
+      entry: node.entry,
+      templateId: node.templateId,
+      plan: await compileAgentBlueprintPlan({
+        bundle: node.bundle,
+        cfg: params.cfg,
+        source: {
+          kind: "builder",
+          value: `${params.templateId}:${node.roleId}`,
+          format: null,
+        },
+      }),
+    })),
+  );
+}
+
 function withDraftPlanning(
   draft: AgentBlueprintBuilderDraft,
   planning: RequirementPlannerResult,
@@ -743,10 +1019,12 @@ function withDraftPlanning(
     planning: {
       selections: planning.selections,
       alternatives: planning.alternatives,
+      variants: planning.variants,
       integrations: planning.integrations,
       setupTasks: planning.setupTasks,
       verifications: planning.verifications,
       topology: planning.topology,
+      graph: summarizeRuntimeGraph(draft.runtimeGraph),
     },
   };
 }
@@ -830,6 +1108,12 @@ function buildAgentBlueprintDraftInternal(params: {
     requirements,
     cfg: params.cfg,
   });
+  const runtimeGraph = buildRuntimeGraphDraft({
+    bundle,
+    templateId: selection.templateId,
+    planning,
+    requirements,
+  });
 
   const draft: AgentBlueprintBuilderDraft = {
     brief,
@@ -845,10 +1129,12 @@ function buildAgentBlueprintDraftInternal(params: {
     planning: {
       selections: planning.selections,
       alternatives: planning.alternatives,
+      variants: planning.variants,
       integrations: planning.integrations,
       setupTasks: planning.setupTasks,
       verifications: planning.verifications,
       topology: planning.topology,
+      graph: summarizeRuntimeGraph(runtimeGraph),
     },
     extracted: {
       agentId: normalizeAgentId(bundle.agent.agentId),
@@ -859,6 +1145,7 @@ function buildAgentBlueprintDraftInternal(params: {
       schedule: summarizeSchedule(bundle),
     },
     bundle,
+    runtimeGraph,
   };
 
   return { draft, planning };
@@ -875,7 +1162,7 @@ export function buildAgentBlueprintDraft(params: {
 function stripBundleFromDraft(
   draft: AgentBlueprintBuilderDraft,
 ): AgentBlueprintBuilderDraftSummary {
-  const { bundle: _bundle, ...summary } = draft;
+  const { bundle: _bundle, runtimeGraph: _runtimeGraph, ...summary } = draft;
   return summary;
 }
 
@@ -890,18 +1177,22 @@ export async function compileAgentBlueprintBuilderPlan(params: {
   });
   const planning = await hydratePersistedPlanningState(built.planning);
   const draft = withDraftPlanning(built.draft, planning);
-  const plan = await compileAgentBlueprintPlan({
-    bundle: draft.bundle,
+  const graphPlans = await compileRuntimeGraphPlans({
+    graph: draft.runtimeGraph,
     cfg: params.cfg,
-    source: {
-      kind: "builder",
-      value: draft.templateId,
-      format: null,
-    },
+    templateId: draft.templateId,
   });
+  const entryGraphPlan =
+    graphPlans.find((node) => node.entry) ??
+    graphPlans.find((node) => node.nodeId === draft.runtimeGraph.entryNodeId);
   return {
     draft: stripBundleFromDraft(draft),
-    plan,
+    plan:
+      entryGraphPlan?.plan ??
+      (() => {
+        throw new Error("Builder runtime graph did not produce an entry plan.");
+      })(),
+    graphPlans,
   };
 }
 
@@ -927,25 +1218,51 @@ export async function applyAgentBlueprintBuilderPlan(params: {
       .join(" ");
     throw new Error(`Builder planner is ${draft.plannerStatus}. ${blockers}`.trim());
   }
-  const plan = await compileAgentBlueprintPlan({
-    bundle: draft.bundle,
+  const graphPlans = await compileRuntimeGraphPlans({
+    graph: draft.runtimeGraph,
     cfg,
-    source: {
-      kind: "builder",
-      value: draft.templateId,
-      format: null,
-    },
+    templateId: draft.templateId,
   });
-  if (plan.status !== "ready") {
-    const reasons = plan.issues.map((issue) => issue.message).join(" ");
-    throw new Error(`Builder plan is not ready to apply. ${reasons}`);
+  const notReadyNode = graphPlans.find((entry) => entry.plan.status !== "ready");
+  if (notReadyNode) {
+    const reasons = notReadyNode.plan.issues.map((issue) => issue.message).join(" ");
+    throw new Error(
+      `Builder runtime graph is not ready for node ${notReadyNode.nodeId}. ${reasons}`.trim(),
+    );
   }
-  const result = await applyAgentBlueprint({
-    loaded: createBuilderLoadedBlueprint(draft),
+  const orderedNodes = draft.runtimeGraph.nodes.toSorted((left, right) => {
+    if (left.entry === right.entry) {
+      return left.id.localeCompare(right.id);
+    }
+    return left.entry ? 1 : -1;
   });
+  const graphResults: AgentBlueprintBuilderApplyResult["graphResults"] = [];
+  for (const node of orderedNodes) {
+    const result = await applyAgentBlueprint({
+      loaded: {
+        kind: "builder",
+        source: `${draft.templateId}:${node.roleId}`,
+        format: null,
+        bundle: node.bundle,
+      },
+    });
+    graphResults.push({
+      nodeId: node.id,
+      roleId: node.roleId,
+      entry: node.entry,
+      result,
+    });
+  }
+  const result =
+    graphResults.find((entry) => entry.entry)?.result ??
+    graphResults[0]?.result ??
+    (await applyAgentBlueprint({
+      loaded: createBuilderLoadedBlueprint(draft),
+    }));
   return {
     draft: stripBundleFromDraft(draft),
     result,
+    graphResults,
   };
 }
 
@@ -964,18 +1281,22 @@ export async function verifyAgentBlueprintBuilderPlan(params: {
     cfg,
   });
   const draft = withDraftPlanning(built.draft, verificationResult.planning);
-  const plan = await compileAgentBlueprintPlan({
-    bundle: draft.bundle,
+  const graphPlans = await compileRuntimeGraphPlans({
+    graph: draft.runtimeGraph,
     cfg,
-    source: {
-      kind: "builder",
-      value: draft.templateId,
-      format: null,
-    },
+    templateId: draft.templateId,
   });
+  const entryGraphPlan =
+    graphPlans.find((node) => node.entry) ??
+    graphPlans.find((node) => node.nodeId === draft.runtimeGraph.entryNodeId);
   return {
     draft: stripBundleFromDraft(draft),
-    plan,
+    plan:
+      entryGraphPlan?.plan ??
+      (() => {
+        throw new Error("Builder runtime graph did not produce an entry plan.");
+      })(),
+    graphPlans,
     verification: verificationResult.run,
   };
 }

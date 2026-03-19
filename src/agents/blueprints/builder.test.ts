@@ -33,6 +33,8 @@ describe("agent blueprint builder", () => {
     expect(result.draft.planning.setupTasks.map((task) => task.connectorId)).toEqual(
       expect.arrayContaining(["channel:slack", "platform:gmail-hook"]),
     );
+    expect(result.draft.planning.variants.length).toBeGreaterThan(0);
+    expect(result.draft.planning.graph.nodes).toHaveLength(1);
     expect(
       result.draft.planning.verifications.find(
         (probe) => probe.connectorId === "platform:gmail-hook" && probe.probeKind === "status",
@@ -40,6 +42,7 @@ describe("agent blueprint builder", () => {
     ).toBe("blocked");
     expect(result.plan.source?.kind).toBe("builder");
     expect(result.plan.status).toBe("ready");
+    expect(result.graphPlans).toHaveLength(1);
   });
 
   it("asks for a support channel when the request is support-shaped but underspecified", () => {
@@ -132,6 +135,9 @@ describe("agent blueprint builder", () => {
     );
     expect(draft.planning.topology.mode).toBe("multi-agent");
     expect(draft.bundle.runtime.subagents?.enabled).toBe(true);
+    expect(draft.planning.graph.nodes.map((node) => node.roleId)).toEqual(
+      expect.arrayContaining(["coordinator", "worker"]),
+    );
     expect(draft.planning.selections.map((selection) => selection.connectorId)).toEqual(
       expect.arrayContaining([
         "platform:webhook-runtime",

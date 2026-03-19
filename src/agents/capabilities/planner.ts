@@ -63,6 +63,18 @@ export type RequirementPlannerTopology = {
   roles: RequirementPlannerRole[];
 };
 
+export type RequirementPlannerVariant = {
+  id: string;
+  label: string;
+  reason: string;
+  selected: boolean;
+  status: PlannerStatus;
+  score: number;
+  selections: RequirementPlannerSelection[];
+  connectorIds: string[];
+  topology: RequirementPlannerTopology;
+};
+
 export type PlannedIntegrationInstance = IntegrationInstance & {
   label: string;
   kind: ConnectorDefinition["kind"];
@@ -107,6 +119,7 @@ export type RequirementPlannerResult = {
   verificationFingerprint: string;
   selections: RequirementPlannerSelection[];
   alternatives: RequirementPlannerAlternative[];
+  variants: RequirementPlannerVariant[];
   integrations: PlannedIntegrationInstance[];
   setupTasks: PlannedSetupTask[];
   verifications: PlannedVerificationResult[];
@@ -127,6 +140,7 @@ function buildVerificationFingerprint(params: {
   status: PlannerStatus;
   selections: RequirementPlannerSelection[];
   alternatives: RequirementPlannerAlternative[];
+  variants: RequirementPlannerVariant[];
   integrations: PlannedIntegrationInstance[];
   topology: RequirementPlannerTopology;
 }): string {
@@ -149,6 +163,13 @@ function buildVerificationFingerprint(params: {
             selected: candidate.selected,
             readiness: candidate.readiness,
           })),
+        })),
+        variants: params.variants.map((variant) => ({
+          id: variant.id,
+          selected: variant.selected,
+          status: variant.status,
+          connectorIds: variant.connectorIds,
+          topology: variant.topology.mode,
         })),
         integrations: params.integrations.map((integration) => ({
           connectorId: integration.connectorId,
@@ -225,6 +246,18 @@ function sortAlternatives(
         `${right.requirementLabel}:${right.requirementId}`,
       ),
     );
+}
+
+function sortVariants(variants: RequirementPlannerVariant[]): RequirementPlannerVariant[] {
+  return variants.toSorted((left, right) => {
+    if (left.selected !== right.selected) {
+      return left.selected ? -1 : 1;
+    }
+    if (left.score !== right.score) {
+      return right.score - left.score;
+    }
+    return `${left.label}:${left.id}`.localeCompare(`${right.label}:${right.id}`);
+  });
 }
 
 function sortSetupTasks(tasks: PlannedSetupTask[]): PlannedSetupTask[] {
@@ -728,6 +761,275 @@ function resolveConnectorCandidatesForDescriptor(
   };
 }
 
+type RequirementPlannerVariantSeed = {
+  id: string;
+  label: string;
+  reason: string;
+  selectedConnectorIdsByRequirementId: Map<string, string[]>;
+};
+
+type MaterializedPlannerVariant = {
+  variant: RequirementPlannerVariant;
+  integrations: PlannedIntegrationInstance[];
+  verifications: PlannedVerificationResult[];
+};
+
+function variantScoreSelection(selection: RequirementPlannerSelection): number {
+  switch (selection.source) {
+    case "explicit":
+      return 30;
+    case "preferred":
+      return 20;
+    case "fallback":
+      return 10;
+  }
+}
+
+function variantScoreIntegration(integration: PlannedIntegrationInstance): number {
+  return statusRank(integration.status) * 3;
+}
+
+function createVariantLabel(params: {
+  selections: RequirementPlannerSelection[];
+  topology: RequirementPlannerTopology;
+  isDefault: boolean;
+}): string {
+  if (params.isDefault) {
+    return "Primary plan";
+  }
+  const messageConnector = params.selections.find((selection) =>
+    selection.contractIds.includes("message.send"),
+  );
+  if (messageConnector) {
+    return `${messageConnector.connectorLabel} delivery variant`;
+  }
+  if (params.topology.mode === "multi-agent") {
+    return "Multi-agent fallback";
+  }
+  const first = params.selections[0];
+  return first ? `${first.connectorLabel} variant` : "Fallback variant";
+}
+
+function createVariantReason(params: {
+  selections: RequirementPlannerSelection[];
+  alternatives: RequirementPlannerAlternative[];
+  isDefault: boolean;
+  topology: RequirementPlannerTopology;
+}): string {
+  if (params.isDefault) {
+    return "Uses the highest-ranked connector choices across the current workflow.";
+  }
+  const swappedSelections = params.selections.filter((selection) => {
+    const alternative = params.alternatives.find(
+      (entry) => entry.requirementId === selection.requirementId,
+    );
+    return (
+      alternative &&
+      alternative.selectedConnectorIds.length > 0 &&
+      !alternative.selectedConnectorIds.includes(selection.connectorId)
+    );
+  });
+  if (swappedSelections.length > 0) {
+    return `Uses alternative connector choices for ${swappedSelections
+      .map((selection) => selection.requirementLabel.toLowerCase())
+      .join(", ")}.`;
+  }
+  return params.topology.mode === "multi-agent"
+    ? "Uses a multi-agent split to keep coordination and execution separated."
+    : "Uses a viable fallback connector mix for the same workflow.";
+}
+
+function materializePlannerVariant(params: {
+  id: string;
+  requirements: RequirementSet;
+  alternatives: RequirementPlannerAlternative[];
+  registry: CapabilityRegistry;
+  cfg?: OpenClawConfig;
+  selectedConnectorIdsByRequirementId: Map<string, string[]>;
+  isDefault: boolean;
+}): MaterializedPlannerVariant {
+  const selections: RequirementPlannerSelection[] = [];
+  const selectedConnectorIds: string[] = [];
+
+  for (const alternative of params.alternatives) {
+    for (const connectorId of params.selectedConnectorIdsByRequirementId.get(
+      alternative.requirementId,
+    ) ?? alternative.selectedConnectorIds) {
+      const candidate = alternative.candidates.find((entry) => entry.connectorId === connectorId);
+      const connector = params.registry.connectorsById.get(connectorId);
+      if (!candidate || !connector) {
+        continue;
+      }
+      selections.push({
+        requirementId: alternative.requirementId,
+        requirementLabel: alternative.requirementLabel,
+        contractIds: alternative.contractIds,
+        connectorId,
+        connectorLabel: connector.label,
+        source: candidate.source,
+      });
+      selectedConnectorIds.push(connectorId);
+    }
+  }
+
+  const sortedSelections = sortSelections(selections);
+  const topology = buildPlannerTopology({
+    requirements: params.requirements,
+    selections: sortedSelections,
+  });
+  const integrations = dedupeStrings(selectedConnectorIds)
+    .map((connectorId) => params.registry.connectorsById.get(connectorId))
+    .filter((connector): connector is ConnectorDefinition => Boolean(connector))
+    .map((connector) => describeIntegrationInstance(connector, params.cfg))
+    .toSorted((left, right) => left.label.localeCompare(right.label));
+  const verifications = buildPreflightVerificationResultsForIntegrations(integrations);
+  const status = derivePlannerStatus({
+    baseStatus: params.requirements.plannerStatus,
+    integrations,
+    verifications,
+  });
+  const score =
+    sortedSelections.reduce((total, selection) => total + variantScoreSelection(selection), 0) +
+    integrations.reduce((total, integration) => total + variantScoreIntegration(integration), 0) +
+    (topology.mode === "single-agent" ? 3 : 0);
+
+  return {
+    variant: {
+      id: params.id,
+      label: createVariantLabel({
+        selections: sortedSelections,
+        topology,
+        isDefault: params.isDefault,
+      }),
+      reason: createVariantReason({
+        selections: sortedSelections,
+        alternatives: params.alternatives,
+        isDefault: params.isDefault,
+        topology,
+      }),
+      selected: false,
+      status,
+      score,
+      selections: sortedSelections,
+      connectorIds: dedupeStrings(sortedSelections.map((selection) => selection.connectorId)),
+      topology,
+    },
+    integrations,
+    verifications,
+  };
+}
+
+function buildPlannerVariants(params: {
+  requirements: RequirementSet;
+  alternatives: RequirementPlannerAlternative[];
+  registry: CapabilityRegistry;
+  cfg?: OpenClawConfig;
+}): MaterializedPlannerVariant[] {
+  const relevantAlternatives = params.alternatives.filter(
+    (alternative) =>
+      alternative.candidates.length > 0 || alternative.selectedConnectorIds.length > 0,
+  );
+  const defaultVariantSeed: RequirementPlannerVariantSeed = {
+    id: "primary",
+    label: "Primary plan",
+    reason: "Uses the highest-ranked connector choices across the current workflow.",
+    selectedConnectorIdsByRequirementId: new Map(
+      relevantAlternatives.map((alternative) => [
+        alternative.requirementId,
+        alternative.selectedConnectorIds,
+      ]),
+    ),
+  };
+  const seeds: RequirementPlannerVariantSeed[] = [defaultVariantSeed];
+
+  for (const alternative of relevantAlternatives) {
+    const bestFallback = alternative.candidates.find((candidate) => !candidate.selected);
+    if (!bestFallback) {
+      continue;
+    }
+    const selectedConnectorIdsByRequirementId = new Map(
+      defaultVariantSeed.selectedConnectorIdsByRequirementId,
+    );
+    selectedConnectorIdsByRequirementId.set(alternative.requirementId, [bestFallback.connectorId]);
+    seeds.push({
+      id: `${alternative.requirementId}:${bestFallback.connectorId}`,
+      label: `${bestFallback.connectorLabel} variant`,
+      reason: `Prefer ${bestFallback.connectorLabel} for ${alternative.requirementLabel.toLowerCase()}.`,
+      selectedConnectorIdsByRequirementId,
+    });
+  }
+
+  const compoundSeeds = relevantAlternatives
+    .map((alternative) => ({
+      requirementId: alternative.requirementId,
+      fallback: alternative.candidates.find((candidate) => !candidate.selected),
+    }))
+    .filter((entry): entry is { requirementId: string; fallback: RequirementPlannerCandidate } =>
+      Boolean(entry.fallback),
+    )
+    .slice(0, 3);
+  if (compoundSeeds.length >= 2) {
+    const selectedConnectorIdsByRequirementId = new Map(
+      defaultVariantSeed.selectedConnectorIdsByRequirementId,
+    );
+    for (const entry of compoundSeeds.slice(0, 2)) {
+      selectedConnectorIdsByRequirementId.set(entry.requirementId, [entry.fallback.connectorId]);
+    }
+    seeds.push({
+      id: compoundSeeds
+        .slice(0, 2)
+        .map((entry) => `${entry.requirementId}:${entry.fallback.connectorId}`)
+        .join("+"),
+      label: "Compound fallback variant",
+      reason: "Combines multiple fallback connector choices into one viable end-to-end plan.",
+      selectedConnectorIdsByRequirementId,
+    });
+  }
+
+  const variants = seeds
+    .map((seed, index) =>
+      materializePlannerVariant({
+        id: seed.id || `variant-${index + 1}`,
+        requirements: params.requirements,
+        alternatives: params.alternatives,
+        registry: params.registry,
+        cfg: params.cfg,
+        selectedConnectorIdsByRequirementId: seed.selectedConnectorIdsByRequirementId,
+        isDefault: index === 0,
+      }),
+    )
+    .filter(
+      (entry, index, all) =>
+        all.findIndex(
+          (candidate) =>
+            stableStringify(candidate.variant.connectorIds) ===
+              stableStringify(entry.variant.connectorIds) &&
+            candidate.variant.topology.mode === entry.variant.topology.mode,
+        ) === index,
+    )
+    .toSorted((left, right) => {
+      if (left.variant.score !== right.variant.score) {
+        return right.variant.score - left.variant.score;
+      }
+      return left.variant.id.localeCompare(right.variant.id);
+    })
+    .slice(0, 4);
+
+  const bestVariantId = variants[0]?.variant.id;
+  return variants.map((entry) => ({
+    ...entry,
+    variant: {
+      ...entry.variant,
+      label: entry.variant.id === defaultVariantSeed.id ? "Primary plan" : entry.variant.label,
+      reason:
+        entry.variant.id === defaultVariantSeed.id
+          ? defaultVariantSeed.reason
+          : entry.variant.reason,
+      selected: entry.variant.id === bestVariantId,
+    },
+  }));
+}
+
 function buildPlannerTopology(params: {
   requirements: RequirementSet;
   selections: RequirementPlannerSelection[];
@@ -827,9 +1129,7 @@ export function buildRequirementPlannerResult(
   params: RequirementPlannerParams,
 ): RequirementPlannerResult {
   const registry = params.registry ?? buildOpenClawCapabilityRegistry();
-  const selections: RequirementPlannerSelection[] = [];
   const alternatives: RequirementPlannerAlternative[] = [];
-  const selectedConnectorIds: string[] = [];
 
   for (const descriptor of listRequirementDescriptors(params.requirements)) {
     if (descriptor.contractIds.length === 0) {
@@ -841,22 +1141,6 @@ export function buildRequirementPlannerResult(
       registry,
       params.cfg,
     );
-    for (const connectorId of resolution.selectedConnectorIds) {
-      const connector = registry.connectorsById.get(connectorId);
-      const candidate = resolution.candidates.find((entry) => entry.connectorId === connectorId);
-      if (!connector) {
-        continue;
-      }
-      selections.push({
-        requirementId: descriptor.id,
-        requirementLabel: descriptor.label,
-        contractIds: descriptor.contractIds,
-        connectorId,
-        connectorLabel: connector.label,
-        source: candidate?.source ?? "fallback",
-      });
-      selectedConnectorIds.push(connectorId);
-    }
     alternatives.push({
       requirementId: descriptor.id,
       requirementLabel: descriptor.label,
@@ -865,22 +1149,27 @@ export function buildRequirementPlannerResult(
       candidates: resolution.candidates,
     });
   }
-
-  const integrations = dedupeStrings(selectedConnectorIds)
-    .map((connectorId) => registry.connectorsById.get(connectorId))
-    .filter((connector): connector is ConnectorDefinition => Boolean(connector))
-    .map((connector) => describeIntegrationInstance(connector, params.cfg))
-    .toSorted((left, right) => left.label.localeCompare(right.label));
+  const variants = buildPlannerVariants({
+    requirements: params.requirements,
+    alternatives,
+    registry,
+    cfg: params.cfg,
+  });
+  const selectedVariant = variants.find((entry) => entry.variant.selected) ?? variants[0];
   return rebuildRequirementPlannerResult({
     status: params.requirements.plannerStatus,
-    selections,
+    selections: selectedVariant?.variant.selections ?? [],
     alternatives,
-    integrations,
+    variants: variants.map((entry) => entry.variant),
+    integrations: selectedVariant?.integrations ?? [],
     registry,
-    topology: buildPlannerTopology({
-      requirements: params.requirements,
-      selections,
-    }),
+    verifications: selectedVariant?.verifications ?? [],
+    topology:
+      selectedVariant?.variant.topology ??
+      buildPlannerTopology({
+        requirements: params.requirements,
+        selections: [],
+      }),
   });
 }
 
@@ -888,6 +1177,7 @@ export function rebuildRequirementPlannerResult(params: {
   status: PlannerStatus;
   selections: RequirementPlannerSelection[];
   alternatives: RequirementPlannerAlternative[];
+  variants: RequirementPlannerVariant[];
   integrations: PlannedIntegrationInstance[];
   verifications?: PlannedVerificationResult[];
   registry?: CapabilityRegistry;
@@ -912,6 +1202,19 @@ export function rebuildRequirementPlannerResult(params: {
     integrations,
     verifications,
   });
+  const variants = sortVariants(
+    params.variants.map((variant) =>
+      variant.selected
+        ? {
+            ...variant,
+            status,
+            selections,
+            connectorIds: dedupeStrings(selections.map((selection) => selection.connectorId)),
+            topology: params.topology,
+          }
+        : variant,
+    ),
+  );
 
   return {
     status,
@@ -921,11 +1224,13 @@ export function rebuildRequirementPlannerResult(params: {
         status,
         selections,
         alternatives,
+        variants,
         integrations,
         topology: params.topology,
       }),
     selections,
     alternatives,
+    variants,
     integrations,
     setupTasks,
     verifications,

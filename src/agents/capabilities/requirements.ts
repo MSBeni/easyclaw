@@ -677,6 +677,7 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     supportRequest ||
     hasReportLanguage(brief) ||
     (scheduleRequest && summaryRequest);
+  const deliveryChannelMentions = deliveryRequest ? mentionedChannels : [];
 
   if (scheduleRequest) {
     triggers.push(
@@ -1120,6 +1121,61 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         message: "Email delivery is not modeled as a supported outbound connector yet.",
         contractIds: [],
         connectorIds: ["channel:email"],
+      }),
+    );
+  }
+
+  const nonScheduleTriggers = dedupeStrings(
+    triggers.filter((entry) => entry.id !== "schedule").map((entry) => entry.id),
+  );
+  if (nonScheduleTriggers.length > 1) {
+    unsupportedGaps.push(
+      createGap({
+        kind: "unsupported",
+        code: "workflow:multi-external-trigger",
+        message:
+          "This workflow mixes multiple external trigger surfaces. Split webhook and inbound-chat flows into separate agents, or choose one primary trigger.",
+        contractIds: dedupeStrings(triggers.flatMap((entry) => entry.contractIds)),
+        connectorIds: dedupeStrings(triggers.flatMap((entry) => entry.connectorIds)),
+      }),
+    );
+  }
+
+  if (
+    supportRequest &&
+    (scheduleRequest ||
+      (hasReportLanguage(brief) && deliveryRequest && !hasInboundChatLanguage(brief)))
+  ) {
+    unsupportedGaps.push(
+      createGap({
+        kind: "unsupported",
+        code: "workflow:mixed-support-briefing",
+        message:
+          "Support-response flows and scheduled briefing/report flows are not compiled into one workflow yet. Split them into separate agents.",
+        contractIds: dedupeStrings([
+          ...triggers.flatMap((entry) => entry.contractIds),
+          ...outputs.flatMap((entry) => entry.contractIds),
+        ]),
+        connectorIds: dedupeStrings([
+          ...triggers.flatMap((entry) => entry.connectorIds),
+          ...outputs.flatMap((entry) => entry.connectorIds),
+        ]),
+      }),
+    );
+  }
+
+  if (deliveryChannelMentions.length > 1 && !supportRequest) {
+    ambiguities.push(
+      "Multiple delivery connectors were mentioned, so the workflow still needs one primary destination.",
+    );
+    missingDataFields.push("primary-delivery-destination");
+    missingInputs.push(
+      createGap({
+        kind: "input",
+        code: "primary-delivery-destination",
+        message: "Choose one primary delivery destination for this workflow.",
+        contractIds: ["message.send", "delivery.chat", "delivery.report"],
+        connectorIds: deliveryChannelMentions.map((connector) => connector.id),
       }),
     );
   }
