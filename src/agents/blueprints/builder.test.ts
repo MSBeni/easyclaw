@@ -130,6 +130,8 @@ describe("agent blueprint builder", () => {
     expect(draft.requirements.workflow.sourceKinds).toEqual(
       expect.arrayContaining(["file-source", "memory-source"]),
     );
+    expect(draft.planning.topology.mode).toBe("multi-agent");
+    expect(draft.bundle.runtime.subagents?.enabled).toBe(true);
     expect(draft.planning.selections.map((selection) => selection.connectorId)).toEqual(
       expect.arrayContaining([
         "platform:webhook-runtime",

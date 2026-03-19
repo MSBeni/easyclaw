@@ -103,6 +103,7 @@ describe("agents builder commands", () => {
               source: "explicit",
             },
           ],
+          alternatives: [],
           integrations: [
             {
               connectorId: "channel:telegram",
@@ -141,6 +142,11 @@ describe("agents builder commands", () => {
               detail: "channel telegram is not configured",
             },
           ],
+          topology: {
+            mode: "single-agent",
+            reason: "Current constraints fit a single coordinating agent.",
+            roles: [],
+          },
         },
         extracted: {
           agentId: "support",
@@ -257,6 +263,7 @@ describe("agents builder commands", () => {
               source: "explicit",
             },
           ],
+          alternatives: [],
           integrations: [
             {
               connectorId: "tools:automation",
@@ -285,6 +292,11 @@ describe("agents builder commands", () => {
             },
           ],
           verifications: [],
+          topology: {
+            mode: "single-agent",
+            reason: "Current constraints fit a single coordinating agent.",
+            roles: [],
+          },
         },
         extracted: {
           agentId: "daily-briefing",
@@ -393,6 +405,7 @@ describe("agents builder commands", () => {
         },
         planning: {
           selections: [],
+          alternatives: [],
           integrations: [
             {
               connectorId: "channel:telegram",
@@ -422,6 +435,11 @@ describe("agents builder commands", () => {
               checkedAt: "2026-03-18T12:00:00.000Z",
             },
           ],
+          topology: {
+            mode: "single-agent",
+            reason: "Current constraints fit a single coordinating agent.",
+            roles: [],
+          },
         },
         extracted: {
           agentId: "support",

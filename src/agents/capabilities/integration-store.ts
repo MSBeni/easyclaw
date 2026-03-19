@@ -225,8 +225,10 @@ export async function hydrateRequirementPlannerIntegrationState(
   return rebuildRequirementPlannerResult({
     status: planning.status,
     selections: planning.selections,
+    alternatives: planning.alternatives,
     integrations,
     verifications,
     verificationFingerprint: planning.verificationFingerprint,
+    topology: planning.topology,
   });
 }

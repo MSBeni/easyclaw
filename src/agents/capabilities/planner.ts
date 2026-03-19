@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { stableStringify } from "../stable-stringify.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
 import { listConnectorsForContract } from "./registry.js";
-import type { RequirementDescriptor, RequirementSet } from "./requirements.js";
+import type {
+  RequirementConstraint,
+  RequirementDescriptor,
+  RequirementSet,
+} from "./requirements.js";
 import type {
   CapabilityRegistry,
   ConnectorDefinition,
@@ -21,6 +25,42 @@ export type RequirementPlannerSelection = {
   connectorId: string;
   connectorLabel: string;
   source: RequirementPlannerSelectionSource;
+};
+
+export type RequirementPlannerCandidate = {
+  requirementId: string;
+  requirementLabel: string;
+  contractIds: string[];
+  connectorId: string;
+  connectorLabel: string;
+  source: RequirementPlannerSelectionSource;
+  selected: boolean;
+  readiness: IntegrationInstance["status"];
+  reason: string;
+};
+
+export type RequirementPlannerAlternative = {
+  requirementId: string;
+  requirementLabel: string;
+  contractIds: string[];
+  selectedConnectorIds: string[];
+  candidates: RequirementPlannerCandidate[];
+};
+
+export type RequirementPlannerTopologyMode = "single-agent" | "multi-agent";
+
+export type RequirementPlannerRole = {
+  id: string;
+  label: string;
+  contractIds: string[];
+  connectorIds: string[];
+  responsibilities: string[];
+};
+
+export type RequirementPlannerTopology = {
+  mode: RequirementPlannerTopologyMode;
+  reason: string;
+  roles: RequirementPlannerRole[];
 };
 
 export type PlannedIntegrationInstance = IntegrationInstance & {
@@ -66,9 +106,11 @@ export type RequirementPlannerResult = {
   status: PlannerStatus;
   verificationFingerprint: string;
   selections: RequirementPlannerSelection[];
+  alternatives: RequirementPlannerAlternative[];
   integrations: PlannedIntegrationInstance[];
   setupTasks: PlannedSetupTask[];
   verifications: PlannedVerificationResult[];
+  topology: RequirementPlannerTopology;
 };
 
 type RequirementPlannerParams = {
@@ -84,7 +126,9 @@ function dedupeStrings(values: string[]): string[] {
 function buildVerificationFingerprint(params: {
   status: PlannerStatus;
   selections: RequirementPlannerSelection[];
+  alternatives: RequirementPlannerAlternative[];
   integrations: PlannedIntegrationInstance[];
+  topology: RequirementPlannerTopology;
 }): string {
   return createHash("sha256")
     .update(
@@ -96,6 +140,16 @@ function buildVerificationFingerprint(params: {
           connectorId: selection.connectorId,
           source: selection.source,
         })),
+        alternatives: params.alternatives.map((alternative) => ({
+          requirementId: alternative.requirementId,
+          selectedConnectorIds: alternative.selectedConnectorIds,
+          candidates: alternative.candidates.map((candidate) => ({
+            connectorId: candidate.connectorId,
+            source: candidate.source,
+            selected: candidate.selected,
+            readiness: candidate.readiness,
+          })),
+        })),
         integrations: params.integrations.map((integration) => ({
           connectorId: integration.connectorId,
           instanceId: integration.instanceId,
@@ -105,6 +159,15 @@ function buildVerificationFingerprint(params: {
           contracts: integration.contracts,
           sourceKind: integration.sourceKind,
         })),
+        topology: {
+          mode: params.topology.mode,
+          reason: params.topology.reason,
+          roles: params.topology.roles.map((role) => ({
+            id: role.id,
+            contractIds: role.contractIds,
+            connectorIds: role.connectorIds,
+          })),
+        },
       }),
     )
     .digest("hex");
@@ -116,6 +179,52 @@ function sortSelections(selections: RequirementPlannerSelection[]): RequirementP
       `${right.requirementLabel}:${right.connectorLabel}`,
     ),
   );
+}
+
+function sortCandidates(candidates: RequirementPlannerCandidate[]): RequirementPlannerCandidate[] {
+  const sourceRank = (source: RequirementPlannerSelectionSource): number => {
+    switch (source) {
+      case "explicit":
+        return 2;
+      case "preferred":
+        return 1;
+      case "fallback":
+        return 0;
+    }
+  };
+  return candidates.toSorted((left, right) => {
+    if (left.selected !== right.selected) {
+      return left.selected ? -1 : 1;
+    }
+    const leftSourceRank = sourceRank(left.source);
+    const rightSourceRank = sourceRank(right.source);
+    if (leftSourceRank !== rightSourceRank) {
+      return rightSourceRank - leftSourceRank;
+    }
+    const leftRank = statusRank(left.readiness);
+    const rightRank = statusRank(right.readiness);
+    if (leftRank !== rightRank) {
+      return rightRank - leftRank;
+    }
+    return `${left.requirementLabel}:${left.connectorLabel}`.localeCompare(
+      `${right.requirementLabel}:${right.connectorLabel}`,
+    );
+  });
+}
+
+function sortAlternatives(
+  alternatives: RequirementPlannerAlternative[],
+): RequirementPlannerAlternative[] {
+  return alternatives
+    .map((alternative) => ({
+      ...alternative,
+      candidates: sortCandidates(alternative.candidates),
+    }))
+    .toSorted((left, right) =>
+      `${left.requirementLabel}:${left.requirementId}`.localeCompare(
+        `${right.requirementLabel}:${right.requirementId}`,
+      ),
+    );
 }
 
 function sortSetupTasks(tasks: PlannedSetupTask[]): PlannedSetupTask[] {
@@ -145,6 +254,28 @@ function listRequirementDescriptors(requirements: RequirementSet): RequirementDe
     ...requirements.policies,
     ...requirements.constraints,
   ];
+}
+
+function listRelevantConstraints(
+  descriptor: RequirementDescriptor,
+  requirements: RequirementSet,
+): RequirementConstraint[] {
+  return [...requirements.sourceConstraints, ...requirements.actionConstraints].filter(
+    (constraint) =>
+      constraint.contractIds.some((contractId) => descriptor.contractIds.includes(contractId)),
+  );
+}
+
+function preferredConnectorIdsForDescriptor(
+  descriptor: RequirementDescriptor,
+  requirements: RequirementSet,
+): string[] {
+  return dedupeStrings([
+    ...descriptor.connectorIds,
+    ...listRelevantConstraints(descriptor, requirements).flatMap(
+      (constraint) => constraint.connectorIds,
+    ),
+  ]);
 }
 
 function isChannelConfigured(cfg: OpenClawConfig | undefined, channel: string): boolean {
@@ -493,34 +624,39 @@ function buildPreflightVerificationResultsForIntegrations(
   );
 }
 
-function choosePreferredConnectorId(
-  contractId: string,
-  registry: CapabilityRegistry,
-  cfg?: OpenClawConfig,
-): string[] {
-  const connectors = listConnectorsForContract(registry, contractId);
-  if (connectors.length === 0) {
-    return [];
+function describeCandidateReason(params: {
+  source: RequirementPlannerSelectionSource;
+  integration: PlannedIntegrationInstance;
+  descriptor: RequirementDescriptor;
+}): string {
+  if (params.source === "explicit") {
+    return "Explicitly named in the request.";
   }
-  const ranked = connectors.toSorted((left, right) => {
-    const leftRank = statusRank(describeIntegrationInstance(left, cfg).status);
-    const rightRank = statusRank(describeIntegrationInstance(right, cfg).status);
-    if (leftRank !== rightRank) {
-      return rightRank - leftRank;
-    }
-    return left.label.localeCompare(right.label);
-  });
-  return ranked[0] ? [ranked[0].id] : [];
+  if (params.source === "preferred") {
+    return params.integration.status === "authenticated" ||
+      params.integration.status === "configured" ||
+      params.integration.status === "verified"
+      ? "Matches extracted source/action constraints and is ready to use."
+      : "Matches extracted source/action constraints and is the best current candidate.";
+  }
+  if (
+    params.integration.status === "authenticated" ||
+    params.integration.status === "configured" ||
+    params.integration.status === "verified"
+  ) {
+    return `Fallback candidate with the strongest current readiness for ${params.descriptor.label}.`;
+  }
+  return `Fallback candidate for ${params.descriptor.label}.`;
 }
 
-function resolveConnectorIdsForDescriptor(
+function resolveConnectorCandidatesForDescriptor(
   descriptor: RequirementDescriptor,
   requirements: RequirementSet,
   registry: CapabilityRegistry,
   cfg?: OpenClawConfig,
 ): {
-  connectorIds: string[];
-  source: RequirementPlannerSelectionSource;
+  selectedConnectorIds: string[];
+  candidates: RequirementPlannerCandidate[];
 } {
   const hasBlockingInputGap =
     descriptor.connectorIds.length === 0 &&
@@ -529,40 +665,161 @@ function resolveConnectorIdsForDescriptor(
     );
   if (hasBlockingInputGap) {
     return {
-      connectorIds: [],
-      source: "fallback",
+      selectedConnectorIds: [],
+      candidates: [],
     };
   }
 
   const explicitConnectorIds = descriptor.connectorIds.filter((connectorId) =>
     registry.connectorsById.has(connectorId),
   );
-  if (explicitConnectorIds.length > 0) {
-    return {
-      connectorIds: dedupeStrings(explicitConnectorIds),
-      source: "explicit",
-    };
-  }
-
-  const preferredConnectorIds = dedupeStrings(
-    descriptor.contractIds.flatMap((contractId) =>
-      choosePreferredConnectorId(contractId, registry, cfg),
+  const preferredConnectorIds = preferredConnectorIdsForDescriptor(descriptor, requirements);
+  const candidateConnectorIds = dedupeStrings([
+    ...explicitConnectorIds,
+    ...descriptor.contractIds.flatMap((contractId) =>
+      listConnectorsForContract(registry, contractId).map((connector) => connector.id),
     ),
+  ]);
+
+  const candidates = sortCandidates(
+    candidateConnectorIds
+      .map((connectorId) => registry.connectorsById.get(connectorId))
+      .filter((connector): connector is ConnectorDefinition => Boolean(connector))
+      .map((connector) => {
+        const integration = describeIntegrationInstance(connector, cfg);
+        const source: RequirementPlannerSelectionSource = descriptor.connectorIds.includes(
+          connector.id,
+        )
+          ? "explicit"
+          : preferredConnectorIds.includes(connector.id)
+            ? "preferred"
+            : "fallback";
+        return {
+          requirementId: descriptor.id,
+          requirementLabel: descriptor.label,
+          contractIds: descriptor.contractIds,
+          connectorId: connector.id,
+          connectorLabel: connector.label,
+          source,
+          selected: false,
+          readiness: integration.status,
+          reason: describeCandidateReason({
+            source,
+            integration,
+            descriptor,
+          }),
+        };
+      }),
   );
-  if (preferredConnectorIds.length > 0) {
+
+  const selectedConnectorIds =
+    explicitConnectorIds.length > 0
+      ? dedupeStrings(explicitConnectorIds)
+      : candidates[0]
+        ? [candidates[0].connectorId]
+        : [];
+
+  return {
+    selectedConnectorIds,
+    candidates: candidates.map((candidate) => ({
+      ...candidate,
+      selected: selectedConnectorIds.includes(candidate.connectorId),
+    })),
+  };
+}
+
+function buildPlannerTopology(params: {
+  requirements: RequirementSet;
+  selections: RequirementPlannerSelection[];
+}): RequirementPlannerTopology {
+  const sourceConnectorIds = dedupeStrings(
+    params.selections
+      .filter((selection) =>
+        selection.contractIds.some((contractId) =>
+          ["ingest.email", "ingest.feed", "fetch.web", "fs.read", "memory.search"].includes(
+            contractId,
+          ),
+        ),
+      )
+      .map((selection) => selection.connectorId),
+  );
+  const actionConnectorIds = dedupeStrings(
+    params.selections
+      .filter((selection) =>
+        selection.contractIds.some((contractId) =>
+          ["browser.operate", "node.operate", "session.spawn", "agent.manage"].includes(contractId),
+        ),
+      )
+      .map((selection) => selection.connectorId),
+  );
+  const deliveryConnectorIds = dedupeStrings(
+    params.selections
+      .filter((selection) =>
+        selection.contractIds.some((contractId) =>
+          ["message.send", "delivery.chat", "delivery.report"].includes(contractId),
+        ),
+      )
+      .map((selection) => selection.connectorId),
+  );
+
+  const explicitDelegation = params.requirements.actionConstraints.some((constraint) =>
+    constraint.contractIds.includes("session.spawn"),
+  );
+  const mixedSourceAndAction = sourceConnectorIds.length > 0 && actionConnectorIds.length > 0;
+  const multiSourceWorkflow = params.requirements.sourceConstraints.length >= 2;
+  const mode: RequirementPlannerTopologyMode =
+    explicitDelegation || mixedSourceAndAction || multiSourceWorkflow
+      ? "multi-agent"
+      : "single-agent";
+
+  if (mode === "single-agent") {
     return {
-      connectorIds: preferredConnectorIds,
-      source: "preferred",
+      mode,
+      reason: "Current constraints fit a single coordinating agent.",
+      roles: [
+        {
+          id: "primary",
+          label: "Primary Agent",
+          contractIds: params.requirements.requestedContractIds,
+          connectorIds: dedupeStrings(params.selections.map((selection) => selection.connectorId)),
+          responsibilities: ["Handle the workflow end to end in one agent runtime."],
+        },
+      ],
     };
   }
 
   return {
-    connectorIds: dedupeStrings(
-      descriptor.contractIds.flatMap((contractId) =>
-        listConnectorsForContract(registry, contractId).map((connector) => connector.id),
-      ),
-    ),
-    source: "fallback",
+    mode,
+    reason: explicitDelegation
+      ? "The request explicitly asks for delegation or spawned subagents."
+      : "The workflow mixes multiple sources and downstream actions, so a split plan is safer.",
+    roles: [
+      {
+        id: "coordinator",
+        label: "Coordinator Agent",
+        contractIds: ["agent.manage", "delivery.report", "message.send", "approval.request"],
+        connectorIds: dedupeStrings([
+          ...deliveryConnectorIds,
+          ...params.selections
+            .filter((selection) => selection.contractIds.includes("approval.request"))
+            .map((selection) => selection.connectorId),
+        ]),
+        responsibilities: ["Coordinate the workflow, manage approvals, and deliver final outputs."],
+      },
+      {
+        id: "worker",
+        label: "Worker Agent",
+        contractIds: dedupeStrings([
+          ...params.requirements.inputs.flatMap((entry) => entry.contractIds),
+          ...params.requirements.transforms.flatMap((entry) => entry.contractIds),
+          ...params.requirements.actions.flatMap((entry) => entry.contractIds),
+        ]),
+        connectorIds: dedupeStrings([...sourceConnectorIds, ...actionConnectorIds]),
+        responsibilities: [
+          "Gather source material and perform the requested transforms or operator actions.",
+        ],
+      },
+    ],
   };
 }
 
@@ -571,20 +828,22 @@ export function buildRequirementPlannerResult(
 ): RequirementPlannerResult {
   const registry = params.registry ?? buildOpenClawCapabilityRegistry();
   const selections: RequirementPlannerSelection[] = [];
+  const alternatives: RequirementPlannerAlternative[] = [];
   const selectedConnectorIds: string[] = [];
 
   for (const descriptor of listRequirementDescriptors(params.requirements)) {
     if (descriptor.contractIds.length === 0) {
       continue;
     }
-    const resolution = resolveConnectorIdsForDescriptor(
+    const resolution = resolveConnectorCandidatesForDescriptor(
       descriptor,
       params.requirements,
       registry,
       params.cfg,
     );
-    for (const connectorId of resolution.connectorIds) {
+    for (const connectorId of resolution.selectedConnectorIds) {
       const connector = registry.connectorsById.get(connectorId);
+      const candidate = resolution.candidates.find((entry) => entry.connectorId === connectorId);
       if (!connector) {
         continue;
       }
@@ -594,10 +853,17 @@ export function buildRequirementPlannerResult(
         contractIds: descriptor.contractIds,
         connectorId,
         connectorLabel: connector.label,
-        source: resolution.source,
+        source: candidate?.source ?? "fallback",
       });
       selectedConnectorIds.push(connectorId);
     }
+    alternatives.push({
+      requirementId: descriptor.id,
+      requirementLabel: descriptor.label,
+      contractIds: descriptor.contractIds,
+      selectedConnectorIds: resolution.selectedConnectorIds,
+      candidates: resolution.candidates,
+    });
   }
 
   const integrations = dedupeStrings(selectedConnectorIds)
@@ -608,21 +874,29 @@ export function buildRequirementPlannerResult(
   return rebuildRequirementPlannerResult({
     status: params.requirements.plannerStatus,
     selections,
+    alternatives,
     integrations,
     registry,
+    topology: buildPlannerTopology({
+      requirements: params.requirements,
+      selections,
+    }),
   });
 }
 
 export function rebuildRequirementPlannerResult(params: {
   status: PlannerStatus;
   selections: RequirementPlannerSelection[];
+  alternatives: RequirementPlannerAlternative[];
   integrations: PlannedIntegrationInstance[];
   verifications?: PlannedVerificationResult[];
   registry?: CapabilityRegistry;
   verificationFingerprint?: string;
+  topology: RequirementPlannerTopology;
 }): RequirementPlannerResult {
   const registry = params.registry ?? buildOpenClawCapabilityRegistry();
   const selections = sortSelections(params.selections);
+  const alternatives = sortAlternatives(params.alternatives);
   const integrations = params.integrations.toSorted((left, right) =>
     left.label.localeCompare(right.label),
   );
@@ -646,11 +920,15 @@ export function rebuildRequirementPlannerResult(params: {
       buildVerificationFingerprint({
         status,
         selections,
+        alternatives,
         integrations,
+        topology: params.topology,
       }),
     selections,
+    alternatives,
     integrations,
     setupTasks,
     verifications,
+    topology: params.topology,
   };
 }

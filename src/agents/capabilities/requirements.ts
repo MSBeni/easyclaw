@@ -57,6 +57,15 @@ export type RequirementQuestion = {
   required: boolean;
 };
 
+export type RequirementConstraint = {
+  id: string;
+  label: string;
+  detail: string;
+  contractIds: string[];
+  connectorIds: string[];
+  values: string[];
+};
+
 export type RequirementUnsupportedClassification = {
   code: string;
   kind: RequirementUnsupportedKind;
@@ -94,6 +103,8 @@ export type RequirementSet = {
   outputs: RequirementDescriptor[];
   policies: RequirementDescriptor[];
   constraints: RequirementDescriptor[];
+  sourceConstraints: RequirementConstraint[];
+  actionConstraints: RequirementConstraint[];
   missingInputs: RequirementGap[];
   setupGaps: RequirementGap[];
   policyGaps: RequirementGap[];
@@ -133,6 +144,20 @@ function dedupeDescriptors(values: RequirementDescriptor[]): RequirementDescript
   return next;
 }
 
+function dedupeConstraints(values: RequirementConstraint[]): RequirementConstraint[] {
+  const seen = new Set<string>();
+  const next: RequirementConstraint[] = [];
+  for (const value of values) {
+    const key = `${value.id}:${value.detail}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    next.push(value);
+  }
+  return next;
+}
+
 function dedupeGaps(values: RequirementGap[]): RequirementGap[] {
   const seen = new Set<string>();
   const next: RequirementGap[] = [];
@@ -160,6 +185,15 @@ function createGap(params: RequirementGap): RequirementGap {
     ...params,
     contractIds: dedupeStrings(params.contractIds),
     connectorIds: dedupeStrings(params.connectorIds),
+  };
+}
+
+function createConstraint(params: RequirementConstraint): RequirementConstraint {
+  return {
+    ...params,
+    contractIds: dedupeStrings(params.contractIds),
+    connectorIds: dedupeStrings(params.connectorIds),
+    values: dedupeStrings(params.values),
   };
 }
 
@@ -386,6 +420,8 @@ function resolveWorkflowSummary(params: {
   actions: RequirementDescriptor[];
   outputs: RequirementDescriptor[];
   policies: RequirementDescriptor[];
+  sourceConstraints: RequirementConstraint[];
+  actionConstraints: RequirementConstraint[];
   unsupportedGaps: RequirementGap[];
 }): RequirementWorkflowSummary {
   const triggerKinds = dedupeStrings(params.triggers.map((entry) => entry.id)).toSorted();
@@ -608,6 +644,8 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
   const outputs: RequirementDescriptor[] = [];
   const policies: RequirementDescriptor[] = [];
   const constraints: RequirementDescriptor[] = [];
+  const sourceConstraints: RequirementConstraint[] = [];
+  const actionConstraints: RequirementConstraint[] = [];
   const missingInputs: RequirementGap[] = [];
   const setupGaps: RequirementGap[] = [];
   const policyGaps: RequirementGap[] = [];
@@ -748,6 +786,16 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         }),
       );
     }
+    sourceConstraints.push(
+      createConstraint({
+        id: "source:email",
+        label: "Email Source",
+        detail: "Prefer email-backed ingestion for this workflow.",
+        contractIds: ["ingest.email"],
+        connectorIds: ["platform:gmail-hook"],
+        values: ["email"],
+      }),
+    );
   }
 
   if (feedRequest) {
@@ -759,6 +807,16 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         contractIds: ["ingest.feed"],
         connectorIds: ["tools:web"],
         confidence: "medium",
+      }),
+    );
+    sourceConstraints.push(
+      createConstraint({
+        id: "source:feed",
+        label: "Feed Source",
+        detail: "Use feed or newsletter-backed ingestion.",
+        contractIds: ["ingest.feed", "fetch.web"],
+        connectorIds: ["tools:web"],
+        values: ["feed"],
       }),
     );
   }
@@ -774,6 +832,16 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         confidence: "medium",
       }),
     );
+    sourceConstraints.push(
+      createConstraint({
+        id: "source:file",
+        label: "File Source",
+        detail: "Use local or workspace files as a source.",
+        contractIds: ["fs.read"],
+        connectorIds: ["tools:fs"],
+        values: ["file"],
+      }),
+    );
   }
 
   if (memoryRequest) {
@@ -787,6 +855,16 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         confidence: "medium",
       }),
     );
+    sourceConstraints.push(
+      createConstraint({
+        id: "source:memory",
+        label: "Memory Source",
+        detail: "Use stored memory or prior context as a source.",
+        contractIds: ["memory.search"],
+        connectorIds: ["tools:memory"],
+        values: ["memory"],
+      }),
+    );
   }
 
   if (webRequest) {
@@ -798,6 +876,16 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         contractIds: ["fetch.web"],
         connectorIds: ["tools:web"],
         confidence: researchRequest ? "high" : "medium",
+      }),
+    );
+    sourceConstraints.push(
+      createConstraint({
+        id: "source:web",
+        label: "Web Source",
+        detail: "Use web-hosted content or search as a source.",
+        contractIds: ["fetch.web"],
+        connectorIds: ["tools:web"],
+        values: ["web"],
       }),
     );
   }
@@ -830,6 +918,16 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         confidence: "high",
       }),
     );
+    actionConstraints.push(
+      createConstraint({
+        id: "action:transcribe-audio",
+        label: "Audio Processing",
+        detail: "Process audio or podcast material as part of the workflow.",
+        contractIds: ["transform.transcribe"],
+        connectorIds: ["tools:media"],
+        values: ["audio"],
+      }),
+    );
   }
 
   if (nodeRequest) {
@@ -841,6 +939,16 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         contractIds: ["node.operate"],
         connectorIds: ["tools:nodes"],
         confidence: "medium",
+      }),
+    );
+    actionConstraints.push(
+      createConstraint({
+        id: "action:node-runtime",
+        label: "Node Runtime",
+        detail: "Use node-backed runtime execution.",
+        contractIds: ["node.operate"],
+        connectorIds: ["tools:nodes"],
+        values: ["node"],
       }),
     );
   }
@@ -856,6 +964,16 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         confidence: "medium",
       }),
     );
+    actionConstraints.push(
+      createConstraint({
+        id: "action:delegate-subagent",
+        label: "Delegation",
+        detail: "Delegate part of the workflow to a spawned session or subagent.",
+        contractIds: ["session.spawn"],
+        connectorIds: ["tools:sessions"],
+        values: ["subagent"],
+      }),
+    );
   }
 
   if (browserRequest) {
@@ -867,6 +985,18 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         contractIds: ["browser.operate"],
         connectorIds: ["tools:ui"],
         confidence: hasSocialActionLanguage(text) ? "high" : "medium",
+      }),
+    );
+    actionConstraints.push(
+      createConstraint({
+        id: /\b(x|twitter)\b/i.test(brief) ? "action:browser-site-x" : "action:browser",
+        label: /\b(x|twitter)\b/i.test(brief) ? "X Browser Action" : "Browser Action",
+        detail: /\b(x|twitter)\b/i.test(brief)
+          ? "Operate on X/Twitter through a browser-backed surface."
+          : "Use browser-backed interaction for this workflow.",
+        contractIds: ["browser.operate"],
+        connectorIds: ["tools:ui"],
+        values: /\b(x|twitter)\b/i.test(brief) ? ["browser", "x"] : ["browser"],
       }),
     );
     if (params.cfg?.browser?.enabled === false) {
@@ -1034,6 +1164,8 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
   const normalizedMissingInputs = dedupeGaps(missingInputs);
   const normalizedSetupGaps = dedupeGaps(setupGaps);
   const normalizedPolicyGaps = dedupeGaps(policyGaps);
+  const normalizedSourceConstraints = dedupeConstraints(sourceConstraints);
+  const normalizedActionConstraints = dedupeConstraints(actionConstraints);
   const normalizedAmbiguities = dedupeStrings(ambiguities);
   const normalizedMissingDataFields = dedupeStrings(missingDataFields).toSorted();
   const unsupportedRequests = dedupeStrings(
@@ -1052,6 +1184,8 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     actions,
     outputs,
     policies,
+    sourceConstraints: normalizedSourceConstraints,
+    actionConstraints: normalizedActionConstraints,
     unsupportedGaps: normalizedUnsupportedGaps,
   });
   const confidence = resolveRequirementConfidence({
@@ -1078,6 +1212,8 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     outputs: dedupeDescriptors(outputs),
     policies: dedupeDescriptors(policies),
     constraints: dedupeDescriptors(constraints),
+    sourceConstraints: normalizedSourceConstraints,
+    actionConstraints: normalizedActionConstraints,
     missingInputs: normalizedMissingInputs,
     setupGaps: normalizedSetupGaps,
     policyGaps: normalizedPolicyGaps,

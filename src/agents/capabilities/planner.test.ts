@@ -37,6 +37,11 @@ describe("capability planner", () => {
         (result) => result.connectorId === "platform:gmail-hook" && result.probeKind === "status",
       )?.status,
     ).toBe("blocked");
+    expect(plan.topology.mode).toBe("single-agent");
+    expect(
+      plan.alternatives.find((alternative) => alternative.requirementId === "message-output")
+        ?.candidates.length,
+    ).toBeGreaterThan(0);
   });
 
   it("marks configured integrations as authenticated or configured", () => {
@@ -80,6 +85,10 @@ describe("capability planner", () => {
         (result) => result.connectorId === "platform:gmail-hook" && result.probeKind === "status",
       )?.status,
     ).toBe("passed");
+    expect(
+      plan.alternatives.find((alternative) => alternative.requirementId === "message-output")
+        ?.selectedConnectorIds,
+    ).toContain("channel:telegram");
   });
 
   it("selects approval and browser connectors for delegated risky actions", () => {
@@ -115,5 +124,62 @@ describe("capability planner", () => {
     expect(
       plan.setupTasks.find((task) => task.connectorId === "platform:exec-approvals")?.kind,
     ).toBe("policy");
+    expect(plan.topology.mode).toBe("multi-agent");
+  });
+
+  it("keeps explicit fallback candidates per requirement", () => {
+    const requirements = buildRequirementSet({
+      brief: "Create a daily summary bot that sends the result to Telegram.",
+      cfg: {},
+    });
+    const plan = buildRequirementPlannerResult({
+      requirements,
+      cfg: {},
+    });
+
+    const outputAlternatives = plan.alternatives.find(
+      (alternative) => alternative.requirementId === "message-output",
+    );
+    expect(outputAlternatives?.selectedConnectorIds).toEqual(["channel:telegram"]);
+    expect(outputAlternatives?.candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          connectorId: "channel:telegram",
+          selected: true,
+          source: "explicit",
+        }),
+      ]),
+    );
+  });
+
+  it("switches to a multi-agent topology when delegation is explicit", () => {
+    const requirements = buildRequirementSet({
+      brief:
+        "Create a webhook-driven agent that reads PDFs from my workspace, checks memory for prior context, and spawns a subagent to summarize them.",
+      cfg: {
+        hooks: {
+          token: "hook-token",
+        },
+      },
+    });
+    const plan = buildRequirementPlannerResult({
+      requirements,
+      cfg: {
+        hooks: {
+          token: "hook-token",
+        },
+      },
+    });
+
+    expect(requirements.sourceConstraints.map((constraint) => constraint.id)).toEqual(
+      expect.arrayContaining(["source:file", "source:memory"]),
+    );
+    expect(requirements.actionConstraints.map((constraint) => constraint.id)).toContain(
+      "action:delegate-subagent",
+    );
+    expect(plan.topology.mode).toBe("multi-agent");
+    expect(plan.topology.roles.map((role) => role.id)).toEqual(
+      expect.arrayContaining(["coordinator", "worker"]),
+    );
   });
 });

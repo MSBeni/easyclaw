@@ -42,7 +42,11 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
     `Requirement confidence: ${draft.requirements.confidence}`,
     `Workflow goal: ${draft.requirements.workflow.primaryGoal}`,
     `Workflow mode: ${draft.requirements.workflow.executionMode}`,
+    `Runtime topology: ${draft.planning.topology.mode}`,
   ];
+  if (draft.planning.topology.reason) {
+    lines.push(`Topology reason: ${draft.planning.topology.reason}`);
+  }
   if (draft.requirements.intentTags.length > 0) {
     lines.push(`Intent tags: ${draft.requirements.intentTags.join(", ")}`);
   }
@@ -95,6 +99,21 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
       lines.push(
         `- ${selection.requirementLabel}: ${selection.connectorLabel} (${selection.connectorId}, ${selection.source})`,
       );
+    }
+  }
+  if (draft.planning.alternatives.length > 0) {
+    lines.push("Connector alternatives:");
+    for (const alternative of draft.planning.alternatives) {
+      const fallbackLabels = alternative.candidates
+        .filter((candidate) => !candidate.selected)
+        .map(
+          (candidate) =>
+            `${candidate.connectorLabel} (${candidate.source}, ${candidate.readiness})`,
+        );
+      if (fallbackLabels.length === 0) {
+        continue;
+      }
+      lines.push(`- ${alternative.requirementLabel}: ${fallbackLabels.join("; ")}`);
     }
   }
   if (draft.planning.integrations.length > 0) {

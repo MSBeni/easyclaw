@@ -385,6 +385,8 @@ export function renderBuilder(props: BuilderProps) {
                 </div>
                 <div class="builder-grid">
                   ${builderSelectionList(draft.planning.selections)}
+                  ${builderTopologyCard(draft.planning.topology)}
+                  ${builderAlternativeList(draft.planning.alternatives)}
                   ${builderIntegrationList(state, draft.planning.integrations)}
                   ${builderSetupTaskList(state, draft.planning.setupTasks)}
                   ${builderVerificationList(state, draft.planning.verifications)}
@@ -682,6 +684,72 @@ function builderSelectionList(
           </div>
         `,
       )}
+    </div>
+  `;
+}
+
+function builderTopologyCard(topology: {
+  mode: string;
+  reason: string;
+  roles: Array<{ label: string; responsibilities: string[] }>;
+}) {
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Runtime Topology</div>
+      <div class="tpl-note">
+        <span class="tpl-pill tpl-pill--muted">${topology.mode}</span>
+        ${topology.reason}
+      </div>
+      ${topology.roles.map(
+        (role) => html`
+          <div class="tpl-note">
+            <strong>${role.label}:</strong> ${role.responsibilities.join(" ")}
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
+
+function builderAlternativeList(
+  values: Array<{
+    requirementLabel: string;
+    candidates: Array<{
+      connectorLabel: string;
+      connectorId: string;
+      source: string;
+      selected: boolean;
+      readiness: string;
+    }>;
+  }>,
+) {
+  const interesting = values.filter((value) =>
+    value.candidates.some((candidate) => !candidate.selected),
+  );
+  if (interesting.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Fallbacks</div>
+      ${interesting.map((value) => {
+        const fallbacks = value.candidates.filter((candidate) => !candidate.selected);
+        return html`
+          <div class="tpl-note">
+            <strong>${value.requirementLabel}:</strong>
+            ${fallbacks.map(
+              (candidate) => html`
+                <span>
+                  ${candidate.connectorLabel}
+                  <span class="mono">(${candidate.connectorId})</span>
+                  <span class="tpl-pill tpl-pill--muted">${candidate.source}</span>
+                  <span class="tpl-pill tpl-pill--muted">${candidate.readiness}</span>
+                </span>
+              `,
+            )}
+          </div>
+        `;
+      })}
     </div>
   `;
 }

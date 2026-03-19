@@ -67,6 +67,28 @@ export type BuilderDraftSummary = {
       connectorLabel: string;
       source: "explicit" | "preferred" | "fallback";
     }>;
+    alternatives: Array<{
+      requirementId: string;
+      requirementLabel: string;
+      contractIds: string[];
+      selectedConnectorIds: string[];
+      candidates: Array<{
+        connectorId: string;
+        connectorLabel: string;
+        source: "explicit" | "preferred" | "fallback";
+        selected: boolean;
+        readiness:
+          | "discovered"
+          | "install_required"
+          | "installed"
+          | "configured"
+          | "authenticated"
+          | "verified"
+          | "degraded"
+          | "failed";
+        reason: string;
+      }>;
+    }>;
     integrations: Array<{
       connectorId: string;
       instanceId: string;
@@ -110,6 +132,17 @@ export type BuilderDraftSummary = {
       source: "preflight" | "persisted" | "live";
       checkedAt?: string;
     }>;
+    topology: {
+      mode: "single-agent" | "multi-agent";
+      reason: string;
+      roles: Array<{
+        id: string;
+        label: string;
+        contractIds: string[];
+        connectorIds: string[];
+        responsibilities: string[];
+      }>;
+    };
   };
   extracted: {
     agentId: string;

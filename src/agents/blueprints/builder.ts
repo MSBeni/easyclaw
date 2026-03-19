@@ -61,9 +61,11 @@ export type AgentBlueprintBuilderDraftSummary = {
   requirements: RequirementSet;
   planning: {
     selections: RequirementPlannerSelection[];
+    alternatives: RequirementPlannerResult["alternatives"];
     integrations: PlannedIntegrationInstance[];
     setupTasks: PlannedSetupTask[];
     verifications: PlannedVerificationResult[];
+    topology: RequirementPlannerResult["topology"];
   };
   extracted: {
     agentId: string;
@@ -627,6 +629,11 @@ function applyPlannerWorkflowShape(
     next.runtime.subagents = {
       enabled: false,
     };
+  } else if (params.planning.topology.mode === "multi-agent") {
+    next.runtime.subagents = {
+      enabled: true,
+    };
+    assumptions.push(`Planned a multi-agent runtime: ${params.planning.topology.reason}`);
   }
 
   return { bundle: next, assumptions, questions };
@@ -735,9 +742,11 @@ function withDraftPlanning(
     ready: planning.status === "ready",
     planning: {
       selections: planning.selections,
+      alternatives: planning.alternatives,
       integrations: planning.integrations,
       setupTasks: planning.setupTasks,
       verifications: planning.verifications,
+      topology: planning.topology,
     },
   };
 }
@@ -835,9 +844,11 @@ function buildAgentBlueprintDraftInternal(params: {
     requirements,
     planning: {
       selections: planning.selections,
+      alternatives: planning.alternatives,
       integrations: planning.integrations,
       setupTasks: planning.setupTasks,
       verifications: planning.verifications,
+      topology: planning.topology,
     },
     extracted: {
       agentId: normalizeAgentId(bundle.agent.agentId),
