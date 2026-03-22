@@ -231,11 +231,10 @@ export function renderBuilder(props: BuilderProps) {
   return html`
     <div class="builder-layout">
       <section class="card">
-        <div class="card-title section-title">Describe The Agent</div>
+        <div class="card-title section-title">Describe the Agent</div>
         <div class="card-sub" style="margin-bottom:12px;">
-          Write the job in plain English. The builder will extract requirements, choose the
-          closest starter template, and show whether the workflow is ready, needs setup, or still
-          needs policy/input before apply.
+          Write the job in plain English. The builder extracts requirements, picks the best
+          starter template, and shows what's ready, what needs setup, and what's blocked.
         </div>
 
         <label class="field builder-brief-field" style="margin-bottom:12px;">
@@ -345,17 +344,20 @@ export function renderBuilder(props: BuilderProps) {
                     ${formatPlannerStatus(draft.plannerStatus)}
                   </span>
                 </div>
-                ${
-                  draft.requirements.intentTags.length > 0
-                    ? html`
-                        <div class="builder-intent-tags">
-                          ${draft.requirements.intentTags.map(
-                            (tag) => html`<span class="tpl-pill tpl-pill--muted">${tag}</span>`,
-                          )}
-                        </div>
-                      `
-                    : nothing
-                }
+                <div class="builder-intent-tags">
+                  ${draft.requirements.intentTags.map(
+                    (tag) => html`<span class="tpl-pill tpl-pill--muted">${tag}</span>`,
+                  )}
+                  <span class="tpl-pill tpl-pill--muted">
+                    ${draft.requirements.workflow.primaryGoal}
+                  </span>
+                  <span class="tpl-pill tpl-pill--muted">
+                    ${draft.requirements.workflow.executionMode}
+                  </span>
+                  <span class="tpl-pill tpl-pill--muted">
+                    extraction ${draft.requirements.confidence}
+                  </span>
+                </div>
                 <div class="builder-grid">
                   ${builderRequirementList("Triggers", draft.requirements.triggers)}
                   ${builderRequirementList("Inputs", draft.requirements.inputs)}
@@ -364,17 +366,48 @@ export function renderBuilder(props: BuilderProps) {
                   ${builderRequirementList("Outputs", draft.requirements.outputs)}
                   ${builderRequirementList("Policies", draft.requirements.policies)}
                   ${builderRequirementList("Constraints", draft.requirements.constraints)}
+                  ${builderList("Ambiguities", draft.requirements.ambiguities)}
+                  ${builderList(
+                    "Missing Data",
+                    draft.requirements.missingDataFields.map((value) =>
+                      formatMissingDataField(value),
+                    ),
+                  )}
+                  ${builderList("Unsupported Requests", draft.requirements.unsupportedRequests)}
                 </div>
                 ${renderGaps(state, draft)}
               </section>
 
               <section class="card">
                 <div class="builder-header">
-                  <div class="card-title section-title">Connector Plan</div>
+                  <div class="card-title section-title">Architecture</div>
                 </div>
-                <div class="builder-grid">
+                <div class="builder-grid builder-grid--2col">
+                  ${builderTopologyCard(draft.planning.topology)}
+                  ${builderRuntimeGraphList(draft.planning.graph)}
+                </div>
+                ${
+                  draft.planning.variants.length > 0 ||
+                  draft.planning.alternatives.some((a) => a.candidates.some((c) => !c.selected))
+                    ? html`
+                        <div class="builder-grid builder-grid--2col" style="margin-top:4px;">
+                          ${builderVariantList(draft.planning.variants)}
+                          ${builderAlternativeList(draft.planning.alternatives)}
+                        </div>
+                      `
+                    : nothing
+                }
+              </section>
+
+              <section class="card">
+                <div class="builder-header">
+                  <div class="card-title section-title">Integrations &amp; Setup</div>
+                </div>
+                <div class="builder-grid builder-grid--2col">
                   ${builderSelectionList(draft.planning.selections)}
                   ${builderIntegrationList(state, draft.planning.integrations)}
+                </div>
+                <div class="builder-grid builder-grid--2col" style="margin-top:4px;">
                   ${builderSetupTaskList(state, draft.planning.setupTasks)}
                   ${builderVerificationList(state, draft.planning.verifications)}
                 </div>
@@ -411,6 +444,7 @@ export function renderBuilder(props: BuilderProps) {
                         <div class="card-sub">No blueprint compilation issues were detected.</div>
                       `
                 }
+                ${builderGraphPlanList(planResult?.graphPlans ?? [])}
               </section>
 
               ${renderBuilderApplySection(props, state, draft, blueprintStatus)}
@@ -439,6 +473,24 @@ function renderBuilderApplySection(
           ${kv("Name", result.agent.name)}
           ${kv("Workspace", result.agent.workspaceDir)}
         </div>
+        ${
+          state.builderApplyResult.graphResults.length > 1
+            ? html`
+                <div class="label" style="margin-top:12px;">Runtime Graph Nodes</div>
+                ${state.builderApplyResult.graphResults.map(
+                  (node) => html`
+                    <div class="tpl-plan-file">
+                      <span>
+                        ${node.entry ? "Entry" : "Worker"} ${node.roleId}
+                        <span class="mono">(${node.result.agent.agentId})</span>
+                      </span>
+                      <span class="tpl-pill tpl-pill--ok">${node.result.status}</span>
+                    </div>
+                  `,
+                )}
+              `
+            : nothing
+        }
         ${
           result.workspace.files.length > 0
             ? html`
@@ -549,6 +601,14 @@ function builderList(title: string, values: string[]) {
       ${values.map((value) => html`<div class="tpl-note">${value}</div>`)}
     </div>
   `;
+}
+
+function formatMissingDataField(value: string): string {
+  return value
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function builderQuestionList(questions: Array<{ prompt: string; required: boolean }>) {
@@ -663,6 +723,221 @@ function builderSelectionList(
           </div>
         `,
       )}
+    </div>
+  `;
+}
+
+function builderTopologyCard(topology: {
+  mode: string;
+  reason: string;
+  roles: Array<{ label: string; responsibilities: string[] }>;
+}) {
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Runtime Topology</div>
+      <div class="tpl-note">
+        <span class="tpl-pill tpl-pill--muted">${topology.mode}</span>
+        ${topology.reason}
+      </div>
+      ${topology.roles.map(
+        (role) => html`
+          <div class="tpl-note">
+            <strong>${role.label}:</strong> ${role.responsibilities.join(" ")}
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
+
+function builderAlternativeList(
+  values: Array<{
+    requirementLabel: string;
+    candidates: Array<{
+      connectorLabel: string;
+      connectorId: string;
+      source: string;
+      selected: boolean;
+      readiness: string;
+    }>;
+  }>,
+) {
+  const interesting = values.filter((value) =>
+    value.candidates.some((candidate) => !candidate.selected),
+  );
+  if (interesting.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Fallbacks</div>
+      ${interesting.map((value) => {
+        const fallbacks = value.candidates.filter((candidate) => !candidate.selected);
+        return html`
+          <div class="tpl-note">
+            <strong>${value.requirementLabel}:</strong>
+            ${fallbacks.map(
+              (candidate) => html`
+                <span>
+                  ${candidate.connectorLabel}
+                  <span class="mono">(${candidate.connectorId})</span>
+                  <span class="tpl-pill tpl-pill--muted">${candidate.source}</span>
+                  <span class="tpl-pill tpl-pill--muted">${candidate.readiness}</span>
+                </span>
+              `,
+            )}
+          </div>
+        `;
+      })}
+    </div>
+  `;
+}
+
+function builderVariantList(
+  values: Array<{
+    label: string;
+    selected: boolean;
+    status: string;
+    reason: string;
+    connectorIds: string[];
+    topology: { mode: string };
+  }>,
+) {
+  if (values.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Plan Variants</div>
+      ${values.map(
+        (value) => html`
+          <div class="tpl-note">
+            <strong>${value.selected ? "Selected" : value.label}:</strong>
+            ${value.selected ? value.label : ""}
+            <span class="tpl-pill ${plannerStatusPillClass(value.status)}">${formatPlannerStatus(value.status)}</span>
+            <span class="tpl-pill tpl-pill--muted">${value.topology.mode}</span>
+          </div>
+          <div class="tpl-note">${value.reason}</div>
+          ${
+            value.connectorIds.length > 0
+              ? html`
+                  <div class="tpl-note">
+                    <span class="mono">${value.connectorIds.join(", ")}</span>
+                  </div>
+                `
+              : nothing
+          }
+        `,
+      )}
+    </div>
+  `;
+}
+
+function builderRuntimeGraphList(graph: {
+  mode: string;
+  nodes: Array<{
+    id: string;
+    label: string;
+    entry: boolean;
+    templateId: string;
+    agentId: string;
+    interactionMode: string;
+    connectorIds: string[];
+    responsibilities: string[];
+    deliveryTarget: string | null;
+    schedule: string | null;
+  }>;
+  edges: Array<{ fromNodeId: string; toNodeId: string; kind: string; label: string }>;
+}) {
+  if (graph.nodes.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Runtime Graph</div>
+      <div class="tpl-note">
+        <span class="tpl-pill tpl-pill--muted">${graph.mode}</span>
+        ${graph.nodes.length} node${graph.nodes.length === 1 ? "" : "s"}
+      </div>
+      ${graph.nodes.map(
+        (node) => html`
+          <div class="tpl-note">
+            <strong>${node.entry ? "Entry" : node.label}:</strong>
+            ${node.agentId}
+            <span class="tpl-pill tpl-pill--muted">${node.templateId}</span>
+            <span class="tpl-pill tpl-pill--muted">${node.interactionMode}</span>
+          </div>
+          ${
+            node.responsibilities.length > 0
+              ? html`<div class="tpl-note">${node.responsibilities.join(" ")}</div>`
+              : nothing
+          }
+          ${
+            node.connectorIds.length > 0
+              ? html`<div class="tpl-note"><span class="mono">${node.connectorIds.join(", ")}</span></div>`
+              : nothing
+          }
+          ${
+            node.deliveryTarget || node.schedule
+              ? html`
+                  <div class="tpl-note">
+                    ${node.deliveryTarget ? `delivery ${node.deliveryTarget}` : ""}
+                    ${node.deliveryTarget && node.schedule ? " · " : ""}
+                    ${node.schedule ? `schedule ${node.schedule}` : ""}
+                  </div>
+                `
+              : nothing
+          }
+        `,
+      )}
+      ${
+        graph.edges.length > 0
+          ? html`
+              <div class="label" style="margin:8px 0 4px;">Edges</div>
+              ${graph.edges.map(
+                (edge) => html`
+                  <div class="tpl-note">
+                    <span class="mono">${edge.fromNodeId}</span> ${edge.kind}
+                    <span class="mono">${edge.toNodeId}</span> ${edge.label}
+                  </div>
+                `,
+              )}
+            `
+          : nothing
+      }
+    </div>
+  `;
+}
+
+function builderGraphPlanList(
+  graphPlans: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    templateId: string;
+    plan: Record<string, unknown>;
+  }>,
+) {
+  if (graphPlans.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="builder-grid" style="margin-top:12px;">
+      <div>
+        <div class="label" style="margin-bottom:8px;">Node Plans</div>
+        ${graphPlans.map((node) => {
+          const status = readString(asObject(node.plan), "status", "ready");
+          return html`
+            <div class="tpl-plan-file">
+              <span>
+                ${node.entry ? "Entry" : "Worker"} ${node.roleId}
+                <span class="mono">(${node.templateId})</span>
+              </span>
+              <span class="tpl-pill ${status === "ready" ? "tpl-pill--ok" : "tpl-pill--error"}">${status}</span>
+            </div>
+          `;
+        })}
+      </div>
     </div>
   `;
 }

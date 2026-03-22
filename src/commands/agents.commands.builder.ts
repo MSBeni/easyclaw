@@ -39,7 +39,14 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
     `Builder selection: ${draft.displayName} (${draft.templateId})`,
     `Confidence: ${draft.confidence}`,
     `Planner status: ${draft.plannerStatus}`,
+    `Requirement confidence: ${draft.requirements.confidence}`,
+    `Workflow goal: ${draft.requirements.workflow.primaryGoal}`,
+    `Workflow mode: ${draft.requirements.workflow.executionMode}`,
+    `Runtime topology: ${draft.planning.topology.mode}`,
   ];
+  if (draft.planning.topology.reason) {
+    lines.push(`Topology reason: ${draft.planning.topology.reason}`);
+  }
   if (draft.requirements.intentTags.length > 0) {
     lines.push(`Intent tags: ${draft.requirements.intentTags.join(", ")}`);
   }
@@ -69,9 +76,12 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
     ["Outputs", draft.requirements.outputs.map((entry) => entry.detail)],
     ["Policies", draft.requirements.policies.map((entry) => entry.detail)],
     ["Constraints", draft.requirements.constraints.map((entry) => entry.detail)],
+    ["Ambiguities", draft.requirements.ambiguities],
+    ["Missing data", draft.requirements.missingDataFields],
     ["Needs input", draft.requirements.missingInputs.map((entry) => entry.message)],
     ["Needs setup", draft.requirements.setupGaps.map((entry) => entry.message)],
     ["Needs policy", draft.requirements.policyGaps.map((entry) => entry.message)],
+    ["Unsupported requests", draft.requirements.unsupportedRequests],
     ["Unsupported", draft.requirements.unsupportedGaps.map((entry) => entry.message)],
   ];
   for (const [label, values] of requirementSections) {
@@ -89,6 +99,34 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
       lines.push(
         `- ${selection.requirementLabel}: ${selection.connectorLabel} (${selection.connectorId}, ${selection.source})`,
       );
+    }
+  }
+  if (draft.planning.alternatives.length > 0) {
+    lines.push("Connector alternatives:");
+    for (const alternative of draft.planning.alternatives) {
+      const fallbackLabels = alternative.candidates
+        .filter((candidate) => !candidate.selected)
+        .map(
+          (candidate) =>
+            `${candidate.connectorLabel} (${candidate.source}, ${candidate.readiness})`,
+        );
+      if (fallbackLabels.length === 0) {
+        continue;
+      }
+      lines.push(`- ${alternative.requirementLabel}: ${fallbackLabels.join("; ")}`);
+    }
+  }
+  if (draft.planning.variants.length > 0) {
+    lines.push("Plan variants:");
+    for (const variant of draft.planning.variants) {
+      const connectorSummary = variant.connectorIds.join(", ");
+      lines.push(
+        `- ${variant.selected ? "[selected] " : ""}${variant.label}: ${variant.status} / ${variant.topology.mode}`,
+      );
+      lines.push(`  ${variant.reason}`);
+      if (connectorSummary) {
+        lines.push(`  connectors: ${connectorSummary}`);
+      }
     }
   }
   if (draft.planning.integrations.length > 0) {
@@ -122,6 +160,24 @@ function formatBuilderDraft(draft: AgentBlueprintBuilderDraftSummary): string {
         `- ${result.connectorLabel} / ${result.probeLabel}: ${result.status} (${source}${suffix})`,
       );
       lines.push(`  ${result.detail}`);
+    }
+  }
+  if (draft.planning.graph.nodes.length > 0) {
+    lines.push("Runtime graph:");
+    for (const node of draft.planning.graph.nodes) {
+      lines.push(
+        `- ${node.entry ? "[entry] " : ""}${node.label}: ${node.name} (${node.agentId}) via ${node.templateId}`,
+      );
+      lines.push(`  mode: ${node.interactionMode}`);
+      if (node.deliveryTarget) {
+        lines.push(`  delivery: ${node.deliveryTarget}`);
+      }
+      if (node.schedule) {
+        lines.push(`  schedule: ${node.schedule}`);
+      }
+      if (node.connectorIds.length > 0) {
+        lines.push(`  connectors: ${node.connectorIds.join(", ")}`);
+      }
     }
   }
   lines.push("Extracted:");
@@ -159,6 +215,27 @@ function formatVerificationSummary(run: {
   ].join("\n");
 }
 
+function formatGraphPlans(
+  graphPlans: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    templateId: string;
+    plan: { status: string };
+  }>,
+): string | null {
+  if (graphPlans.length === 0) {
+    return null;
+  }
+  return [
+    "Runtime graph plans:",
+    ...graphPlans.map(
+      (node) =>
+        `- ${node.entry ? "[entry] " : ""}${node.roleId} via ${node.templateId}: ${node.plan.status}`,
+    ),
+  ].join("\n");
+}
+
 export async function agentsBuilderPlanCommand(
   opts: AgentsBuilderPlanOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -175,7 +252,12 @@ export async function agentsBuilderPlanCommand(
       return;
     }
     runtime.log(
-      [formatBuilderDraft(result.draft), "", formatAgentBlueprintPlan(result.plan)].join("\n"),
+      [
+        formatBuilderDraft(result.draft),
+        "",
+        formatAgentBlueprintPlan(result.plan),
+        ...(formatGraphPlans(result.graphPlans) ? ["", formatGraphPlans(result.graphPlans)!] : []),
+      ].join("\n"),
     );
     if (result.draft.plannerStatus !== "ready" || result.plan.status !== "ready") {
       runtime.exit(1);
@@ -209,7 +291,23 @@ export async function agentsBuilderApplyCommand(
       return;
     }
     runtime.log(
-      [formatBuilderDraft(result.draft), "", formatApplySummary(result.result)].join("\n"),
+      [
+        formatBuilderDraft(result.draft),
+        "",
+        formatApplySummary(result.result),
+        ...(result.graphResults.length > 1
+          ? [
+              "",
+              [
+                "Runtime graph apply:",
+                ...result.graphResults.map(
+                  (node) =>
+                    `- ${node.entry ? "[entry] " : ""}${node.roleId}: ${node.result.agent.agentId}`,
+                ),
+              ].join("\n"),
+            ]
+          : []),
+      ].join("\n"),
     );
   } catch (error) {
     runtime.error(error instanceof Error ? error.message : String(error));
@@ -239,6 +337,7 @@ export async function agentsBuilderVerifyCommand(
         formatVerificationSummary(result.verification),
         "",
         formatAgentBlueprintPlan(result.plan),
+        ...(formatGraphPlans(result.graphPlans) ? ["", formatGraphPlans(result.graphPlans)!] : []),
       ].join("\n"),
     );
     if (result.verification.failedCount > 0 || result.verification.blockedCount > 0) {

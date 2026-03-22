@@ -24,6 +24,17 @@ export type BuilderDraftSummary = {
   }>;
   ready: boolean;
   requirements: {
+    confidence: "low" | "medium" | "high";
+    workflow: {
+      primaryGoal: "assistant" | "briefing" | "operator" | "research" | "support";
+      executionMode: "bound-channel" | "direct" | "hybrid" | "scheduled" | "webhook";
+      triggerKinds: string[];
+      sourceKinds: string[];
+      transformKinds: string[];
+      actionKinds: string[];
+      deliveryKinds: string[];
+      requiresApproval: boolean;
+    };
     intentTags: string[];
     triggers: Array<{ detail: string }>;
     inputs: Array<{ detail: string }>;
@@ -37,6 +48,15 @@ export type BuilderDraftSummary = {
     setupGaps: Array<{ code: string; message: string }>;
     policyGaps: Array<{ code: string; message: string }>;
     unsupportedGaps: Array<{ code: string; message: string }>;
+    ambiguities: string[];
+    unsupportedRequests: string[];
+    unsupportedClassifications: Array<{
+      code: string;
+      kind: "action" | "capability" | "connector" | "delivery" | "policy";
+      label: string;
+      detail: string;
+    }>;
+    missingDataFields: string[];
   };
   planning: {
     selections: Array<{
@@ -46,6 +66,63 @@ export type BuilderDraftSummary = {
       connectorId: string;
       connectorLabel: string;
       source: "explicit" | "preferred" | "fallback";
+    }>;
+    alternatives: Array<{
+      requirementId: string;
+      requirementLabel: string;
+      contractIds: string[];
+      selectedConnectorIds: string[];
+      candidates: Array<{
+        connectorId: string;
+        connectorLabel: string;
+        source: "explicit" | "preferred" | "fallback";
+        selected: boolean;
+        readiness:
+          | "discovered"
+          | "install_required"
+          | "installed"
+          | "configured"
+          | "authenticated"
+          | "verified"
+          | "degraded"
+          | "failed";
+        reason: string;
+      }>;
+    }>;
+    variants: Array<{
+      id: string;
+      label: string;
+      reason: string;
+      selected: boolean;
+      status:
+        | "ready"
+        | "needs_input"
+        | "needs_setup"
+        | "partial"
+        | "unsupported"
+        | "unsafe_without_policy"
+        | "blocked";
+      score: number;
+      selections: Array<{
+        requirementId: string;
+        requirementLabel: string;
+        contractIds: string[];
+        connectorId: string;
+        connectorLabel: string;
+        source: "explicit" | "preferred" | "fallback";
+      }>;
+      connectorIds: string[];
+      topology: {
+        mode: "single-agent" | "multi-agent";
+        reason: string;
+        roles: Array<{
+          id: string;
+          label: string;
+          contractIds: string[];
+          connectorIds: string[];
+          responsibilities: string[];
+        }>;
+      };
     }>;
     integrations: Array<{
       connectorId: string;
@@ -90,6 +167,42 @@ export type BuilderDraftSummary = {
       source: "preflight" | "persisted" | "live";
       checkedAt?: string;
     }>;
+    topology: {
+      mode: "single-agent" | "multi-agent";
+      reason: string;
+      roles: Array<{
+        id: string;
+        label: string;
+        contractIds: string[];
+        connectorIds: string[];
+        responsibilities: string[];
+      }>;
+    };
+    graph: {
+      mode: "single-agent" | "multi-agent";
+      entryNodeId: string;
+      nodes: Array<{
+        id: string;
+        roleId: string;
+        label: string;
+        templateId: string;
+        entry: boolean;
+        agentId: string;
+        name: string;
+        interactionMode: string;
+        connectorIds: string[];
+        responsibilities: string[];
+        deliveryTarget: string | null;
+        schedule: string | null;
+      }>;
+      edges: Array<{
+        id: string;
+        fromNodeId: string;
+        toNodeId: string;
+        kind: "delegates" | "reports";
+        label: string;
+      }>;
+    };
   };
   extracted: {
     agentId: string;
@@ -104,6 +217,13 @@ export type BuilderDraftSummary = {
 export type BuilderPlanResult = {
   draft: BuilderDraftSummary;
   plan: Record<string, unknown>;
+  graphPlans: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    templateId: string;
+    plan: Record<string, unknown>;
+  }>;
 };
 
 export type BuilderApplyResult = {
@@ -123,11 +243,18 @@ export type BuilderApplyResult = {
     automation: { jobs: Array<{ name: string; id: string; status: string }> };
     warnings: Array<{ code: string; message: string }>;
   };
+  graphResults: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    result: BuilderApplyResult["result"];
+  }>;
 };
 
 export type BuilderVerifyResult = {
   draft: BuilderDraftSummary;
   plan: Record<string, unknown>;
+  graphPlans: BuilderPlanResult["graphPlans"];
   verification: {
     fingerprint: string;
     checkedAt: string;
@@ -224,6 +351,7 @@ export async function verifyBuilderPlan(state: BuilderState) {
       state.builderPlan = {
         draft: result.draft,
         plan: result.plan,
+        graphPlans: result.graphPlans,
       };
     }
   } catch (error) {

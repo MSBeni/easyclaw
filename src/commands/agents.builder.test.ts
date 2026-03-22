@@ -58,6 +58,17 @@ describe("agents builder commands", () => {
         ],
         ready: false,
         requirements: {
+          confidence: "medium",
+          workflow: {
+            primaryGoal: "support",
+            executionMode: "bound-channel",
+            triggerKinds: ["chat-ingress"],
+            sourceKinds: [],
+            transformKinds: [],
+            actionKinds: [],
+            deliveryKinds: [],
+            requiresApproval: false,
+          },
           intentTags: ["support"],
           triggers: [],
           inputs: [],
@@ -76,6 +87,10 @@ describe("agents builder commands", () => {
           setupGaps: [],
           policyGaps: [],
           unsupportedGaps: [],
+          ambiguities: ["The workflow looks support-oriented, but no inbound channel was named."],
+          unsupportedRequests: [],
+          unsupportedClassifications: [],
+          missingDataFields: ["binding-channel"],
         },
         planning: {
           selections: [
@@ -88,6 +103,8 @@ describe("agents builder commands", () => {
               source: "explicit",
             },
           ],
+          alternatives: [],
+          variants: [],
           integrations: [
             {
               connectorId: "channel:telegram",
@@ -126,6 +143,17 @@ describe("agents builder commands", () => {
               detail: "channel telegram is not configured",
             },
           ],
+          topology: {
+            mode: "single-agent",
+            reason: "Current constraints fit a single coordinating agent.",
+            roles: [],
+          },
+          graph: {
+            mode: "single-agent",
+            entryNodeId: "primary",
+            nodes: [],
+            edges: [],
+          },
         },
         extracted: {
           agentId: "support",
@@ -174,6 +202,7 @@ describe("agents builder commands", () => {
           successCriteria: [],
         },
       },
+      graphPlans: [],
     });
 
     await agentsBuilderPlanCommand({ brief: "Build me a support bot" }, runtime);
@@ -202,6 +231,17 @@ describe("agents builder commands", () => {
         questions: [],
         ready: true,
         requirements: {
+          confidence: "high",
+          workflow: {
+            primaryGoal: "briefing",
+            executionMode: "scheduled",
+            triggerKinds: ["schedule"],
+            sourceKinds: ["email-source"],
+            transformKinds: ["summary-transform"],
+            actionKinds: [],
+            deliveryKinds: ["report-output"],
+            requiresApproval: false,
+          },
           intentTags: ["scheduled", "summary"],
           triggers: [{ detail: "Run on a recurring schedule." }],
           inputs: [{ detail: "Read messages from a configured Gmail or inbox hook." }],
@@ -215,6 +255,10 @@ describe("agents builder commands", () => {
           setupGaps: [],
           policyGaps: [],
           unsupportedGaps: [],
+          ambiguities: [],
+          unsupportedRequests: [],
+          unsupportedClassifications: [],
+          missingDataFields: [],
         },
         planning: {
           selections: [
@@ -227,6 +271,8 @@ describe("agents builder commands", () => {
               source: "explicit",
             },
           ],
+          alternatives: [],
+          variants: [],
           integrations: [
             {
               connectorId: "tools:automation",
@@ -255,6 +301,17 @@ describe("agents builder commands", () => {
             },
           ],
           verifications: [],
+          topology: {
+            mode: "single-agent",
+            reason: "Current constraints fit a single coordinating agent.",
+            roles: [],
+          },
+          graph: {
+            mode: "single-agent",
+            entryNodeId: "primary",
+            nodes: [],
+            edges: [],
+          },
         },
         extracted: {
           agentId: "daily-briefing",
@@ -302,6 +359,7 @@ describe("agents builder commands", () => {
         automation: { jobs: [] },
         warnings: [],
       },
+      graphResults: [],
     });
 
     await agentsBuilderApplyCommand(
@@ -332,6 +390,17 @@ describe("agents builder commands", () => {
         questions: [],
         ready: false,
         requirements: {
+          confidence: "medium",
+          workflow: {
+            primaryGoal: "support",
+            executionMode: "bound-channel",
+            triggerKinds: ["chat-ingress"],
+            sourceKinds: [],
+            transformKinds: [],
+            actionKinds: [],
+            deliveryKinds: [],
+            requiresApproval: false,
+          },
           intentTags: ["support"],
           triggers: [],
           inputs: [],
@@ -345,9 +414,15 @@ describe("agents builder commands", () => {
           setupGaps: [],
           policyGaps: [],
           unsupportedGaps: [],
+          ambiguities: [],
+          unsupportedRequests: [],
+          unsupportedClassifications: [],
+          missingDataFields: [],
         },
         planning: {
           selections: [],
+          alternatives: [],
+          variants: [],
           integrations: [
             {
               connectorId: "channel:telegram",
@@ -377,6 +452,17 @@ describe("agents builder commands", () => {
               checkedAt: "2026-03-18T12:00:00.000Z",
             },
           ],
+          topology: {
+            mode: "single-agent",
+            reason: "Current constraints fit a single coordinating agent.",
+            roles: [],
+          },
+          graph: {
+            mode: "single-agent",
+            entryNodeId: "primary",
+            nodes: [],
+            edges: [],
+          },
         },
         extracted: {
           agentId: "support",
@@ -434,6 +520,7 @@ describe("agents builder commands", () => {
           successCriteria: [],
         },
       },
+      graphPlans: [],
     });
 
     await agentsBuilderVerifyCommand({ brief: "Create a support bot on Telegram" }, runtime);

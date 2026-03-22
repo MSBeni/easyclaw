@@ -3945,6 +3945,12 @@
   color: var(--muted);
   padding: 2px 0;
   line-height: 1.45;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.tpl-note.mono {
+  word-break: break-all;
 }
 
 .tpl-binding {
@@ -4003,6 +4009,11 @@
   gap: 8px;
   padding: 4px 0;
   font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.tpl-plan-file .mono {
+  word-break: break-all;
 }
 
 /* --- Responsive --- */
@@ -4036,9 +4047,21 @@
 
 .builder-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px 20px;
   margin-top: 12px;
+}
+
+/* Cap at 2 columns for sections with dense content */
+.builder-grid--2col {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  max-width: 100%;
+}
+
+@media (min-width: 720px) {
+  .builder-grid--2col {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .builder-issues {
@@ -4071,6 +4094,13 @@
   gap: 6px;
   margin-top: 8px;
   margin-bottom: 4px;
+}
+
+/* Compact callouts inside builder sections */
+.builder-grid .callout,
+.builder-gaps .callout {
+  padding: 8px 12px;
+  font-size: 12.5px;
 }
 
 /* Gaps section (warnings below requirement grid) */
@@ -4129,6 +4159,17 @@
   color: var(--muted);
 }
 
+/* Builder grid cell inner spacing - visual separation between items */
+.builder-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.builder-grid > div .callout {
+  margin-top: 4px;
+}
+
 /* Builder "Configure →" link buttons */
 .builder-config-link {
   display: inline-flex;
@@ -4164,14 +4205,20 @@
 /* Row inside a callout that holds issue text + configure link */
 .builder-issue-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .builder-issue-row > span {
   flex: 1;
   min-width: 0;
+}
+
+.builder-issue-row > .builder-config-link {
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 
 @media (max-width: 640px) {

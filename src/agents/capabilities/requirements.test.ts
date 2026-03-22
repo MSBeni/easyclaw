@@ -60,6 +60,11 @@ describe("capability requirements", () => {
     expect(requirements.setupGaps.map((gap) => gap.code)).toEqual(
       expect.arrayContaining(["gmail-hook", "channel:slack"]),
     );
+    expect(requirements.confidence).toBe("high");
+    expect(requirements.ambiguities).toEqual([]);
+    expect(requirements.missingDataFields).toEqual([]);
+    expect(requirements.workflow.primaryGoal).toBe("briefing");
+    expect(requirements.workflow.executionMode).toBe("scheduled");
     expect(requirements.plannerStatus).toBe("needs_setup");
   });
 
@@ -73,6 +78,13 @@ describe("capability requirements", () => {
     expect(requirements.actions.map((entry) => entry.id)).toContain("browser-action");
     expect(requirements.policies.map((entry) => entry.id)).toContain("approval-policy");
     expect(requirements.policyGaps.map((gap) => gap.code)).toContain("approval-route");
+    expect(requirements.ambiguities).toContain(
+      "Risky on-behalf actions were requested without an explicit approval mode.",
+    );
+    expect(requirements.missingDataFields).toContain("approval-mode");
+    expect(requirements.confidence).toBe("medium");
+    expect(requirements.workflow.primaryGoal).toBe("operator");
+    expect(requirements.workflow.requiresApproval).toBe(true);
     expect(requirements.plannerStatus).toBe("unsafe_without_policy");
   });
 
@@ -98,6 +110,11 @@ describe("capability requirements", () => {
 
     expect(requirements.setupGaps).toEqual([]);
     expect(requirements.policyGaps).toEqual([]);
+    expect(requirements.confidence).toBe("high");
+    expect(requirements.ambiguities).toEqual([]);
+    expect(requirements.missingDataFields).toEqual([]);
+    expect(requirements.workflow.primaryGoal).toBe("briefing");
+    expect(requirements.workflow.executionMode).toBe("scheduled");
     expect(requirements.plannerStatus).toBe("ready");
   });
 
@@ -137,5 +154,92 @@ describe("capability requirements", () => {
       requirements.outputs.find((entry) => entry.id === "message-output")?.connectorIds,
     ).toContain("channel:zalo");
     expect(requirements.setupGaps.map((gap) => gap.code)).toContain("channel:zalo");
+  });
+
+  it("surfaces ambiguous and missing requirement data explicitly", () => {
+    const requirements = buildRequirementSet({
+      brief: "Create a weekly digest agent.",
+      cfg: {},
+    });
+
+    expect(requirements.ambiguities).toEqual(
+      expect.arrayContaining([
+        "A recurring schedule was requested without an exact time.",
+        "A summary was requested without a clearly stated source of material.",
+        "The workflow implies delivery, but no destination channel was named.",
+      ]),
+    );
+    expect(requirements.missingDataFields).toEqual(
+      expect.arrayContaining(["delivery-destination", "schedule-time", "source-material"]),
+    );
+    expect(requirements.confidence).toBe("low");
+    expect(requirements.workflow.primaryGoal).toBe("briefing");
+  });
+
+  it("reports unsupported outbound email delivery requests explicitly", () => {
+    const requirements = buildRequirementSet({
+      brief: "Create a daily summary and email me the result.",
+      cfg: {},
+    });
+
+    expect(requirements.unsupportedGaps.map((gap) => gap.code)).toContain("email-delivery");
+    expect(requirements.unsupportedRequests).toContain(
+      "Email delivery is not modeled as a supported outbound connector yet.",
+    );
+    expect(requirements.unsupportedClassifications).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "email-delivery",
+          kind: "delivery",
+          label: "Unsupported Delivery",
+        }),
+      ]),
+    );
+    expect(requirements.confidence).toBe("low");
+    expect(requirements.plannerStatus).toBe("unsupported");
+  });
+
+  it("extracts webhook, file, memory, and delegation requirements", () => {
+    const requirements = buildRequirementSet({
+      brief:
+        "Create a webhook-driven agent that reads PDFs from my workspace, checks memory for prior context, and spawns a subagent to summarize them.",
+      cfg: {
+        hooks: {
+          token: "hook-token",
+        },
+      },
+    });
+
+    expect(requirements.triggers.map((entry) => entry.id)).toContain("webhook-ingress");
+    expect(requirements.inputs.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["file-source", "memory-source"]),
+    );
+    expect(requirements.actions.map((entry) => entry.id)).toContain("session-spawn");
+    expect(requirements.workflow.executionMode).toBe("webhook");
+    expect(requirements.workflow.sourceKinds).toEqual(
+      expect.arrayContaining(["file-source", "memory-source"]),
+    );
+  });
+
+  it("flags mixed trigger and mixed workflow combinations explicitly", () => {
+    const requirements = buildRequirementSet({
+      brief:
+        "Create a webhook that also responds to support questions on Telegram and sends a scheduled daily digest.",
+      cfg: {},
+    });
+
+    expect(requirements.unsupportedGaps.map((gap) => gap.code)).toEqual(
+      expect.arrayContaining([
+        "workflow:multi-external-trigger",
+        "workflow:mixed-support-briefing",
+      ]),
+    );
+    expect(requirements.unsupportedRequests).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("multiple external trigger surfaces"),
+        expect.stringContaining("Support-response flows and scheduled briefing"),
+      ]),
+    );
+    expect(requirements.plannerStatus).toBe("partial");
   });
 });
