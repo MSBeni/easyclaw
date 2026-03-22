@@ -36,6 +36,12 @@ const CONFIG_SECTION_MAP: Record<string, ConfigTarget> = {
   channels: {
     tab: "channels",
   },
+  nodes: {
+    tab: "nodes",
+  },
+  logs: {
+    tab: "logs",
+  },
   // Communications tab
   messages: {
     tab: "communications",
@@ -91,6 +97,70 @@ const CONFIG_SECTION_MAP: Record<string, ConfigTarget> = {
   logging: { tab: "config", section: "logging", sectionKey: "configActiveSection" },
 };
 
+const CONNECTOR_SETUP_REF_MAP: Record<string, string> = {
+  "platform:core-model": "models",
+  "platform:exec-approvals": "approvals.exec",
+  "platform:gmail-hook": "hooks.gmail",
+  "platform:observability": "logs",
+  "platform:webhook-runtime": "hooks",
+  "tools:agents": "agents",
+  "tools:automation": "cron",
+  "tools:fs": "tools",
+  "tools:media": "media",
+  "tools:memory": "memory",
+  "tools:messaging": "messages",
+  "tools:nodes": "nodes",
+  "tools:runtime": "tools",
+  "tools:sessions": "session",
+  "tools:ui": "browser",
+  "tools:web": "web",
+};
+
+const CONNECTOR_SETUP_LABEL_MAP: Record<string, string> = {
+  "platform:core-model": "Open model setup",
+  "platform:exec-approvals": "Open approvals setup",
+  "platform:gmail-hook": "Open Gmail hook setup",
+  "platform:observability": "Open logs and debug setup",
+  "platform:webhook-runtime": "Open webhook runtime setup",
+  "tools:agents": "Open agent runtime setup",
+  "tools:automation": "Open automation setup",
+  "tools:fs": "Open file access setup",
+  "tools:media": "Open media setup",
+  "tools:memory": "Open memory setup",
+  "tools:messaging": "Open messaging setup",
+  "tools:nodes": "Open nodes setup",
+  "tools:runtime": "Open runtime tools setup",
+  "tools:sessions": "Open session and subagent setup",
+  "tools:ui": "Open browser and canvas setup",
+  "tools:web": "Open web tools setup",
+};
+
+const REF_SETUP_LABEL_MAP: Record<string, string> = {
+  agents: "Open agent runtime setup",
+  approvals: "Open approvals setup",
+  auth: "Open auth setup",
+  audio: "Open audio setup",
+  bindings: "Open bindings setup",
+  browser: "Open browser setup",
+  broadcast: "Open broadcast setup",
+  channels: "Open channel setup",
+  commands: "Open commands setup",
+  cron: "Open cron setup",
+  env: "Open environment setup",
+  hooks: "Open webhook setup",
+  logging: "Open logging setup",
+  logs: "Open logs and debug setup",
+  memory: "Open memory setup",
+  messages: "Open messaging setup",
+  models: "Open model setup",
+  nodes: "Open nodes setup",
+  session: "Open session and subagent setup",
+  skills: "Open skills setup",
+  talk: "Open voice setup",
+  tools: "Open tool access setup",
+  web: "Open web setup",
+};
+
 /**
  * Map a connectorId like "platform:gmail-hook" or "channel:telegram" to a config ref
  * like "hooks" or "channels.telegram" that can be resolved to a settings section.
@@ -100,15 +170,16 @@ export function connectorIdToConfigRef(connectorId: string): string | null {
     return null;
   }
 
-  // channel:telegram → channels.telegram
   if (connectorId.startsWith("channel:")) {
     return `channels.${connectorId.slice("channel:".length)}`;
   }
-  // platform:gmail-hook, platform:gmail → hooks
+  const explicitRef = CONNECTOR_SETUP_REF_MAP[connectorId];
+  if (explicitRef) {
+    return explicitRef;
+  }
   if (connectorId.includes("gmail") || connectorId.includes("hook")) {
     return "hooks";
   }
-  // platform:core-model, platform:openai, platform:anthropic → models
   if (
     connectorId.includes("model") ||
     connectorId.includes("openai") ||
@@ -118,54 +189,9 @@ export function connectorIdToConfigRef(connectorId: string): string | null {
   ) {
     return "models";
   }
-  if (connectorId.includes("exec-approvals") || connectorId.includes("approval")) {
+  if (connectorId.includes("approval")) {
     return "approvals";
   }
-  // tools:automation, tools:cron → cron
-  if (connectorId.includes("automation") || connectorId.includes("cron")) {
-    return "cron";
-  }
-  // tools:messaging → channels
-  if (connectorId.includes("messaging")) {
-    return "channels";
-  }
-  // tools:browser → browser
-  if (connectorId.includes("browser")) {
-    return "browser";
-  }
-  // tools:memory → memory
-  if (connectorId.includes("memory")) {
-    return "memory";
-  }
-  // tools:skill → skills
-  if (connectorId.includes("skill")) {
-    return "skills";
-  }
-  // tools:command → commands
-  if (connectorId.includes("command")) {
-    return "commands";
-  }
-  // platform:web → web
-  if (connectorId.includes("web")) {
-    return "web";
-  }
-  // platform:signal → channels.signal, platform:discord → channels.discord, etc.
-  const knownChannels = [
-    "telegram",
-    "discord",
-    "slack",
-    "signal",
-    "whatsapp",
-    "imessage",
-    "matrix",
-    "msteams",
-  ];
-  for (const ch of knownChannels) {
-    if (connectorId.includes(ch)) {
-      return `channels.${ch}`;
-    }
-  }
-  // generic: try to extract a section from the id after ":"
   const parts = connectorId.split(":");
   if (parts.length >= 2) {
     const section = parts[1].split("-")[0];
@@ -198,33 +224,26 @@ function titleCaseWords(value: string): string {
 
 export function setupActionLabel(params: {
   connectorId?: string;
+  connectorLabel?: string;
   refs?: string[];
   title?: string;
 }): string {
   const connectorId = params.connectorId?.trim() ?? "";
+  const connectorLabel = params.connectorLabel?.trim() ?? "";
   const refs = params.refs ?? [];
+  const explicitLabel = connectorId ? CONNECTOR_SETUP_LABEL_MAP[connectorId] : null;
+  if (explicitLabel) {
+    return explicitLabel;
+  }
   if (connectorId.startsWith("channel:")) {
-    return `Open ${titleCaseWords(connectorId.slice("channel:".length))} setup`;
+    return `Open ${connectorLabel || titleCaseWords(connectorId.slice("channel:".length))} setup`;
   }
-  if (connectorId.includes("gmail")) {
-    return "Open Gmail hook setup";
+  const firstRef = refs[0]?.split(".")[0];
+  if (firstRef && REF_SETUP_LABEL_MAP[firstRef]) {
+    return REF_SETUP_LABEL_MAP[firstRef];
   }
-  if (connectorId.includes("exec-approvals") || refs.some((ref) => ref.startsWith("approvals"))) {
-    return "Open approvals setup";
-  }
-  if (
-    connectorId.includes("model") ||
-    connectorId.includes("openai") ||
-    connectorId.includes("anthropic") ||
-    refs.some((ref) => ref.startsWith("models"))
-  ) {
-    return "Open model setup";
-  }
-  if (refs.some((ref) => ref.startsWith("hooks"))) {
-    return "Open webhook setup";
-  }
-  if (refs.some((ref) => ref.startsWith("memory")) || connectorId.includes("memory")) {
-    return "Open memory setup";
+  if (connectorLabel) {
+    return `Open ${connectorLabel} setup`;
   }
   return params.title?.trim() ? `Open ${params.title.trim()}` : "Open setup";
 }
@@ -246,6 +265,7 @@ function navigateToConfig(
   refs: string[],
   params?: {
     connectorId?: string;
+    connectorLabel?: string;
     title?: string;
     detail?: string;
   },
@@ -256,6 +276,7 @@ function navigateToConfig(
   }
   const actionTitle = setupActionLabel({
     connectorId: params?.connectorId,
+    connectorLabel: params?.connectorLabel,
     refs,
     title: params?.title,
   });
@@ -1070,11 +1091,16 @@ function builderIntegrationList(
                       @click=${() =>
                         navigateToConfig(state, [configRef], {
                           connectorId: value.connectorId,
+                          connectorLabel: value.label,
                           title: value.label,
                           detail: `${value.label} still needs setup or verification before this workflow can run cleanly.`,
                         })}
                     >
-                      ${setupActionLabel({ connectorId: value.connectorId, refs: [configRef] })}
+                      ${setupActionLabel({
+                        connectorId: value.connectorId,
+                        connectorLabel: value.label,
+                        refs: [configRef],
+                      })}
                       &rarr;
                     </button>
                   `
@@ -1098,11 +1124,16 @@ function builderIntegrationList(
                           @click=${() =>
                             navigateToConfig(state, [configRef], {
                               connectorId: value.connectorId,
+                              connectorLabel: value.label,
                               title: value.label,
                               detail: issue,
                             })}
                         >
-                          ${setupActionLabel({ connectorId: value.connectorId, refs: [configRef] })}
+                          ${setupActionLabel({
+                            connectorId: value.connectorId,
+                            connectorLabel: value.label,
+                            refs: [configRef],
+                          })}
                           &rarr;
                         </button>
                       `
@@ -1124,6 +1155,7 @@ function builderSetupTaskList(
     detail: string;
     status: string;
     connectorId: string;
+    connectorLabel: string;
     refs: string[];
   }>,
 ) {
@@ -1155,12 +1187,14 @@ function builderSetupTaskList(
                       @click=${() =>
                         navigateToConfig(state, navRefs, {
                           connectorId: value.connectorId,
+                          connectorLabel: value.connectorLabel,
                           title: value.title,
                           detail: value.detail,
                         })}
                     >
                       ${setupActionLabel({
                         connectorId: value.connectorId,
+                        connectorLabel: value.connectorLabel,
                         refs: navRefs,
                         title: value.title,
                       })} &rarr;
@@ -1229,11 +1263,16 @@ function builderVerificationList(
                       @click=${() =>
                         navigateToConfig(state, [configRef], {
                           connectorId: value.connectorId,
+                          connectorLabel: value.connectorLabel,
                           title: value.probeLabel,
                           detail: value.detail,
                         })}
                     >
-                      ${setupActionLabel({ connectorId: value.connectorId, refs: [configRef] })}
+                      ${setupActionLabel({
+                        connectorId: value.connectorId,
+                        connectorLabel: value.connectorLabel,
+                        refs: [configRef],
+                      })}
                       &rarr;
                     </button>
                   `
