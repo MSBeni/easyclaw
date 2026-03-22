@@ -419,8 +419,10 @@ function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   }
   const channelsNode = asSchemaObject(root.properties.channels);
   if (channelsNode) {
-    channelsNode.properties = {};
-    channelsNode.required = [];
+    // Keep bundled channel schemas available as a fallback so the Control UI
+    // can still render core channel setup forms even if runtime channel
+    // metadata is incomplete during schema assembly.
+    channelsNode.properties ??= {};
     channelsNode.additionalProperties = true;
   }
   return next;

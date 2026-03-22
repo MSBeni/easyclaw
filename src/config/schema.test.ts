@@ -96,6 +96,9 @@ describe("config schema", () => {
     expect(schema.properties?.gateway).toBeTruthy();
     expect(schema.properties?.agents).toBeTruthy();
     expect(schema.properties?.acp).toBeTruthy();
+    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
+    const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
+    expect(channelProps?.telegram).toBeTruthy();
     expect(schema.properties?.$schema).toBeUndefined();
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
