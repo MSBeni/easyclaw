@@ -79,7 +79,13 @@ import {
 import "./components/dashboard-header.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import {
+  normalizeBasePath,
+  TAB_GROUPS,
+  subtitleForTab,
+  titleForTab,
+  type Tab,
+} from "./navigation.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -267,6 +273,34 @@ type AppearanceSectionKey = (typeof APPEARANCE_SECTION_KEYS)[number];
 type AutomationSectionKey = (typeof AUTOMATION_SECTION_KEYS)[number];
 type InfrastructureSectionKey = (typeof INFRASTRUCTURE_SECTION_KEYS)[number];
 type AiAgentsSectionKey = (typeof AI_AGENTS_SECTION_KEYS)[number];
+
+function renderBuilderSetupNotice(state: AppViewState, tab: Tab) {
+  const focus = state.builderSetupFocus;
+  if (!focus || focus.targetTab !== tab) {
+    return nothing;
+  }
+  return html`
+    <div class="callout info builder-setup-banner">
+      <div class="builder-setup-banner__body">
+        <div class="builder-setup-banner__eyebrow">Builder setup</div>
+        <div class="builder-setup-banner__title">${focus.title}</div>
+        <div class="builder-setup-banner__detail">${focus.detail}</div>
+        <div class="builder-setup-banner__hint">
+          Save or apply your changes here, then return to Builder and run Rebuild or Run Live
+          Verification.
+        </div>
+      </div>
+      <div class="builder-setup-banner__actions">
+        <button class="builder-config-link" @click=${() => state.setTab("builder")}>
+          Return to Builder
+        </button>
+        <button class="btn btn--sm" @click=${() => (state.builderSetupFocus = null)}>
+          Dismiss
+        </button>
+      </div>
+    </div>
+  `;
+}
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
@@ -664,42 +698,45 @@ export function renderApp(state: AppViewState) {
 
         ${
           state.tab === "channels"
-            ? lazyRender(lazyChannels, (m) =>
-                m.renderChannels({
-                  connected: state.connected,
-                  loading: state.channelsLoading,
-                  snapshot: state.channelsSnapshot,
-                  lastError: state.channelsError,
-                  lastSuccessAt: state.channelsLastSuccess,
-                  whatsappMessage: state.whatsappLoginMessage,
-                  whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
-                  whatsappConnected: state.whatsappLoginConnected,
-                  whatsappBusy: state.whatsappBusy,
-                  configSchema: state.configSchema,
-                  configSchemaLoading: state.configSchemaLoading,
-                  configForm: state.configForm,
-                  configUiHints: state.configUiHints,
-                  configSaving: state.configSaving,
-                  configFormDirty: state.configFormDirty,
-                  nostrProfileFormState: state.nostrProfileFormState,
-                  nostrProfileAccountId: state.nostrProfileAccountId,
-                  onRefresh: (probe) => loadChannels(state, probe),
-                  onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
-                  onWhatsAppWait: () => state.handleWhatsAppWait(),
-                  onWhatsAppLogout: () => state.handleWhatsAppLogout(),
-                  onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
-                  onConfigSave: () => state.handleChannelConfigSave(),
-                  onConfigReload: () => state.handleChannelConfigReload(),
-                  onNostrProfileEdit: (accountId, profile) =>
-                    state.handleNostrProfileEdit(accountId, profile),
-                  onNostrProfileCancel: () => state.handleNostrProfileCancel(),
-                  onNostrProfileFieldChange: (field, value) =>
-                    state.handleNostrProfileFieldChange(field, value),
-                  onNostrProfileSave: () => state.handleNostrProfileSave(),
-                  onNostrProfileImport: () => state.handleNostrProfileImport(),
-                  onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
-                }),
-              )
+            ? html`
+                ${renderBuilderSetupNotice(state, "channels")}
+                ${lazyRender(lazyChannels, (m) =>
+                  m.renderChannels({
+                    connected: state.connected,
+                    loading: state.channelsLoading,
+                    snapshot: state.channelsSnapshot,
+                    lastError: state.channelsError,
+                    lastSuccessAt: state.channelsLastSuccess,
+                    whatsappMessage: state.whatsappLoginMessage,
+                    whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
+                    whatsappConnected: state.whatsappLoginConnected,
+                    whatsappBusy: state.whatsappBusy,
+                    configSchema: state.configSchema,
+                    configSchemaLoading: state.configSchemaLoading,
+                    configForm: state.configForm,
+                    configUiHints: state.configUiHints,
+                    configSaving: state.configSaving,
+                    configFormDirty: state.configFormDirty,
+                    nostrProfileFormState: state.nostrProfileFormState,
+                    nostrProfileAccountId: state.nostrProfileAccountId,
+                    onRefresh: (probe) => loadChannels(state, probe),
+                    onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
+                    onWhatsAppWait: () => state.handleWhatsAppWait(),
+                    onWhatsAppLogout: () => state.handleWhatsAppLogout(),
+                    onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
+                    onConfigSave: () => state.handleChannelConfigSave(),
+                    onConfigReload: () => state.handleChannelConfigReload(),
+                    onNostrProfileEdit: (accountId, profile) =>
+                      state.handleNostrProfileEdit(accountId, profile),
+                    onNostrProfileCancel: () => state.handleNostrProfileCancel(),
+                    onNostrProfileFieldChange: (field, value) =>
+                      state.handleNostrProfileFieldChange(field, value),
+                    onNostrProfileSave: () => state.handleNostrProfileSave(),
+                    onNostrProfileImport: () => state.handleNostrProfileImport(),
+                    onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
+                  }),
+                )}
+              `
             : nothing
         }
 
@@ -1540,102 +1577,105 @@ export function renderApp(state: AppViewState) {
 
         ${
           state.tab === "config"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.configFormMode,
-                showModeToggle: true,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.configSearchQuery,
-                activeSection:
-                  state.configActiveSection &&
-                  (COMMUNICATION_SECTION_KEYS.includes(
-                    state.configActiveSection as CommunicationSectionKey,
-                  ) ||
-                    APPEARANCE_SECTION_KEYS.includes(
-                      state.configActiveSection as AppearanceSectionKey,
+            ? html`
+                ${renderBuilderSetupNotice(state, "config")}
+                ${renderConfig({
+                  raw: state.configRaw,
+                  originalRaw: state.configRawOriginal,
+                  valid: state.configValid,
+                  issues: state.configIssues,
+                  loading: state.configLoading,
+                  saving: state.configSaving,
+                  applying: state.configApplying,
+                  updating: state.updateRunning,
+                  connected: state.connected,
+                  schema: state.configSchema,
+                  schemaLoading: state.configSchemaLoading,
+                  uiHints: state.configUiHints,
+                  formMode: state.configFormMode,
+                  showModeToggle: true,
+                  formValue: state.configForm,
+                  originalValue: state.configFormOriginal,
+                  searchQuery: state.configSearchQuery,
+                  activeSection:
+                    state.configActiveSection &&
+                    (COMMUNICATION_SECTION_KEYS.includes(
+                      state.configActiveSection as CommunicationSectionKey,
                     ) ||
-                    AUTOMATION_SECTION_KEYS.includes(
-                      state.configActiveSection as AutomationSectionKey,
+                      APPEARANCE_SECTION_KEYS.includes(
+                        state.configActiveSection as AppearanceSectionKey,
+                      ) ||
+                      AUTOMATION_SECTION_KEYS.includes(
+                        state.configActiveSection as AutomationSectionKey,
+                      ) ||
+                      INFRASTRUCTURE_SECTION_KEYS.includes(
+                        state.configActiveSection as InfrastructureSectionKey,
+                      ) ||
+                      AI_AGENTS_SECTION_KEYS.includes(
+                        state.configActiveSection as AiAgentsSectionKey,
+                      ))
+                      ? null
+                      : state.configActiveSection,
+                  activeSubsection:
+                    state.configActiveSection &&
+                    (COMMUNICATION_SECTION_KEYS.includes(
+                      state.configActiveSection as CommunicationSectionKey,
                     ) ||
-                    INFRASTRUCTURE_SECTION_KEYS.includes(
-                      state.configActiveSection as InfrastructureSectionKey,
-                    ) ||
-                    AI_AGENTS_SECTION_KEYS.includes(
-                      state.configActiveSection as AiAgentsSectionKey,
-                    ))
-                    ? null
-                    : state.configActiveSection,
-                activeSubsection:
-                  state.configActiveSection &&
-                  (COMMUNICATION_SECTION_KEYS.includes(
-                    state.configActiveSection as CommunicationSectionKey,
-                  ) ||
-                    APPEARANCE_SECTION_KEYS.includes(
-                      state.configActiveSection as AppearanceSectionKey,
-                    ) ||
-                    AUTOMATION_SECTION_KEYS.includes(
-                      state.configActiveSection as AutomationSectionKey,
-                    ) ||
-                    INFRASTRUCTURE_SECTION_KEYS.includes(
-                      state.configActiveSection as InfrastructureSectionKey,
-                    ) ||
-                    AI_AGENTS_SECTION_KEYS.includes(
-                      state.configActiveSection as AiAgentsSectionKey,
-                    ))
-                    ? null
-                    : state.configActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onFormModeChange: (mode) => (state.configFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.configSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.configActiveSection = section;
-                  state.configActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.configActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                excludeSections: [
-                  ...COMMUNICATION_SECTION_KEYS,
-                  ...AUTOMATION_SECTION_KEYS,
-                  ...INFRASTRUCTURE_SECTION_KEYS,
-                  ...AI_AGENTS_SECTION_KEYS,
-                  "ui",
-                  "wizard",
-                ],
-                includeVirtualSections: false,
-              })
+                      APPEARANCE_SECTION_KEYS.includes(
+                        state.configActiveSection as AppearanceSectionKey,
+                      ) ||
+                      AUTOMATION_SECTION_KEYS.includes(
+                        state.configActiveSection as AutomationSectionKey,
+                      ) ||
+                      INFRASTRUCTURE_SECTION_KEYS.includes(
+                        state.configActiveSection as InfrastructureSectionKey,
+                      ) ||
+                      AI_AGENTS_SECTION_KEYS.includes(
+                        state.configActiveSection as AiAgentsSectionKey,
+                      ))
+                      ? null
+                      : state.configActiveSubsection,
+                  onRawChange: (next) => {
+                    state.configRaw = next;
+                  },
+                  onFormModeChange: (mode) => (state.configFormMode = mode),
+                  onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
+                  onSearchChange: (query) => (state.configSearchQuery = query),
+                  onSectionChange: (section) => {
+                    state.configActiveSection = section;
+                    state.configActiveSubsection = null;
+                  },
+                  onSubsectionChange: (section) => (state.configActiveSubsection = section),
+                  onReload: () => loadConfig(state),
+                  onSave: () => saveConfig(state),
+                  onApply: () => applyConfig(state),
+                  onUpdate: () => runUpdate(state),
+                  onOpenFile: () => openConfigFile(state),
+                  version: state.hello?.server?.version ?? "",
+                  theme: state.theme,
+                  themeMode: state.themeMode,
+                  setTheme: (t, ctx) => state.setTheme(t, ctx),
+                  setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                  gatewayUrl: state.settings.gatewayUrl,
+                  assistantName: state.assistantName,
+                  configPath: state.configSnapshot?.path ?? null,
+                  excludeSections: [
+                    ...COMMUNICATION_SECTION_KEYS,
+                    ...AUTOMATION_SECTION_KEYS,
+                    ...INFRASTRUCTURE_SECTION_KEYS,
+                    ...AI_AGENTS_SECTION_KEYS,
+                    "ui",
+                    "wizard",
+                  ],
+                  includeVirtualSections: false,
+                })}
+              `
             : nothing
         }
 
         ${
           state.tab === "communications"
-            ? renderConfig({
+            ? html`${renderBuilderSetupNotice(state, "communications")}${renderConfig({
                 raw: state.configRaw,
                 originalRaw: state.configRawOriginal,
                 valid: state.configValid,
@@ -1693,7 +1733,7 @@ export function renderApp(state: AppViewState) {
                 navRootLabel: "Communication",
                 includeSections: [...COMMUNICATION_SECTION_KEYS],
                 includeVirtualSections: false,
-              })
+              })}`
             : nothing
         }
 
@@ -1763,7 +1803,7 @@ export function renderApp(state: AppViewState) {
 
         ${
           state.tab === "automation"
-            ? renderConfig({
+            ? html`${renderBuilderSetupNotice(state, "automation")}${renderConfig({
                 raw: state.configRaw,
                 originalRaw: state.configRawOriginal,
                 valid: state.configValid,
@@ -1821,13 +1861,13 @@ export function renderApp(state: AppViewState) {
                 navRootLabel: "Automation",
                 includeSections: [...AUTOMATION_SECTION_KEYS],
                 includeVirtualSections: false,
-              })
+              })}`
             : nothing
         }
 
         ${
           state.tab === "infrastructure"
-            ? renderConfig({
+            ? html`${renderBuilderSetupNotice(state, "infrastructure")}${renderConfig({
                 raw: state.configRaw,
                 originalRaw: state.configRawOriginal,
                 valid: state.configValid,
@@ -1885,13 +1925,13 @@ export function renderApp(state: AppViewState) {
                 navRootLabel: "Infrastructure",
                 includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
                 includeVirtualSections: false,
-              })
+              })}`
             : nothing
         }
 
         ${
           state.tab === "aiAgents"
-            ? renderConfig({
+            ? html`${renderBuilderSetupNotice(state, "aiAgents")}${renderConfig({
                 raw: state.configRaw,
                 originalRaw: state.configRawOriginal,
                 valid: state.configValid,
@@ -1949,7 +1989,7 @@ export function renderApp(state: AppViewState) {
                 navRootLabel: "AI & Agents",
                 includeSections: [...AI_AGENTS_SECTION_KEYS],
                 includeVirtualSections: false,
-              })
+              })}`
             : nothing
         }
 

@@ -22,9 +22,9 @@ const BUILDER_TEMPLATE_OPTIONS = [
 
 type ConfigTarget = {
   tab: Tab;
-  section: string;
+  section?: string;
   /** The state property to set (e.g. "communicationsActiveSection") */
-  sectionKey: string;
+  sectionKey?: string;
 };
 
 /**
@@ -32,12 +32,11 @@ type ConfigTarget = {
  * The key is the first segment of a config ref (e.g. "channels" from "channels.telegram").
  */
 const CONFIG_SECTION_MAP: Record<string, ConfigTarget> = {
-  // Communications tab
+  // Dedicated setup views
   channels: {
-    tab: "communications",
-    section: "channels",
-    sectionKey: "communicationsActiveSection",
+    tab: "channels",
   },
+  // Communications tab
   messages: {
     tab: "communications",
     section: "messages",
@@ -96,7 +95,7 @@ const CONFIG_SECTION_MAP: Record<string, ConfigTarget> = {
  * Map a connectorId like "platform:gmail-hook" or "channel:telegram" to a config ref
  * like "hooks" or "channels.telegram" that can be resolved to a settings section.
  */
-function connectorIdToConfigRef(connectorId: string): string | null {
+export function connectorIdToConfigRef(connectorId: string): string | null {
   if (!connectorId) {
     return null;
   }
@@ -118,6 +117,9 @@ function connectorIdToConfigRef(connectorId: string): string | null {
     connectorId.includes("groq")
   ) {
     return "models";
+  }
+  if (connectorId.includes("exec-approvals") || connectorId.includes("approval")) {
+    return "approvals";
   }
   // tools:automation, tools:cron → cron
   if (connectorId.includes("automation") || connectorId.includes("cron")) {
@@ -186,14 +188,90 @@ function resolveConfigTarget(refs: string[]): ConfigTarget | null {
   return null;
 }
 
+function titleCaseWords(value: string): string {
+  return value
+    .split(/[\s._:-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function setupActionLabel(params: {
+  connectorId?: string;
+  refs?: string[];
+  title?: string;
+}): string {
+  const connectorId = params.connectorId?.trim() ?? "";
+  const refs = params.refs ?? [];
+  if (connectorId.startsWith("channel:")) {
+    return `Open ${titleCaseWords(connectorId.slice("channel:".length))} setup`;
+  }
+  if (connectorId.includes("gmail")) {
+    return "Open Gmail hook setup";
+  }
+  if (connectorId.includes("exec-approvals") || refs.some((ref) => ref.startsWith("approvals"))) {
+    return "Open approvals setup";
+  }
+  if (
+    connectorId.includes("model") ||
+    connectorId.includes("openai") ||
+    connectorId.includes("anthropic") ||
+    refs.some((ref) => ref.startsWith("models"))
+  ) {
+    return "Open model setup";
+  }
+  if (refs.some((ref) => ref.startsWith("hooks"))) {
+    return "Open webhook setup";
+  }
+  if (refs.some((ref) => ref.startsWith("memory")) || connectorId.includes("memory")) {
+    return "Open memory setup";
+  }
+  return params.title?.trim() ? `Open ${params.title.trim()}` : "Open setup";
+}
+
+export function hasPendingSetupTask(
+  tasks: Array<{ connectorId: string; status: string }>,
+  connectorId: string | undefined,
+): boolean {
+  const normalized = connectorId?.trim();
+  if (!normalized) {
+    return false;
+  }
+  return tasks.some((task) => task.connectorId === normalized && task.status !== "completed");
+}
+
 /** Navigate to a config section. Sets the tab and the active section. */
-function navigateToConfig(state: AppViewState, refs: string[]) {
+function navigateToConfig(
+  state: AppViewState,
+  refs: string[],
+  params?: {
+    connectorId?: string;
+    title?: string;
+    detail?: string;
+  },
+) {
   const target = resolveConfigTarget(refs);
   if (!target) {
     return;
   }
+  const actionTitle = setupActionLabel({
+    connectorId: params?.connectorId,
+    refs,
+    title: params?.title,
+  });
   // Set the section state before navigating so it's ready when the tab renders
-  (state as Record<string, unknown>)[target.sectionKey] = target.section;
+  if (target.sectionKey && target.section) {
+    (state as Record<string, unknown>)[target.sectionKey] = target.section;
+  }
+  state.builderSetupFocus = {
+    connectorId: params?.connectorId?.trim() || null,
+    title: actionTitle,
+    detail:
+      params?.detail?.trim() ||
+      "Finish the requested setup here, save or apply your changes, then return to Builder and rebuild or verify.",
+    refs,
+    targetTab: target.tab,
+  };
   state.setTab(target.tab);
 }
 
@@ -405,11 +483,19 @@ export function renderBuilder(props: BuilderProps) {
                 </div>
                 <div class="builder-grid builder-grid--2col">
                   ${builderSelectionList(draft.planning.selections)}
-                  ${builderIntegrationList(state, draft.planning.integrations)}
+                  ${builderIntegrationList(
+                    state,
+                    draft.planning.integrations,
+                    draft.planning.setupTasks,
+                  )}
                 </div>
                 <div class="builder-grid builder-grid--2col" style="margin-top:4px;">
                   ${builderSetupTaskList(state, draft.planning.setupTasks)}
-                  ${builderVerificationList(state, draft.planning.verifications)}
+                  ${builderVerificationList(
+                    state,
+                    draft.planning.verifications,
+                    draft.planning.setupTasks,
+                  )}
                 </div>
                 ${renderVerificationRunSummary(state)}
               </section>
@@ -686,9 +772,13 @@ function builderGapList(
                 ? html`
                     <button
                       class="builder-config-link"
-                      @click=${() => navigateToConfig(state, [codeRef])}
+                      @click=${() =>
+                        navigateToConfig(state, [codeRef], {
+                          title: value.message,
+                          detail: value.message,
+                        })}
                     >
-                      Configure &rarr;
+                      ${setupActionLabel({ refs: [codeRef] })} &rarr;
                     </button>
                   `
                 : nothing
@@ -951,6 +1041,7 @@ function builderIntegrationList(
     issues: string[];
     lastVerifiedAt?: string;
   }>,
+  setupTasks: Array<{ connectorId: string; status: string }>,
 ) {
   if (values.length === 0) {
     return nothing;
@@ -963,6 +1054,7 @@ function builderIntegrationList(
         const configRef = connectorIdToConfigRef(value.connectorId);
         const hasLink = configRef && resolveConfigTarget([configRef]);
         const needsAction = !OK_STATUSES.has(value.status);
+        const hasPendingTask = hasPendingSetupTask(setupTasks, value.connectorId);
         return html`
           <div class="tpl-plan-file">
             <span>
@@ -971,13 +1063,19 @@ function builderIntegrationList(
             </span>
             <span class="tpl-pill ${integrationStatusPillClass(value.status)}">${formatIntegrationStatus(value.status)}</span>
             ${
-              hasLink && needsAction && value.issues.length === 0
+              hasLink && needsAction && hasPendingTask && value.issues.length === 0
                 ? html`
                     <button
                       class="builder-config-link"
-                      @click=${() => navigateToConfig(state, [configRef])}
+                      @click=${() =>
+                        navigateToConfig(state, [configRef], {
+                          connectorId: value.connectorId,
+                          title: value.label,
+                          detail: `${value.label} still needs setup or verification before this workflow can run cleanly.`,
+                        })}
                     >
-                      Configure &rarr;
+                      ${setupActionLabel({ connectorId: value.connectorId, refs: [configRef] })}
+                      &rarr;
                     </button>
                   `
                 : nothing
@@ -993,13 +1091,19 @@ function builderIntegrationList(
               <div class="callout warn builder-issue-row">
                 <span>${issue}</span>
                 ${
-                  hasLink
+                  hasLink && hasPendingTask
                     ? html`
                         <button
                           class="builder-config-link"
-                          @click=${() => navigateToConfig(state, [configRef])}
+                          @click=${() =>
+                            navigateToConfig(state, [configRef], {
+                              connectorId: value.connectorId,
+                              title: value.label,
+                              detail: issue,
+                            })}
                         >
-                          Configure &rarr;
+                          ${setupActionLabel({ connectorId: value.connectorId, refs: [configRef] })}
+                          &rarr;
                         </button>
                       `
                     : nothing
@@ -1048,9 +1152,18 @@ function builderSetupTaskList(
                 ? html`
                     <button
                       class="builder-config-link"
-                      @click=${() => navigateToConfig(state, navRefs)}
+                      @click=${() =>
+                        navigateToConfig(state, navRefs, {
+                          connectorId: value.connectorId,
+                          title: value.title,
+                          detail: value.detail,
+                        })}
                     >
-                      Configure &rarr;
+                      ${setupActionLabel({
+                        connectorId: value.connectorId,
+                        refs: navRefs,
+                        title: value.title,
+                      })} &rarr;
                     </button>
                   `
                 : nothing
@@ -1078,6 +1191,7 @@ function builderVerificationList(
     source?: string;
     checkedAt?: string;
   }>,
+  setupTasks: Array<{ connectorId: string; status: string }>,
 ) {
   if (values.length === 0) {
     return nothing;
@@ -1088,7 +1202,9 @@ function builderVerificationList(
       ${values.map((value) => {
         const isBlocked = value.status === "blocked" || value.status === "failed";
         const configRef = value.connectorId ? connectorIdToConfigRef(value.connectorId) : null;
-        const hasLink = isBlocked && configRef && resolveConfigTarget([configRef]);
+        const hasPendingTask = hasPendingSetupTask(setupTasks, value.connectorId);
+        const hasLink =
+          isBlocked && hasPendingTask && configRef && resolveConfigTarget([configRef]);
         return html`
           <div class="tpl-plan-file">
             <span>${value.connectorLabel}: ${value.probeLabel}</span>
@@ -1110,9 +1226,15 @@ function builderVerificationList(
                 ? html`
                     <button
                       class="builder-config-link"
-                      @click=${() => navigateToConfig(state, [configRef])}
+                      @click=${() =>
+                        navigateToConfig(state, [configRef], {
+                          connectorId: value.connectorId,
+                          title: value.probeLabel,
+                          detail: value.detail,
+                        })}
                     >
-                      Configure &rarr;
+                      ${setupActionLabel({ connectorId: value.connectorId, refs: [configRef] })}
+                      &rarr;
                     </button>
                   `
                 : nothing
