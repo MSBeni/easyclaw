@@ -231,11 +231,10 @@ export function renderBuilder(props: BuilderProps) {
   return html`
     <div class="builder-layout">
       <section class="card">
-        <div class="card-title section-title">Describe The Agent</div>
+        <div class="card-title section-title">Describe the Agent</div>
         <div class="card-sub" style="margin-bottom:12px;">
-          Write the job in plain English. The builder will extract requirements, choose the
-          closest starter template, and show whether the workflow is ready, needs setup, or still
-          needs policy/input before apply.
+          Write the job in plain English. The builder extracts requirements, picks the best
+          starter template, and shows what's ready, what needs setup, and what's blocked.
         </div>
 
         <label class="field builder-brief-field" style="margin-bottom:12px;">
@@ -381,15 +380,34 @@ export function renderBuilder(props: BuilderProps) {
 
               <section class="card">
                 <div class="builder-header">
-                  <div class="card-title section-title">Connector Plan</div>
+                  <div class="card-title section-title">Architecture</div>
                 </div>
-                <div class="builder-grid">
-                  ${builderSelectionList(draft.planning.selections)}
+                <div class="builder-grid builder-grid--2col">
                   ${builderTopologyCard(draft.planning.topology)}
-                  ${builderAlternativeList(draft.planning.alternatives)}
-                  ${builderVariantList(draft.planning.variants)}
                   ${builderRuntimeGraphList(draft.planning.graph)}
+                </div>
+                ${
+                  draft.planning.variants.length > 0 ||
+                  draft.planning.alternatives.some((a) => a.candidates.some((c) => !c.selected))
+                    ? html`
+                        <div class="builder-grid builder-grid--2col" style="margin-top:4px;">
+                          ${builderVariantList(draft.planning.variants)}
+                          ${builderAlternativeList(draft.planning.alternatives)}
+                        </div>
+                      `
+                    : nothing
+                }
+              </section>
+
+              <section class="card">
+                <div class="builder-header">
+                  <div class="card-title section-title">Integrations &amp; Setup</div>
+                </div>
+                <div class="builder-grid builder-grid--2col">
+                  ${builderSelectionList(draft.planning.selections)}
                   ${builderIntegrationList(state, draft.planning.integrations)}
+                </div>
+                <div class="builder-grid builder-grid--2col" style="margin-top:4px;">
                   ${builderSetupTaskList(state, draft.planning.setupTasks)}
                   ${builderVerificationList(state, draft.planning.verifications)}
                 </div>
