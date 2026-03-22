@@ -262,6 +262,7 @@ export class OpenClawApp extends LitElement {
     "overview";
   @state() builderBrief = "";
   @state() builderTemplateId = "";
+  @state() builderSetupFocus: AppViewState["builderSetupFocus"] = null;
   @state() builderPlan: import("./controllers/builder.ts").BuilderPlanResult | null = null;
   @state() builderPlanLoading = false;
   @state() builderPlanError: string | null = null;

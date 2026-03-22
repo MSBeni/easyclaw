@@ -165,6 +165,13 @@ export type AppViewState = {
   agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   builderBrief: string;
   builderTemplateId: string;
+  builderSetupFocus: {
+    connectorId: string | null;
+    title: string;
+    detail: string;
+    refs: string[];
+    targetTab: Tab;
+  } | null;
   builderPlan: import("./controllers/builder.ts").BuilderPlanResult | null;
   builderPlanLoading: boolean;
   builderPlanError: string | null;
