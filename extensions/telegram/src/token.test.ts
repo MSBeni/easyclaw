@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
-import { resolveTelegramToken } from "./token.js";
+import { normalizeTelegramBotToken, resolveTelegramToken } from "./token.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 describe("resolveTelegramToken", () => {
@@ -200,6 +200,17 @@ describe("resolveTelegramToken", () => {
     expect(() => resolveTelegramToken(cfg)).toThrow(
       /channels\.telegram\.botToken: unresolved SecretRef/i,
     );
+  });
+});
+
+describe("normalizeTelegramBotToken", () => {
+  it("normalizes whitespace and unicode dash variants", () => {
+    expect(normalizeTelegramBotToken(" 123456:abc\u2013DEF \n")).toBe("123456:abc-DEF");
+  });
+
+  it("returns an empty token for non-string values", () => {
+    expect(normalizeTelegramBotToken(undefined)).toBe("");
+    expect(normalizeTelegramBotToken(null)).toBe("");
   });
 });
 

@@ -514,8 +514,44 @@ async function refreshSessionOptions(state: AppViewState) {
   });
 }
 
+export function shouldShowLoginGate(
+  connected: boolean,
+  lastError: string | null,
+  connectedEver = false,
+): boolean {
+  if (connected) {
+    return false;
+  }
+  const message = typeof lastError === "string" ? lastError.trim().toLowerCase() : "";
+  if (message.startsWith("restarting:")) {
+    return false;
+  }
+  if (connectedEver) {
+    return false;
+  }
+  return true;
+}
+
 function resolveActiveSessionRow(state: AppViewState) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+}
+
+function buildProviderScopedModelRef(params: {
+  model?: string | null;
+  provider?: string | null;
+}): string {
+  const model = params.model?.trim();
+  if (!model) {
+    return "";
+  }
+  const provider = params.provider?.trim();
+  if (!provider) {
+    return model;
+  }
+  if (model.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) {
+    return model;
+  }
+  return `${provider}/${model}`;
 }
 
 function resolveModelOverrideValue(state: AppViewState): string {
@@ -531,39 +567,87 @@ function resolveModelOverrideValue(state: AppViewState): string {
   // No local override recorded yet — fall back to server data.
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow) {
-    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+    return buildProviderScopedModelRef({
+      model: activeRow.model,
+      provider: activeRow.modelProvider,
+    });
   }
   return "";
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
-  const model = state.sessionsResult?.defaults?.model;
-  return typeof model === "string" ? model.trim() : "";
+  return buildProviderScopedModelRef({
+    model: state.sessionsResult?.defaults?.model,
+    provider: state.sessionsResult?.defaults?.modelProvider,
+  });
 }
 
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   currentOverride: string,
   defaultModel: string,
-): Array<{ value: string; label: string }> {
-  const seen = new Set<string>();
-  const options: Array<{ value: string; label: string }> = [];
-  const addOption = (value: string, label?: string) => {
+): Array<{ value: string; label: string; disabled?: boolean }> {
+  type ChatModelOption = {
+    value: string;
+    label: string;
+    configured: boolean;
+    disabled?: boolean;
+  };
+  const optionsByKey = new Map<string, ChatModelOption>();
+  const addOption = (
+    value: string,
+    label?: string,
+    opts?: { configured?: boolean; disabled?: boolean },
+  ) => {
     const trimmed = value.trim();
     if (!trimmed) {
       return;
     }
+    const configured = opts?.configured !== false;
+    const disabled = opts?.disabled ?? !configured;
     const key = trimmed.toLowerCase();
-    if (seen.has(key)) {
+    const existing = optionsByKey.get(key);
+    if (!existing) {
+      optionsByKey.set(key, {
+        value: trimmed,
+        label: label ?? trimmed,
+        configured,
+        disabled,
+      });
       return;
     }
-    seen.add(key);
-    options.push({ value: trimmed, label: label ?? trimmed });
+    // Prefer configured providers for duplicate model ids.
+    if (!existing.configured && configured) {
+      optionsByKey.set(key, {
+        value: trimmed,
+        label: label ?? trimmed,
+        configured,
+        disabled,
+      });
+      return;
+    }
+    // If configured state is the same, prefer an enabled entry.
+    if (existing.configured === configured && existing.disabled && !disabled) {
+      optionsByKey.set(key, {
+        value: trimmed,
+        label: label ?? trimmed,
+        configured,
+        disabled,
+      });
+    }
   };
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    const isConfigured = entry.configured !== false;
+    if (!isConfigured) {
+      continue;
+    }
+    const suffix = provider ? ` · ${provider}` : "";
+    addOption(buildProviderScopedModelRef({ model: entry.id, provider }), `${entry.id}${suffix}`, {
+      configured: true,
+      disabled: false,
+    });
   }
 
   if (currentOverride) {
@@ -572,7 +656,18 @@ function buildChatModelOptions(
   if (defaultModel) {
     addOption(defaultModel);
   }
-  return options;
+
+  // Keep configured providers first.
+  const configuredOptions: Array<{ value: string; label: string; disabled?: boolean }> = [];
+  const unconfiguredOptions: Array<{ value: string; label: string; disabled?: boolean }> = [];
+  for (const option of optionsByKey.values()) {
+    if (option.configured) {
+      configuredOptions.push(option);
+    } else {
+      unconfiguredOptions.push(option);
+    }
+  }
+  return [...configuredOptions, ...unconfiguredOptions];
 }
 
 function renderChatModelSelect(state: AppViewState) {
@@ -604,7 +699,11 @@ function renderChatModelSelect(state: AppViewState) {
           options,
           (entry) => entry.value,
           (entry) =>
-            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
+            html`<option
+              value=${entry.value}
+              ?selected=${entry.value === currentOverride}
+              ?disabled=${entry.disabled}
+            >
               ${entry.label}
             </option>`,
         )}

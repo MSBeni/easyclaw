@@ -1,9 +1,34 @@
 import { describe, expect, it } from "vitest";
+import { listOpenClawConnectorDefinitions } from "../src/agents/capabilities/openclaw.ts";
 import {
   connectorIdToConfigRef,
   hasPendingSetupTask,
+  resolveBuilderQuestionConfigRefs,
   setupActionLabel,
 } from "../ui/src/ui/views/builder.ts";
+import { resolveQuickSetupForFocus } from "../ui/src/ui/views/quick-setup.ts";
+
+function buildFocus(connector: ReturnType<typeof listOpenClawConnectorDefinitions>[number]) {
+  const configRef = connectorIdToConfigRef(connector.id);
+  return {
+    connectorId: connector.id,
+    connectorLabel: connector.label,
+    connectorKind: connector.kind,
+    connectorSourceKind: connector.source.kind,
+    connectorDocsPath: connector.metadata.docsPath ?? null,
+    connectorSelectionLabel: connector.metadata.selectionLabel ?? null,
+    connectorDetailLabel: connector.metadata.detailLabel ?? null,
+    connectorOnboarding: connector.setup.onboarding,
+    connectorRequiresConfig: connector.setup.requiresConfig,
+    connectorRequiresAuth: connector.setup.requiresAuth,
+    connectorInstallRequired: connector.install.required,
+    connectorInstallStrategy: connector.install.strategy,
+    title: `Open ${connector.label} setup`,
+    detail: `${connector.label} needs setup.`,
+    refs: configRef ? [configRef] : [],
+    targetTab: "config" as const,
+  };
+}
 
 describe("connectorIdToConfigRef", () => {
   it("routes built-in and plugin chat connectors to their dedicated channels setup", () => {
@@ -91,5 +116,115 @@ describe("hasPendingSetupTask", () => {
     expect(
       hasPendingSetupTask([{ connectorId: "tools:memory", status: "completed" }], "tools:memory"),
     ).toBe(false);
+  });
+});
+
+describe("resolveQuickSetupForFocus", () => {
+  it("returns generic quick setup cards for every connector that needs setup guidance", () => {
+    const connectors = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).filter(
+      (connector) =>
+        connector.install.required ||
+        connector.setup.requiresAuth ||
+        connector.setup.requiresConfig,
+    );
+
+    for (const connector of connectors) {
+      const focus = buildFocus(connector);
+      expect(resolveQuickSetupForFocus(focus), connector.id).not.toBeNull();
+    }
+  });
+
+  it("uses agents.defaults.model for the core model quick setup selector", () => {
+    const coreModel = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
+      (value) => value.id === "platform:core-model",
+    );
+    expect(coreModel).toBeTruthy();
+
+    const card = resolveQuickSetupForFocus(buildFocus(coreModel!));
+    const modelField = card?.fields.find((field) => field.label === "Default Model");
+    expect(modelField?.path).toEqual(["agents", "defaults", "model"]);
+    expect(modelField?.options?.every((option) => option.value.includes("/"))).toBe(true);
+  });
+
+  it("includes Telegram default target in quick setup fields", () => {
+    const connector = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
+      (value) => value.id === "channel:telegram",
+    );
+    expect(connector).toBeTruthy();
+    const card = resolveQuickSetupForFocus(buildFocus(connector!));
+    const targetField = card?.fields.find((field) => field.label.includes("Default Target"));
+    expect(targetField?.path).toEqual(["channels", "telegram", "defaultTo"]);
+  });
+
+  it("includes Telegram default-target auto-detect assist action", () => {
+    const connector = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
+      (value) => value.id === "channel:telegram",
+    );
+    expect(connector).toBeTruthy();
+    const card = resolveQuickSetupForFocus(buildFocus(connector!));
+    expect(card?.assist?.connectorId).toBe("channel:telegram:auto-default-target");
+    expect(card?.assist?.fields).toEqual([]);
+  });
+
+  it("uses a generic channel setup card for uncovered chat connectors", () => {
+    const connector = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
+      (value) => value.id === "channel:googlechat",
+    );
+    expect(connector).toBeTruthy();
+    const card = resolveQuickSetupForFocus(buildFocus(connector!));
+    expect(card?.title).toBe("Set up Google Chat");
+    expect(card?.steps?.some((step) => step.instruction.includes("channel card below"))).toBe(true);
+    expect(card?.docsHint).toBe("https://docs.openclaw.ai/channels/googlechat");
+  });
+
+  it("uses a generic connector setup card for uncovered platform and tool connectors", () => {
+    const webhook = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
+      (value) => value.id === "platform:webhook-runtime",
+    );
+    const agents = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
+      (value) => value.id === "tools:agents",
+    );
+    expect(webhook).toBeTruthy();
+    expect(agents).toBeTruthy();
+
+    const webhookCard = resolveQuickSetupForFocus(buildFocus(webhook!));
+    const agentsCard = resolveQuickSetupForFocus(buildFocus(agents!));
+
+    expect(webhookCard?.title).toBe("Configure OpenClaw Webhook Runtime");
+    expect(webhookCard?.steps?.some((step) => step.instruction.includes("sign-in, API key"))).toBe(
+      true,
+    );
+    expect(agentsCard?.title).toBe("Configure OpenClaw Agents Tools");
+    expect(agentsCard?.steps?.at(-1)?.instruction).toContain("Return to Builder");
+  });
+});
+
+describe("resolveBuilderQuestionConfigRefs", () => {
+  it("maps delivery-target questions to channel config refs", () => {
+    expect(
+      resolveBuilderQuestionConfigRefs({
+        id: "delivery-target",
+        prompt: "Which telegram destination should receive the digest?",
+        required: true,
+      }),
+    ).toEqual(["channels.telegram"]);
+
+    expect(
+      resolveBuilderQuestionConfigRefs({
+        id: "delivery-target",
+        prompt: "Which Slack destination should receive the digest?",
+        required: true,
+      }),
+    ).toEqual(["channels.slack"]);
+  });
+
+  it("returns empty refs for non-delivery questions", () => {
+    expect(
+      resolveBuilderQuestionConfigRefs({
+        id: "binding-channel",
+        prompt: "Which channel should this workflow watch?",
+        required: true,
+      }),
+    ).toEqual([]);
   });
 });

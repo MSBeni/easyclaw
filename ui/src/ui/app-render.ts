@@ -12,13 +12,19 @@ import {
   renderChatSessionSelect,
   renderTab,
   renderSidebarConnectionStatus,
+  shouldShowLoginGate,
   renderTopbarThemeModeToggle,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./controllers/agents.ts";
+import {
+  deleteAgentWithFullCleanup,
+  loadAgents,
+  loadToolsCatalog,
+  saveAgentsConfig,
+} from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -76,8 +82,8 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
-import "./components/dashboard-header.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
+import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
 import {
   normalizeBasePath,
@@ -100,7 +106,9 @@ import { renderConfig } from "./views/config.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
+import { renderOnboarding } from "./views/onboarding.ts";
 import { renderOverview } from "./views/overview.ts";
+import { renderQuickSetup } from "./views/quick-setup.ts";
 
 // Lazy-loaded view modules – deferred so the initial bundle stays small.
 // Each loader resolves once; subsequent calls return the cached module.
@@ -279,6 +287,11 @@ function renderBuilderSetupNotice(state: AppViewState, tab: Tab) {
   if (!focus || focus.targetTab !== tab) {
     return nothing;
   }
+  // Try the guided quick-setup first; fall back to the plain banner
+  const quickSetup = renderQuickSetup(state);
+  if (quickSetup !== nothing) {
+    return quickSetup;
+  }
   return html`
     <div class="callout info builder-setup-banner">
       <div class="builder-setup-banner__body">
@@ -328,7 +341,7 @@ export function renderApp(state: AppViewState) {
 
   // Gate: require successful gateway connection before showing the dashboard.
   // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
-  if (!state.connected) {
+  if (shouldShowLoginGate(state.connected, state.lastError, state.connectedEver === true)) {
     return html`
       ${renderLoginGate(state)}
       ${renderGatewayUrlConfirmation(state)}
@@ -696,6 +709,8 @@ export function renderApp(state: AppViewState) {
             : nothing
         }
 
+        ${state.tab === "onboarding" ? renderOnboarding(state) : nothing}
+
         ${
           state.tab === "channels"
             ? html`
@@ -826,6 +841,7 @@ export function renderApp(state: AppViewState) {
                   jobsSortDir: state.cronJobsSortDir,
                   editingJobId: state.cronEditingJobId,
                   error: state.cronError,
+                  notice: state.cronNotice,
                   busy: state.cronBusy,
                   form: state.cronForm,
                   channels: state.channelsSnapshot?.channelMeta?.length
@@ -915,6 +931,7 @@ export function renderApp(state: AppViewState) {
                   agentsList: state.agentsList,
                   selectedAgentId: resolvedAgentId,
                   activePanel: state.agentsPanel,
+                  modelSuggestions: state.cronModelSuggestions,
                   config: {
                     form: configValue,
                     loading: state.configLoading,
@@ -932,6 +949,7 @@ export function renderApp(state: AppViewState) {
                     jobs: state.cronJobs,
                     loading: state.cronLoading,
                     error: state.cronError,
+                    notice: state.cronNotice,
                   },
                   agentFiles: {
                     list: state.agentFilesList,
@@ -1114,6 +1132,7 @@ export function renderApp(state: AppViewState) {
                     }
                     void runCronJob(state, job, "force");
                   },
+                  onOpenCronTab: () => state.setTab("cron"),
                   onSkillsFilterChange: (next) => (state.skillsFilter = next),
                   onSkillsRefresh: () => {
                     if (resolvedAgentId) {
@@ -1255,6 +1274,35 @@ export function renderApp(state: AppViewState) {
                     }
                     updateConfigFormValue(state, ["agents", "defaultId"], agentId);
                   },
+                  onDeleteAgent: (agentId) => {
+                    void (async () => {
+                      const deleted = await deleteAgentWithFullCleanup(state, agentId);
+                      if (!deleted) {
+                        return;
+                      }
+                      state.agentFilesList = null;
+                      state.agentFilesError = null;
+                      state.agentFilesLoading = false;
+                      state.agentFileActive = null;
+                      state.agentFileContents = {};
+                      state.agentFileDrafts = {};
+                      state.agentSkillsReport = null;
+                      state.agentSkillsError = null;
+                      state.agentSkillsAgentId = null;
+                      state.toolsCatalogResult = null;
+                      state.toolsCatalogError = null;
+                      state.toolsCatalogLoading = false;
+                      await loadAgents(state);
+                      const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
+                      if (agentIds.length > 0) {
+                        void loadAgentIdentities(state, agentIds);
+                      }
+                      if (state.agentsPanel === "channels") {
+                        void loadChannels(state, false);
+                      }
+                      void state.loadCron();
+                    })();
+                  },
                 }),
               )
             : nothing
@@ -1276,6 +1324,15 @@ export function renderApp(state: AppViewState) {
                   },
                   onSetTemplate: (templateId) => {
                     state.builderTemplateId = templateId;
+                    state.builderPlan = null;
+                    state.builderApplyResult = null;
+                    state.builderApplyError = null;
+                    state.builderVerifyResult = null;
+                    state.builderVerifyError = null;
+                    state.builderConfirmApply = false;
+                  },
+                  onSetModel: (modelId) => {
+                    state.builderModelId = modelId;
                     state.builderPlan = null;
                     state.builderApplyResult = null;
                     state.builderApplyError = null;

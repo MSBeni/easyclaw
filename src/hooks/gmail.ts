@@ -15,6 +15,7 @@ export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
 export const DEFAULT_HOOKS_PATH = "/hooks";
+export const OPENCLAW_GOG_CLIENT = "openclaw-gmail-hook";
 
 export type GmailHookOverrides = {
   account?: string;
@@ -118,7 +119,10 @@ export function resolveGmailHookRuntimeConfig(
     return { ok: false, error: "gmail topic required" };
   }
 
-  const subscription = overrides.subscription ?? gmail?.subscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
+  const subscriptionInput =
+    overrides.subscription ?? gmail?.subscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
+  const subscription =
+    parseSubscriptionPath(subscriptionInput)?.subscriptionName ?? subscriptionInput;
 
   const pushToken = overrides.pushToken ?? gmail?.pushToken ?? "";
   if (!pushToken) {
@@ -209,6 +213,8 @@ export function buildGogWatchStartArgs(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
 ): string[] {
   return [
+    "--client",
+    OPENCLAW_GOG_CLIENT,
     "gmail",
     "watch",
     "start",
@@ -223,6 +229,8 @@ export function buildGogWatchStartArgs(
 
 export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
   const args = [
+    "--client",
+    OPENCLAW_GOG_CLIENT,
     "gmail",
     "watch",
     "serve",
@@ -260,6 +268,19 @@ export function parseTopicPath(topic: string): { projectId: string; topicName: s
     return null;
   }
   return { projectId: match[1] ?? "", topicName: match[2] ?? "" };
+}
+
+export function parseSubscriptionPath(
+  subscription: string,
+): { projectId: string; subscriptionName: string } | null {
+  const match = subscription.trim().match(/^projects\/([^/]+)\/subscriptions\/([^/]+)$/i);
+  if (!match) {
+    return null;
+  }
+  return {
+    projectId: match[1] ?? "",
+    subscriptionName: match[2] ?? "",
+  };
 }
 
 function joinUrl(base: string, path: string): string {

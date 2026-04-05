@@ -15,6 +15,7 @@ describe("method scope resolution", () => {
     ["agents.builder.verify", ["operator.read"]],
     ["agents.templates.plan", ["operator.read"]],
     ["poll", ["operator.write"]],
+    ["agents.builder.setup.run", ["operator.admin"]],
     ["agents.builder.apply", ["operator.admin"]],
     ["agents.templates.apply", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],

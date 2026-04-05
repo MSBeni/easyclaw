@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
 import {
   applyRequirementQuestions,
@@ -115,6 +116,18 @@ describe("capability requirements", () => {
     expect(requirements.missingDataFields).toEqual([]);
     expect(requirements.workflow.primaryGoal).toBe("briefing");
     expect(requirements.workflow.executionMode).toBe("scheduled");
+    expect(requirements.plannerStatus).toBe("ready");
+  });
+
+  it("recognizes env-backed Telegram credentials as configured", () => {
+    const requirements = withEnv({ TELEGRAM_BOT_TOKEN: "123:env-token" }, () =>
+      buildRequirementSet({
+        brief: "Create a daily Telegram briefing every morning at 9am.",
+        cfg: {},
+      }),
+    );
+
+    expect(requirements.setupGaps.map((gap) => gap.code)).not.toContain("channel:telegram");
     expect(requirements.plannerStatus).toBe("ready");
   });
 

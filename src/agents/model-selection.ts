@@ -13,6 +13,7 @@ import {
   resolveAgentModelFallbacksOverride,
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
@@ -31,8 +32,98 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
+type ModelProviderConfigLike = {
+  apiKey?: unknown;
+  auth?: string;
+  models?: Array<{ id?: string } | undefined> | undefined;
+};
+
+const PROVIDER_DEFAULT_MODEL_HINTS: Readonly<Record<string, string>> = {
+  anthropic: "claude-opus-4-6",
+  openai: "gpt-4o",
+  "openai-codex": "gpt-5.3-codex-spark",
+  google: "gemini-2.5-pro",
+  groq: "llama-3.3-70b-versatile",
+};
+
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function hasSecretInputLikeValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as { id?: unknown; provider?: unknown; source?: unknown };
+  return (
+    typeof candidate.source === "string" &&
+    candidate.source.trim().length > 0 &&
+    typeof candidate.provider === "string" &&
+    candidate.provider.trim().length > 0 &&
+    typeof candidate.id === "string" &&
+    candidate.id.trim().length > 0
+  );
+}
+
+function hasProviderAuthOrderHint(cfg: OpenClawConfig, provider: string): boolean {
+  const ids = findNormalizedProviderValue(cfg.auth?.order, provider);
+  return Array.isArray(ids) && ids.some((id) => typeof id === "string" && id.trim().length > 0);
+}
+
+function hasProviderEnvAuthHint(provider: string): boolean {
+  const envKeys = PROVIDER_ENV_API_KEY_CANDIDATES[normalizeProviderId(provider)] ?? [];
+  return envKeys.some((key) => {
+    const value = process.env[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+function hasProviderAuthHints(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  providerConfig: ModelProviderConfigLike;
+}): boolean {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (
+    params.providerConfig.auth === "aws-sdk" ||
+    params.providerConfig.auth === "oauth" ||
+    params.providerConfig.auth === "token"
+  ) {
+    return true;
+  }
+  if (hasSecretInputLikeValue(params.providerConfig.apiKey)) {
+    return true;
+  }
+  if (hasProviderAuthOrderHint(params.cfg, params.provider)) {
+    return true;
+  }
+  if (hasProviderEnvAuthHint(params.provider)) {
+    return true;
+  }
+  // Local Ollama runs often omit keys by design.
+  if (normalizedProvider === "ollama") {
+    return true;
+  }
+  return false;
+}
+
+function resolveFirstProviderModelId(
+  providerName: string,
+  providerConfig: ModelProviderConfigLike,
+): string | undefined {
+  if (!Array.isArray(providerConfig.models) || providerConfig.models.length === 0) {
+    return PROVIDER_DEFAULT_MODEL_HINTS[normalizeProviderId(providerName)];
+  }
+  for (const model of providerConfig.models) {
+    const id = typeof model?.id === "string" ? model.id.trim() : "";
+    if (id) {
+      return id;
+    }
+  }
+  return undefined;
 }
 
 export function modelKey(provider: string, model: string) {
@@ -76,6 +167,9 @@ export function normalizeProviderId(provider: string): string {
   }
   if (normalized === "kimi-code") {
     return "kimi-coding";
+  }
+  if (normalized === "google-gemini" || normalized === "google-generative-ai") {
+    return "google";
   }
   if (normalized === "bedrock" || normalized === "aws-bedrock") {
     return "amazon-bedrock";
@@ -368,19 +462,50 @@ export function resolveConfiguredModelRef(params: {
   // from a removed provider. (See #38880)
   const configuredProviders = params.cfg.models?.providers;
   if (configuredProviders && typeof configuredProviders === "object") {
-    const hasDefaultProvider = Boolean(configuredProviders[params.defaultProvider]);
-    if (!hasDefaultProvider) {
-      const availableProvider = Object.entries(configuredProviders).find(
-        ([, providerCfg]) =>
-          providerCfg &&
-          Array.isArray(providerCfg.models) &&
-          providerCfg.models.length > 0 &&
-          providerCfg.models[0]?.id,
+    const providerEntries = Object.entries(configuredProviders).flatMap(([providerName, cfg]) => {
+      const providerConfig = cfg as ModelProviderConfigLike;
+      const firstModelId = resolveFirstProviderModelId(providerName, providerConfig);
+      return firstModelId ? [{ providerConfig, providerName, firstModelId }] : [];
+    });
+    const defaultEntry = providerEntries.find(
+      (entry) =>
+        normalizeProviderId(entry.providerName) === normalizeProviderId(params.defaultProvider),
+    );
+    const defaultHasAuthHints = defaultEntry
+      ? hasProviderAuthHints({
+          cfg: params.cfg,
+          provider: defaultEntry.providerName,
+          providerConfig: defaultEntry.providerConfig,
+        })
+      : false;
+
+    // If the default provider has no auth hints, prefer another provider that
+    // looks configured so first-run chat does not fail with missing-key errors.
+    if (!defaultEntry || !defaultHasAuthHints) {
+      const authHintedProvider = providerEntries.find((entry) =>
+        hasProviderAuthHints({
+          cfg: params.cfg,
+          provider: entry.providerName,
+          providerConfig: entry.providerConfig,
+        }),
       );
-      if (availableProvider) {
-        const [providerName, providerCfg] = availableProvider;
-        const firstModel = providerCfg.models[0];
-        return { provider: providerName, model: firstModel.id };
+      if (authHintedProvider) {
+        return {
+          provider: authHintedProvider.providerName,
+          model: authHintedProvider.firstModelId,
+        };
+      }
+    }
+
+    // Legacy fallback: if the default provider is missing entirely, use the
+    // first provider that has at least one configured model entry.
+    if (!defaultEntry) {
+      const firstConfiguredProvider = providerEntries[0];
+      if (firstConfiguredProvider) {
+        return {
+          provider: firstConfiguredProvider.providerName,
+          model: firstConfiguredProvider.firstModelId,
+        };
       }
     }
   }

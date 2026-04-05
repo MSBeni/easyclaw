@@ -17,6 +17,17 @@ type ResolveTelegramTokenOpts = {
   logMissingFile?: (message: string) => void;
 };
 
+// Users often paste tokens with hidden whitespace/newlines, or with Unicode dash
+// characters copied from rich text. Normalize these common input artifacts.
+const TELEGRAM_TOKEN_DASH_RE = /[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]/g;
+
+export function normalizeTelegramBotToken(raw: string | undefined | null): string {
+  if (typeof raw !== "string") {
+    return "";
+  }
+  return raw.replace(TELEGRAM_TOKEN_DASH_RE, "-").replace(/\s+/g, "").trim();
+}
+
 export function resolveTelegramToken(
   cfg?: OpenClawConfig,
   opts: ResolveTelegramTokenOpts = {},
@@ -51,8 +62,9 @@ export function resolveTelegramToken(
       `channels.telegram.accounts.${accountId}.tokenFile`,
       { rejectSymlink: true },
     );
-    if (token) {
-      return { token, source: "tokenFile" };
+    const normalizedToken = normalizeTelegramBotToken(token);
+    if (normalizedToken) {
+      return { token: normalizedToken, source: "tokenFile" };
     }
     opts.logMissingFile?.(
       `channels.telegram.accounts.${accountId}.tokenFile not found or unreadable: ${accountTokenFile}`,
@@ -64,8 +76,9 @@ export function resolveTelegramToken(
     value: accountCfg?.botToken,
     path: `channels.telegram.accounts.${accountId}.botToken`,
   });
-  if (accountToken) {
-    return { token: accountToken, source: "config" };
+  const normalizedAccountToken = normalizeTelegramBotToken(accountToken);
+  if (normalizedAccountToken) {
+    return { token: normalizedAccountToken, source: "config" };
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
@@ -74,8 +87,9 @@ export function resolveTelegramToken(
     const token = tryReadSecretFileSync(tokenFile, "channels.telegram.tokenFile", {
       rejectSymlink: true,
     });
-    if (token) {
-      return { token, source: "tokenFile" };
+    const normalizedToken = normalizeTelegramBotToken(token);
+    if (normalizedToken) {
+      return { token: normalizedToken, source: "tokenFile" };
     }
     opts.logMissingFile?.(`channels.telegram.tokenFile not found or unreadable: ${tokenFile}`);
     return { token: "", source: "none" };
@@ -85,11 +99,14 @@ export function resolveTelegramToken(
     value: telegramCfg?.botToken,
     path: "channels.telegram.botToken",
   });
-  if (configToken) {
-    return { token: configToken, source: "config" };
+  const normalizedConfigToken = normalizeTelegramBotToken(configToken);
+  if (normalizedConfigToken) {
+    return { token: normalizedConfigToken, source: "config" };
   }
 
-  const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";
+  const envToken = allowEnv
+    ? normalizeTelegramBotToken(opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)
+    : "";
   if (envToken) {
     return { token: envToken, source: "env" };
   }

@@ -87,6 +87,7 @@ export const AgentsDeleteParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,
     deleteFiles: Type.Optional(Type.Boolean()),
+    deleteCronJobs: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -96,6 +97,7 @@ export const AgentsDeleteResultSchema = Type.Object(
     ok: Type.Literal(true),
     agentId: NonEmptyString,
     removedBindings: Type.Integer({ minimum: 0 }),
+    removedCronJobs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );

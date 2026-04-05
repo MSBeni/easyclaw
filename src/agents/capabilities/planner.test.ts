@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import { buildRequirementPlannerResult } from "./planner.js";
 import { buildRequirementSet } from "./requirements.js";
 
@@ -89,6 +90,27 @@ describe("capability planner", () => {
       plan.alternatives.find((alternative) => alternative.requirementId === "message-output")
         ?.selectedConnectorIds,
     ).toContain("channel:telegram");
+  });
+
+  it("treats env-backed Telegram credentials as configured", () => {
+    const plan = withEnv({ TELEGRAM_BOT_TOKEN: "123:env-token" }, () => {
+      const requirements = buildRequirementSet({
+        brief: "Create a daily Telegram briefing every morning at 9am.",
+        cfg: {},
+      });
+      return buildRequirementPlannerResult({
+        requirements,
+        cfg: {},
+      });
+    });
+
+    expect(
+      plan.integrations.find((integration) => integration.connectorId === "channel:telegram")
+        ?.status,
+    ).toBe("authenticated");
+    expect(plan.setupTasks.find((task) => task.connectorId === "channel:telegram")?.status).toBe(
+      "completed",
+    );
   });
 
   it("selects approval and browser connectors for delegated risky actions", () => {

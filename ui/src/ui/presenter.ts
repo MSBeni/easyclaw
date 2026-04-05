@@ -47,7 +47,7 @@ export function formatCronState(job: CronJob) {
   const state = job.state ?? {};
   const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : "n/a";
   const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : "n/a";
-  const status = state.lastStatus ?? "n/a";
+  const status = state.runningAtMs ? "running" : (state.lastStatus ?? "n/a");
   return `${status} · next ${next} · last ${last}`;
 }
 

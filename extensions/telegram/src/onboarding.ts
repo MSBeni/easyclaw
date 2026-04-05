@@ -26,6 +26,11 @@ import {
   resolveTelegramAccount,
 } from "./accounts.js";
 import { fetchTelegramChatId } from "./api-fetch.js";
+import {
+  normalizeTelegramChatId,
+  normalizeTelegramLookupTarget,
+  parseTelegramTarget,
+} from "./targets.js";
 
 const channel = "telegram" as const;
 
@@ -66,6 +71,58 @@ export function normalizeTelegramAllowFromInput(raw: string): string {
 export function parseTelegramAllowFromId(raw: string): string | null {
   const stripped = normalizeTelegramAllowFromInput(raw);
   return /^\d+$/.test(stripped) ? stripped : null;
+}
+
+function normalizeConfiguredTelegramDefaultTarget(value: string | number | undefined): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(Math.trunc(value));
+  }
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  return "";
+}
+
+function validateTelegramDefaultTargetInput(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = parseTelegramTarget(trimmed);
+  const chatId = parsed.chatId.trim();
+  if (!chatId) {
+    return "Enter a Telegram target or leave blank.";
+  }
+  if (normalizeTelegramChatId(chatId) || normalizeTelegramLookupTarget(chatId)) {
+    return undefined;
+  }
+  return "Use a numeric chat id, @username, or t.me link (optional :topic:<id>).";
+}
+
+async function promptTelegramDefaultTarget(params: {
+  cfg: OpenClawConfig;
+  prompter: WizardPrompter;
+  accountId: string;
+}): Promise<OpenClawConfig> {
+  const resolved = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  const currentTarget = normalizeConfiguredTelegramDefaultTarget(resolved.config.defaultTo);
+  const nextTarget = (
+    await params.prompter.text({
+      message: "Telegram default destination (optional, used for @me and scheduled deliveries)",
+      initialValue: currentTarget,
+      placeholder: "123456789 or -1001234567890:topic:42",
+      validate: validateTelegramDefaultTargetInput,
+    })
+  ).trim();
+  if (!nextTarget || nextTarget === currentTarget) {
+    return params.cfg;
+  }
+  return patchChannelConfigForAccount({
+    cfg: params.cfg,
+    channel: "telegram",
+    accountId: params.accountId,
+    patch: { defaultTo: nextTarget },
+  });
 }
 
 async function promptTelegramAllowFrom(params: {
@@ -239,6 +296,12 @@ export const telegramOnboardingAdapter: ChannelOnboardingAdapter = {
       });
       resolvedTokenForAllowFrom = tokenResult.resolvedValue;
     }
+
+    next = await promptTelegramDefaultTarget({
+      cfg: next,
+      prompter,
+      accountId: telegramAccountId,
+    });
 
     if (forceAllowFrom) {
       next = await promptTelegramAllowFrom({

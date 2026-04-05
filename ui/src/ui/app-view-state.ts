@@ -45,6 +45,7 @@ export type AppViewState = {
   onboarding: boolean;
   basePath: string;
   connected: boolean;
+  connectedEver?: boolean;
   theme: ThemeName;
   themeMode: ThemeMode;
   themeResolved: ResolvedTheme;
@@ -140,6 +141,8 @@ export type AppViewState = {
   aiAgentsSearchQuery: string;
   aiAgentsActiveSection: string | null;
   aiAgentsActiveSubsection: string | null;
+  /** Currently active onboarding step id, or null for the overview grid. */
+  onboardingStep: string | null;
   channelsLoading: boolean;
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
@@ -165,13 +168,29 @@ export type AppViewState = {
   agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   builderBrief: string;
   builderTemplateId: string;
+  builderModelId: string;
   builderSetupFocus: {
     connectorId: string | null;
+    connectorLabel?: string | null;
+    connectorKind?: string | null;
+    connectorSourceKind?: string | null;
+    connectorDocsPath?: string | null;
+    connectorSelectionLabel?: string | null;
+    connectorDetailLabel?: string | null;
+    connectorOnboarding?: boolean;
+    connectorRequiresConfig?: boolean;
+    connectorRequiresAuth?: boolean;
+    connectorInstallRequired?: boolean;
+    connectorInstallStrategy?: "none" | "bundled" | "npm" | "local" | "external" | null;
     title: string;
     detail: string;
     refs: string[];
     targetTab: Tab;
   } | null;
+  builderSetupInputs: Record<string, string>;
+  builderSetupRunningConnectorId: string | null;
+  builderSetupError: string | null;
+  builderSetupResult: import("./controllers/builder.ts").BuilderSetupRunResult | null;
   builderPlan: import("./controllers/builder.ts").BuilderPlanResult | null;
   builderPlanLoading: boolean;
   builderPlanError: string | null;
@@ -275,6 +294,7 @@ export type AppViewState = {
   | "cronJobsSortDir"
   | "cronStatus"
   | "cronError"
+  | "cronNotice"
   | "cronForm"
   | "cronFieldErrors"
   | "cronEditingJobId"

@@ -50,14 +50,14 @@ export type ModelDefinitionConfig = {
 };
 
 export type ModelProviderConfig = {
-  baseUrl: string;
+  baseUrl?: string;
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
-  models: ModelDefinitionConfig[];
+  models?: ModelDefinitionConfig[];
 };
 
 export type BedrockDiscoveryConfig = {

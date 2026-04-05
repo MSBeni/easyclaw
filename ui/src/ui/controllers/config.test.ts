@@ -294,6 +294,67 @@ describe("applyConfig", () => {
     expect(params.baseHash).toBe("hash-apply-1");
     expect(params.sessionKey).toBe("agent:main:web:dm:test");
   });
+
+  it("reloads config to recover a missing hash before config.apply", async () => {
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          valid: true,
+          issues: [],
+          raw: "{\n}\n",
+          hash: "hash-after-reload",
+        };
+      }
+      return {};
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "main";
+    state.configFormMode = "raw";
+    state.configRaw = "{\n}\n";
+    state.configSnapshot = {};
+
+    await applyConfig(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "config.get", {});
+    expect(request).toHaveBeenNthCalledWith(2, "config.apply", {
+      raw: "{\n}\n",
+      baseHash: "hash-after-reload",
+      sessionKey: "main",
+    });
+  });
+
+  it("allows config.apply without baseHash when snapshot is unconfigured", async () => {
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          valid: true,
+          issues: [],
+          raw: "{\n}\n",
+          exists: false,
+        };
+      }
+      return {};
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "main";
+    state.configFormMode = "raw";
+    state.configRaw = "{\n}\n";
+    state.configSnapshot = { exists: false };
+
+    await applyConfig(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "config.get", {});
+    expect(request).toHaveBeenNthCalledWith(2, "config.apply", {
+      raw: "{\n}\n",
+      sessionKey: "main",
+    });
+  });
 });
 
 describe("saveConfig", () => {
@@ -354,6 +415,63 @@ describe("saveConfig", () => {
     };
     expect(parsed.gateway.port).toBe("18789");
     expect(params.baseHash).toBe("hash-save-2");
+  });
+
+  it("reloads config to recover a missing hash before config.set", async () => {
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          valid: true,
+          issues: [],
+          raw: "{\n}\n",
+          hash: "hash-after-reload",
+        };
+      }
+      return {};
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "raw";
+    state.configRaw = "{\n}\n";
+    state.configSnapshot = {};
+
+    await saveConfig(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "config.get", {});
+    expect(request).toHaveBeenNthCalledWith(2, "config.set", {
+      raw: "{\n}\n",
+      baseHash: "hash-after-reload",
+    });
+  });
+
+  it("allows config.set without baseHash when snapshot is unconfigured", async () => {
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          valid: true,
+          issues: [],
+          raw: "{\n}\n",
+          exists: false,
+        };
+      }
+      return {};
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "raw";
+    state.configRaw = "{\n}\n";
+    state.configSnapshot = { exists: false };
+
+    await saveConfig(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "config.get", {});
+    expect(request).toHaveBeenNthCalledWith(2, "config.set", {
+      raw: "{\n}\n",
+    });
   });
 });
 

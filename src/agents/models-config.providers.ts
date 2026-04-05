@@ -258,6 +258,9 @@ function normalizeProviderModels(
   provider: ProviderConfig,
   normalizeId: (id: string) => string,
 ): ProviderConfig {
+  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+    return provider;
+  }
   let mutated = false;
   const models = provider.models.map((model) => {
     const nextId = normalizeId(model.id);

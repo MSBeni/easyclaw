@@ -15,6 +15,8 @@ export type ModelCatalogEntry = {
   contextWindow?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
+  /** Whether the provider has credentials configured (set by models.list endpoint). */
+  configured?: boolean;
 };
 
 type DiscoveredModel = {

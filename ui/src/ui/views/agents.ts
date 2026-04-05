@@ -39,6 +39,7 @@ export type CronState = {
   jobs: CronJob[];
   loading: boolean;
   error: string | null;
+  notice: string | null;
 };
 
 export type AgentFilesState = {
@@ -72,6 +73,7 @@ export type AgentsProps = {
   agentsList: AgentsListResult | null;
   selectedAgentId: string | null;
   activePanel: AgentsPanel;
+  modelSuggestions: string[];
   config: ConfigState;
   channels: ChannelsState;
   cron: CronState;
@@ -98,12 +100,14 @@ export type AgentsProps = {
   onChannelsRefresh: () => void;
   onCronRefresh: () => void;
   onCronRunNow: (jobId: string) => void;
+  onOpenCronTab: () => void;
   onSkillsFilterChange: (next: string) => void;
   onSkillsRefresh: () => void;
   onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   onAgentSkillsClear: (agentId: string) => void;
   onAgentSkillsDisableAll: (agentId: string) => void;
   onSetDefault: (agentId: string) => void;
+  onDeleteAgent: (agentId: string) => void;
 };
 
 export function renderAgents(props: AgentsProps) {
@@ -189,6 +193,18 @@ export function renderAgents(props: AgentsProps) {
                                   >
                                     ${defaultId && selectedAgent.id === defaultId ? "Already default" : "Set as default"}
                                   </button>
+                                  <hr class="agent-actions-divider" />
+                                  <button
+                                    type="button"
+                                    class="danger"
+                                    ?disabled=${Boolean(defaultId && selectedAgent.id === defaultId)}
+                                    @click=${() => {
+                                      props.onDeleteAgent(selectedAgent.id);
+                                      actionsMenuOpen = false;
+                                    }}
+                                  >
+                                    ${defaultId && selectedAgent.id === defaultId ? "Cannot delete default agent" : "Delete agent\u2026"}
+                                  </button>
                                 </div>
                               `
                             : nothing
@@ -227,6 +243,7 @@ export function renderAgents(props: AgentsProps) {
                         basePath: props.basePath,
                         defaultId,
                         configForm: props.config.form,
+                        modelSuggestions: props.modelSuggestions,
                         agentFilesList: props.agentFiles.list,
                         agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
                         agentIdentityError: props.agentIdentityError,
@@ -336,8 +353,10 @@ export function renderAgents(props: AgentsProps) {
                         status: props.cron.status,
                         loading: props.cron.loading,
                         error: props.cron.error,
+                        notice: props.cron.notice,
                         onRefresh: props.onCronRefresh,
                         onRunNow: props.onCronRunNow,
+                        onOpenCronTab: props.onOpenCronTab,
                       })
                     : nothing
                 }

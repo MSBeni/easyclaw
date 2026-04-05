@@ -34,6 +34,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     jobsSortBy: "nextRunAtMs",
     jobsSortDir: "asc",
     error: null,
+    notice: null,
     busy: false,
     form: { ...DEFAULT_CRON_FORM },
     fieldErrors: {},

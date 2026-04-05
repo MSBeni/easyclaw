@@ -245,8 +245,10 @@ export function renderAgentCron(params: {
   status: CronStatus | null;
   loading: boolean;
   error: string | null;
+  notice: string | null;
   onRefresh: () => void;
   onRunNow: (jobId: string) => void;
+  onOpenCronTab: () => void;
 }) {
   const jobs = params.jobs.filter((job) => job.agentId === params.agentId);
   return html`
@@ -279,6 +281,11 @@ export function renderAgentCron(params: {
           </div>
         </div>
         ${
+          params.notice
+            ? html`<div class="callout info" style="margin-top: 12px;">${params.notice}</div>`
+            : nothing
+        }
+        ${
           params.error
             ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
             : nothing
@@ -291,7 +298,23 @@ export function renderAgentCron(params: {
       ${
         jobs.length === 0
           ? html`
-              <div class="muted" style="margin-top: 16px">No jobs assigned.</div>
+              <div class="muted" style="margin-top: 16px">
+                No jobs assigned. Create one from Cron Jobs, then run it on demand. Builder plans
+                are previews until you click Apply Builder Plan.
+              </div>
+              <div class="row" style="margin-top: 10px; gap: 8px;">
+                <button class="btn btn--sm" type="button" @click=${params.onOpenCronTab}>
+                  Open Cron Jobs
+                </button>
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  disabled
+                  title="Create at least one cron job for this agent to run it now."
+                >
+                  Run Now
+                </button>
+              </div>
             `
           : html`
               <div class="list" style="margin-top: 16px;">

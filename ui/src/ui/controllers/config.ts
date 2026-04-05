@@ -127,6 +127,26 @@ function serializeFormForSubmit(state: ConfigState): string {
   return serializeConfigForm(form);
 }
 
+/**
+ * Best-effort base hash refresh for optimistic config writes.
+ *
+ * `config.set` / `config.apply` accept missing `baseHash` when there is no
+ * on-disk config yet. We still try to refresh first so we keep conflict
+ * protection when a hash is available.
+ */
+async function resolveBaseHashForWrite(state: ConfigState): Promise<string | undefined> {
+  const snapshotHash = state.configSnapshot?.hash;
+  if (typeof snapshotHash === "string" && snapshotHash.trim().length > 0) {
+    return snapshotHash;
+  }
+  await loadConfig(state);
+  const refreshedHash = state.configSnapshot?.hash;
+  if (typeof refreshedHash === "string" && refreshedHash.trim().length > 0) {
+    return refreshedHash;
+  }
+  return undefined;
+}
+
 export async function saveConfig(state: ConfigState) {
   if (!state.client || !state.connected) {
     return;
@@ -135,12 +155,8 @@ export async function saveConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const raw = serializeFormForSubmit(state);
-    const baseHash = state.configSnapshot?.hash;
-    if (!baseHash) {
-      state.lastError = "Config hash missing; reload and retry.";
-      return;
-    }
-    await state.client.request("config.set", { raw, baseHash });
+    const baseHash = await resolveBaseHashForWrite(state);
+    await state.client.request("config.set", baseHash ? { raw, baseHash } : { raw });
     state.configFormDirty = false;
     await loadConfig(state);
   } catch (err) {
@@ -158,16 +174,13 @@ export async function applyConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const raw = serializeFormForSubmit(state);
-    const baseHash = state.configSnapshot?.hash;
-    if (!baseHash) {
-      state.lastError = "Config hash missing; reload and retry.";
-      return;
-    }
-    await state.client.request("config.apply", {
-      raw,
-      baseHash,
-      sessionKey: state.applySessionKey,
-    });
+    const baseHash = await resolveBaseHashForWrite(state);
+    await state.client.request(
+      "config.apply",
+      baseHash
+        ? { raw, baseHash, sessionKey: state.applySessionKey }
+        : { raw, sessionKey: state.applySessionKey },
+    );
     state.configFormDirty = false;
     await loadConfig(state);
   } catch (err) {

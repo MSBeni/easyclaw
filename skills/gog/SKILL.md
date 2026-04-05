@@ -28,9 +28,14 @@ Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
 
 Setup (once)
 
-- `gog auth credentials /path/to/client_secret.json`
-- `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
-- `gog auth list`
+- Generic gog setup:
+  - `gog auth credentials /path/to/client_secret.json`
+  - `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
+  - `gog auth list`
+- OpenClaw Gmail digests (recommended when used by scheduled agents):
+  - `gog auth credentials set /path/to/client_secret.json --client openclaw-gmail-hook`
+  - `gog login you@gmail.com --client openclaw-gmail-hook --services gmail --gmail-scope full --force-consent`
+  - `gog auth status --json --no-input --client openclaw-gmail-hook`
 
 Common commands
 
@@ -109,6 +114,7 @@ Email Formatting
 Notes
 
 - Set `GOG_ACCOUNT=you@gmail.com` to avoid repeating `--account`.
+- For OpenClaw scheduled Gmail digests, prefer `GOG_CLIENT=openclaw-gmail-hook` and the matching account.
 - For scripting, prefer `--json` plus `--no-input`.
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.
 - Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).

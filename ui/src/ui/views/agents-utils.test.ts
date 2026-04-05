@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentLogoUrl,
   resolveConfiguredCronModelSuggestions,
+  resolveModelOptions,
   resolveAgentAvatarUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -88,6 +89,15 @@ describe("resolveConfiguredCronModelSuggestions", () => {
     expect(resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } })).toEqual(
       [],
     );
+  });
+});
+
+describe("buildModelOptions", () => {
+  it("includes gateway-discovered model suggestions even when config does not define models", async () => {
+    const values = resolveModelOptions(null, ["openai/gpt-5.4", "anthropic/claude-opus-4-6"]).map(
+      (option) => option.value,
+    );
+    expect(values).toEqual(["anthropic/claude-opus-4-6", "openai/gpt-5.4"]);
   });
 });
 

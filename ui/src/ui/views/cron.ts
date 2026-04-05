@@ -37,6 +37,7 @@ export type CronProps = {
   jobsSortBy: CronJobsSortBy;
   jobsSortDir: CronSortDir;
   error: string | null;
+  notice: string | null;
   busy: boolean;
   form: CronFormState;
   fieldErrors: CronFieldErrors;
@@ -422,7 +423,16 @@ export function renderCron(props: CronProps) {
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? t("cron.summary.refreshing") : t("cron.summary.refresh")}
         </button>
-        ${props.error ? html`<span class="muted">${props.error}</span>` : nothing}
+        ${
+          props.notice
+            ? html`<div class="callout info" style="margin-top: 8px;">${props.notice}</div>`
+            : nothing
+        }
+        ${
+          props.error
+            ? html`<div class="callout danger" style="margin-top: 8px;">${props.error}</div>`
+            : nothing
+        }
       </div>
     </section>
 

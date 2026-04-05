@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveOAuthDir } from "../../config/paths.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { OPENCLAW_GOG_CLIENT } from "../../hooks/gmail.js";
 import { isDangerousHostEnvVarName } from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeEnvVars, validateEnvVarValue } from "../sandbox/sanitize-env-vars.js";
@@ -8,6 +12,7 @@ import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEntry, SkillSnapshot } from "./types.js";
 
 const log = createSubsystemLogger("env-overrides");
+const GOG_KEYRING_PASSWORD_FILENAME = "gog-keyring-password";
 
 type EnvUpdate = { key: string };
 type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
@@ -136,11 +141,12 @@ function sanitizeSkillEnvOverrides(params: {
 function applySkillConfigEnvOverrides(params: {
   updates: EnvUpdate[];
   skillConfig: SkillConfig;
+  config?: OpenClawConfig;
   primaryEnv?: string | null;
   requiredEnv?: string[] | null;
   skillKey: string;
 }) {
-  const { updates, skillConfig, primaryEnv, requiredEnv, skillKey } = params;
+  const { updates, skillConfig, config, primaryEnv, requiredEnv, skillKey } = params;
   const allowedSensitiveKeys = new Set<string>();
   const normalizedPrimaryEnv = primaryEnv?.trim();
   if (normalizedPrimaryEnv) {
@@ -180,6 +186,12 @@ function applySkillConfigEnvOverrides(params: {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
     }
   }
+  applyGogSkillEnvOverrides({
+    pendingOverrides,
+    allowedSensitiveKeys,
+    config,
+    skillKey,
+  });
 
   const sanitized = sanitizeSkillEnvOverrides({
     overrides: pendingOverrides,
@@ -210,20 +222,72 @@ function createEnvReverter(updates: EnvUpdate[]) {
   };
 }
 
+function readPersistedGogKeyringPassword(): string | undefined {
+  const envPassword = process.env.GOG_KEYRING_PASSWORD?.trim();
+  if (envPassword) {
+    return envPassword;
+  }
+  const passwordPath = path.join(resolveOAuthDir(), GOG_KEYRING_PASSWORD_FILENAME);
+  try {
+    const storedPassword = fs.readFileSync(passwordPath, "utf8").trim();
+    return storedPassword || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function assignSkillEnvOverrideIfUnset(
+  pendingOverrides: Record<string, string>,
+  key: string,
+  value: string | undefined,
+) {
+  if (!value || pendingOverrides[key]) {
+    return;
+  }
+  pendingOverrides[key] = value;
+}
+
+function applyGogSkillEnvOverrides(params: {
+  pendingOverrides: Record<string, string>;
+  allowedSensitiveKeys: Set<string>;
+  config?: OpenClawConfig;
+  skillKey: string;
+}) {
+  if (params.skillKey !== "gog") {
+    return;
+  }
+  const configuredAccount = params.config?.hooks?.gmail?.account?.trim();
+  if (!configuredAccount) {
+    return;
+  }
+
+  assignSkillEnvOverrideIfUnset(params.pendingOverrides, "GOG_CLIENT", OPENCLAW_GOG_CLIENT);
+  assignSkillEnvOverrideIfUnset(params.pendingOverrides, "GOG_ACCOUNT", configuredAccount);
+
+  const keyringPassword = readPersistedGogKeyringPassword();
+  if (!keyringPassword) {
+    return;
+  }
+
+  // Password-bearing env vars are blocked by default; explicitly allow this one
+  // when it comes from OpenClaw's persisted Gmail setup state.
+  params.allowedSensitiveKeys.add("GOG_KEYRING_PASSWORD");
+  assignSkillEnvOverrideIfUnset(params.pendingOverrides, "GOG_KEYRING_BACKEND", "file");
+  assignSkillEnvOverrideIfUnset(params.pendingOverrides, "GOG_KEYRING_PASSWORD", keyringPassword);
+}
+
 export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
   const { skills, config } = params;
   const updates: EnvUpdate[] = [];
 
   for (const entry of skills) {
     const skillKey = resolveSkillKey(entry.skill, entry);
-    const skillConfig = resolveSkillConfig(config, skillKey);
-    if (!skillConfig) {
-      continue;
-    }
+    const skillConfig = resolveSkillConfig(config, skillKey) ?? {};
 
     applySkillConfigEnvOverrides({
       updates,
       skillConfig,
+      config,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env,
       skillKey,
@@ -244,14 +308,12 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   const updates: EnvUpdate[] = [];
 
   for (const skill of snapshot.skills) {
-    const skillConfig = resolveSkillConfig(config, skill.name);
-    if (!skillConfig) {
-      continue;
-    }
+    const skillConfig = resolveSkillConfig(config, skill.name) ?? {};
 
     applySkillConfigEnvOverrides({
       updates,
       skillConfig,
+      config,
       primaryEnv: skill.primaryEnv,
       requiredEnv: skill.requiredEnv,
       skillKey: skill.name,

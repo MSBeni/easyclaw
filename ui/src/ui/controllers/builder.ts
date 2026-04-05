@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { loadAgents, type AgentsState } from "./agents.ts";
+import { loadConfig, type ConfigState } from "./config.ts";
 import { loadCronStatus, reloadCronJobs, type CronState } from "./cron.ts";
 
 export type BuilderDraftSummary = {
@@ -145,6 +146,14 @@ export type BuilderDraftSummary = {
       sourceKind: string;
       contracts: string[];
       verification: Array<{ kind: string; label: string; successDescription: string }>;
+      docsPath?: string;
+      selectionLabel?: string;
+      detailLabel?: string;
+      onboarding: boolean;
+      requiresConfig: boolean;
+      requiresAuth: boolean;
+      installRequired: boolean;
+      installStrategy: "none" | "bundled" | "npm" | "local" | "external";
     }>;
     setupTasks: Array<{
       id: string;
@@ -266,11 +275,61 @@ export type BuilderVerifyResult = {
   };
 };
 
+export type BuilderSetupRunResult = {
+  connectorId: string;
+  status: "configured" | "needs_auth" | "needs_credentials" | "needs_setup" | "started";
+  message: string;
+  updatedRefs: string[];
+  summary?: {
+    projectId?: string;
+    topic?: string;
+    subscription?: string;
+    pushEndpoint?: string;
+    hookUrl?: string;
+    command?: string;
+    serve?: {
+      bind: string;
+      port: number;
+      path: string;
+    };
+  };
+  authSteps?: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    command: string;
+    connectorId: string;
+    inputs: Record<string, string>;
+  }>;
+  credentialImport?: {
+    connectorId: string;
+    label: string;
+    detail: string;
+    consoleUrl: string;
+    autoDetect?: {
+      connectorId: string;
+      label: string;
+      detail: string;
+    };
+  };
+  resume?: {
+    connectorId: string;
+    label: string;
+    detail: string;
+    inputs: Record<string, string>;
+  };
+};
+
 export type BuilderState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   builderBrief: string;
   builderTemplateId: string;
+  builderModelId: string;
+  builderSetupInputs: Record<string, string>;
+  builderSetupRunningConnectorId: string | null;
+  builderSetupError: string | null;
+  builderSetupResult: BuilderSetupRunResult | null;
   builderPlan: BuilderPlanResult | null;
   builderPlanLoading: boolean;
   builderPlanError: string | null;
@@ -284,6 +343,197 @@ export type BuilderState = {
 };
 
 type BuilderApplyState = BuilderState & AgentsState & CronState;
+type BuilderSetupState = BuilderState & ConfigState;
+
+function formatBuilderSetupError(error: unknown): string {
+  const raw = String(error instanceof Error ? error.message : error).trim();
+  const withoutGatewayPrefix = raw.startsWith("GatewayRequestError: ")
+    ? raw.slice("GatewayRequestError: ".length).trim()
+    : raw;
+  if (withoutGatewayPrefix.length <= 1200) {
+    return withoutGatewayPrefix;
+  }
+  return `${withoutGatewayPrefix.slice(0, 1200).trimEnd()}…`;
+}
+
+function buildGmailLoginCommand(account: string): string {
+  return `gog login ${account} --client openclaw-gmail-hook --services gmail --gmail-scope full --force-consent`;
+}
+
+function buildGmailCredentialConsoleUrl(project: string | undefined): string {
+  const trimmed = project?.trim();
+  if (!trimmed) {
+    return "https://console.cloud.google.com/apis/credentials";
+  }
+  return `https://console.cloud.google.com/apis/credentials?project=${encodeURIComponent(trimmed)}`;
+}
+
+function buildGmailSetupResume(inputs: Record<string, string>): BuilderSetupRunResult["resume"] {
+  return {
+    connectorId: "platform:gmail-hook",
+    label: "Retry Gmail setup",
+    detail: "Run Gmail auto-setup again after the setup steps are complete.",
+    inputs: {
+      account: inputs.account ?? "",
+      project: inputs.project ?? "",
+      topic: inputs.topic ?? "",
+      subscription: inputs.subscription ?? "",
+      pushEndpoint: inputs.pushEndpoint ?? "",
+    },
+  };
+}
+
+function buildGmailSetupFallback(
+  inputs: Record<string, string>,
+  formattedError: string,
+): BuilderSetupRunResult | null {
+  const lower = formattedError.toLowerCase();
+  const account = inputs.account?.trim() ?? "";
+  const project = inputs.project?.trim() ?? "";
+  const needsScopes =
+    lower.includes("insufficientpermissions") ||
+    lower.includes("insufficient authentication scopes") ||
+    lower.includes("access_token_scope_insufficient");
+  const needsCredentials = lower.includes("gog oauth client credentials missing");
+  const needsGcloud = lower.includes("gcloud login required");
+  const needsGogLogin =
+    lower.includes("gog login required") || lower.includes("gog is signed in as");
+
+  if (needsScopes) {
+    return {
+      connectorId: "platform:gmail-hook",
+      status: "needs_auth",
+      message:
+        "Gmail setup reached the Gmail API, but the current gog token is missing Gmail scopes. Re-consent with Gmail access, then retry.",
+      updatedRefs: [],
+      authSteps: account
+        ? [
+            {
+              id: "gog-auth",
+              label: "Grant Gmail access in gog",
+              detail:
+                "Re-consent in gog with Gmail access so EasyClaw can create the Gmail watch subscription.",
+              command: buildGmailLoginCommand(account),
+              connectorId: "platform:gmail-hook:gog-auth",
+              inputs: { account },
+            },
+          ]
+        : [],
+      resume: buildGmailSetupResume(inputs),
+    };
+  }
+
+  if (needsCredentials) {
+    return {
+      connectorId: "platform:gmail-hook",
+      status: "needs_credentials",
+      message:
+        "Gmail setup needs a Google OAuth client JSON before gog can sign in to this mailbox.",
+      updatedRefs: [],
+      credentialImport: {
+        connectorId: "platform:gmail-hook:gog-credentials",
+        label: "Import OAuth client JSON",
+        detail:
+          "Upload the Desktop app OAuth client JSON downloaded from Google Cloud so EasyClaw can import it into gog.",
+        consoleUrl: buildGmailCredentialConsoleUrl(project),
+        autoDetect: {
+          connectorId: "platform:gmail-hook:gog-credentials-auto",
+          label: "Import from Downloads and continue",
+          detail:
+            "If the Desktop app OAuth client JSON was downloaded to Downloads, EasyClaw can import it and continue into gog login automatically.",
+        },
+      },
+      resume: buildGmailSetupResume(inputs),
+    };
+  }
+
+  if (!needsGcloud && !needsGogLogin) {
+    return null;
+  }
+
+  const authSteps: NonNullable<BuilderSetupRunResult["authSteps"]> = [];
+  if (needsGcloud) {
+    authSteps.push({
+      id: "gcloud-auth",
+      label: "Sign in to Google Cloud",
+      detail: "Log in to the Google Cloud CLI so EasyClaw can enable APIs and manage Pub/Sub.",
+      command: "gcloud auth login",
+      connectorId: "platform:gmail-hook:gcloud-auth",
+      inputs: {},
+    });
+  }
+  if (needsGogLogin && account) {
+    authSteps.push({
+      id: "gog-auth",
+      label: "Sign in to gog",
+      detail:
+        "Authorize the Gmail helper with your mailbox so EasyClaw can create the Gmail watch subscription.",
+      command: buildGmailLoginCommand(account),
+      connectorId: "platform:gmail-hook:gog-auth",
+      inputs: { account },
+    });
+  }
+
+  if (authSteps.length === 0) {
+    return null;
+  }
+
+  return {
+    connectorId: "platform:gmail-hook",
+    status: "needs_auth",
+    message: "Gmail setup needs sign-in before EasyClaw can finish the remaining steps.",
+    updatedRefs: [],
+    authSteps,
+    resume: buildGmailSetupResume(inputs),
+  };
+}
+
+export function updateBuilderSetupInput(state: BuilderState, key: string, value: string) {
+  state.builderSetupInputs = {
+    ...state.builderSetupInputs,
+    [key]: value,
+  };
+  state.builderSetupError = null;
+}
+
+export async function runBuilderSetupAction(
+  state: BuilderState,
+  params: { connectorId: string; inputs: Record<string, string> },
+) {
+  if (!state.client || !state.connected || !params.connectorId.trim()) {
+    return;
+  }
+  state.builderSetupRunningConnectorId = params.connectorId;
+  state.builderSetupError = null;
+  state.builderSetupResult = null;
+  try {
+    const result = await state.client.request<BuilderSetupRunResult>("agents.builder.setup.run", {
+      connectorId: params.connectorId,
+      inputs: params.inputs,
+    });
+    state.builderSetupResult = result ?? null;
+    if (result?.status === "configured") {
+      const refreshState = state as BuilderSetupState;
+      await loadConfig(refreshState);
+      if (state.builderBrief.trim()) {
+        await loadBuilderPlan(state);
+      }
+    }
+  } catch (error) {
+    const formatted = formatBuilderSetupError(error);
+    const gmailFallback = params.connectorId.startsWith("platform:gmail-hook")
+      ? buildGmailSetupFallback(params.inputs, formatted)
+      : null;
+    if (gmailFallback) {
+      state.builderSetupResult = gmailFallback;
+      state.builderSetupError = null;
+      return;
+    }
+    state.builderSetupError = formatted;
+  } finally {
+    state.builderSetupRunningConnectorId = null;
+  }
+}
 
 export async function loadBuilderPlan(state: BuilderState) {
   if (!state.client || !state.connected || !state.builderBrief.trim()) {
@@ -298,6 +548,7 @@ export async function loadBuilderPlan(state: BuilderState) {
     const result = await state.client.request<BuilderPlanResult>("agents.builder.plan", {
       brief: state.builderBrief,
       ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
+      ...(state.builderModelId ? { modelId: state.builderModelId } : {}),
     });
     state.builderPlan = result ?? null;
   } catch (error) {
@@ -318,6 +569,7 @@ export async function applyBuilderPlan(state: BuilderState) {
     const result = await state.client.request<BuilderApplyResult>("agents.builder.apply", {
       brief: state.builderBrief,
       ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
+      ...(state.builderModelId ? { modelId: state.builderModelId } : {}),
     });
     state.builderApplyResult = result ?? null;
     state.builderConfirmApply = false;
@@ -345,6 +597,7 @@ export async function verifyBuilderPlan(state: BuilderState) {
     const result = await state.client.request<BuilderVerifyResult>("agents.builder.verify", {
       brief: state.builderBrief,
       ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
+      ...(state.builderModelId ? { modelId: state.builderModelId } : {}),
     });
     state.builderVerifyResult = result ?? null;
     if (result) {

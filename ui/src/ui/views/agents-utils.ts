@@ -178,6 +178,17 @@ type ConfigSnapshot = {
     defaults?: { workspace?: string; model?: unknown; models?: Record<string, { alias?: string }> };
     list?: AgentConfigEntry[];
   };
+  models?: {
+    providers?: Record<
+      string,
+      {
+        models?: Array<{
+          id?: string;
+          name?: string;
+        }>;
+      }
+    >;
+  };
   tools?: {
     profile?: string;
     allow?: string[];
@@ -545,47 +556,143 @@ type ConfiguredModelOption = {
   label: string;
 };
 
+function addConfiguredModelOption(
+  out: Map<string, ConfiguredModelOption>,
+  valueRaw: unknown,
+  labelHint?: string,
+) {
+  if (typeof valueRaw !== "string") {
+    return;
+  }
+  const value = valueRaw.trim();
+  if (!value) {
+    return;
+  }
+  const hinted = labelHint?.trim();
+  const label = hinted && hinted.length > 0 ? hinted : value;
+  const existing = out.get(value);
+  if (!existing) {
+    out.set(value, { value, label });
+    return;
+  }
+  if (existing.label === existing.value && label !== value) {
+    out.set(value, { value, label });
+  }
+}
+
 function resolveConfiguredModels(
   configForm: Record<string, unknown> | null,
 ): ConfiguredModelOption[] {
   const cfg = configForm as ConfigSnapshot | null;
-  const models = cfg?.agents?.defaults?.models;
-  if (!models || typeof models !== "object") {
-    return [];
-  }
-  const options: ConfiguredModelOption[] = [];
-  for (const [modelId, modelRaw] of Object.entries(models)) {
-    const trimmed = modelId.trim();
-    if (!trimmed) {
-      continue;
+  const out = new Map<string, ConfiguredModelOption>();
+
+  const allowlistModels = cfg?.agents?.defaults?.models;
+  if (allowlistModels && typeof allowlistModels === "object") {
+    for (const [modelId, modelRaw] of Object.entries(allowlistModels)) {
+      const trimmed = modelId.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const alias =
+        modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
+          ? typeof (modelRaw as { alias?: unknown }).alias === "string"
+            ? (modelRaw as { alias?: string }).alias?.trim()
+            : undefined
+          : undefined;
+      addConfiguredModelOption(
+        out,
+        trimmed,
+        alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed,
+      );
     }
-    const alias =
-      modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
-        ? typeof (modelRaw as { alias?: unknown }).alias === "string"
-          ? (modelRaw as { alias?: string }).alias?.trim()
-          : undefined
-        : undefined;
-    const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
-    options.push({ value: trimmed, label });
   }
-  return options;
+
+  const discovered = new Set<string>();
+  addModelConfigIds(discovered, cfg?.agents?.defaults?.model);
+  const agentList = cfg?.agents?.list;
+  if (Array.isArray(agentList)) {
+    for (const entry of agentList) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      addModelConfigIds(discovered, (entry as Record<string, unknown>).model);
+    }
+  }
+  for (const modelId of sortLocaleStrings(discovered)) {
+    addConfiguredModelOption(out, modelId);
+  }
+
+  const providers = cfg?.models?.providers;
+  if (providers && typeof providers === "object") {
+    for (const [providerId, providerRaw] of Object.entries(providers)) {
+      const provider = providerId.trim();
+      if (!provider || !providerRaw || typeof providerRaw !== "object") {
+        continue;
+      }
+      const modelsRaw = (providerRaw as { models?: unknown }).models;
+      if (!Array.isArray(modelsRaw)) {
+        continue;
+      }
+      for (const modelRaw of modelsRaw) {
+        if (!modelRaw || typeof modelRaw !== "object") {
+          continue;
+        }
+        const model = modelRaw as { id?: unknown; name?: unknown };
+        const modelId = typeof model.id === "string" ? model.id.trim() : "";
+        if (!modelId) {
+          continue;
+        }
+        const ref = modelId.includes("/") ? modelId : `${provider}/${modelId}`;
+        const name = typeof model.name === "string" ? model.name.trim() : "";
+        addConfiguredModelOption(
+          out,
+          ref,
+          name && name !== ref && name !== modelId ? `${name} (${ref})` : ref,
+        );
+      }
+    }
+  }
+
+  return sortLocaleStrings(new Set(out.values().map((option) => option.value))).map(
+    (value) => out.get(value) ?? { value, label: value },
+  );
 }
 
 export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
+  suggestedModelIds?: Iterable<string>,
 ) {
-  const options = resolveConfiguredModels(configForm);
-  const hasCurrent = current ? options.some((option) => option.value === current) : false;
-  if (current && !hasCurrent) {
-    options.unshift({ value: current, label: `Current (${current})` });
-  }
+  const options = resolveModelOptions(configForm, suggestedModelIds, current);
   if (options.length === 0) {
     return html`
       <option value="" disabled>No configured models</option>
     `;
   }
   return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
+}
+
+export function resolveModelOptions(
+  configForm: Record<string, unknown> | null,
+  suggestedModelIds?: Iterable<string>,
+  current?: string | null,
+) {
+  const byValue = new Map<string, ConfiguredModelOption>(
+    resolveConfiguredModels(configForm).map((option) => [option.value, option] as const),
+  );
+  if (suggestedModelIds) {
+    for (const suggestion of suggestedModelIds) {
+      addConfiguredModelOption(byValue, suggestion);
+    }
+  }
+  const options = sortLocaleStrings(new Set(byValue.keys())).map(
+    (value) => byValue.get(value) ?? { value, label: value },
+  );
+  const hasCurrent = current ? options.some((option) => option.value === current) : false;
+  if (current && !hasCurrent) {
+    options.unshift({ value: current, label: `Current (${current})` });
+  }
+  return options;
 }
 
 type CompiledPattern =

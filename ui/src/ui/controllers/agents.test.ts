@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./agents.ts";
-import type { AgentsConfigSaveState, AgentsState } from "./agents.ts";
+import {
+  deleteAgentWithFullCleanup,
+  loadAgents,
+  loadToolsCatalog,
+  saveAgentsConfig,
+} from "./agents.ts";
+import type { AgentsConfigSaveState, AgentsDeleteState, AgentsState } from "./agents.ts";
 
 function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> } {
   const request = vi.fn();
@@ -50,6 +55,23 @@ function createSaveState(): {
       configActiveSection: null,
       configActiveSubsection: null,
       lastError: null,
+    },
+    request,
+  };
+}
+
+function createDeleteState(): {
+  state: AgentsDeleteState;
+  request: ReturnType<typeof vi.fn>;
+} {
+  const { state, request } = createState();
+  return {
+    state: {
+      ...state,
+      cronJobs: [
+        { id: "cron-a", agentId: "daily-briefing" },
+        { id: "cron-b", agentId: "main" },
+      ] as never,
     },
     request,
   };
@@ -225,5 +247,36 @@ describe("saveAgentsConfig", () => {
     await saveAgentsConfig(state);
 
     expect(state.agentsSelectedId).toBe("main");
+  });
+});
+
+describe("deleteAgentWithFullCleanup", () => {
+  it("cancels when the user does not confirm", async () => {
+    const { state, request } = createDeleteState();
+    const confirmSpy = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirmSpy);
+
+    const deleted = await deleteAgentWithFullCleanup(state, "daily-briefing");
+
+    expect(deleted).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("deletes with full cleanup flags after confirmation", async () => {
+    const { state, request } = createDeleteState();
+    const confirmSpy = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirmSpy);
+    request.mockResolvedValue({ ok: true });
+
+    const deleted = await deleteAgentWithFullCleanup(state, "daily-briefing");
+
+    expect(deleted).toBe(true);
+    expect(request).toHaveBeenCalledWith("agents.delete", {
+      agentId: "daily-briefing",
+      deleteFiles: true,
+      deleteCronJobs: true,
+    });
+    vi.unstubAllGlobals();
   });
 });

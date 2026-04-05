@@ -115,7 +115,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
   it("falls back to plain supervised exit when launchd handoff scheduling fails", () => {
     clearSupervisorHints();
     setPlatform("darwin");
-    process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
     scheduleDetachedLaunchdRestartHandoffMock.mockReturnValue({
       ok: false,
       detail: "spawn failed",
@@ -143,14 +143,32 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when XPC_SERVICE_NAME is set by launchd", () => {
+  it("does not treat bare XPC_SERVICE_NAME as a launchd restart marker", () => {
     clearSupervisorHints();
     setPlatform("darwin");
     process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+    spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
+
     const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
+
+    expect(result).toEqual({ mode: "spawned", pid: 4242 });
+    expect(scheduleDetachedLaunchdRestartHandoffMock).not.toHaveBeenCalled();
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenCalled();
+  });
+
+  it("does not treat XPC_SERVICE_NAME=0 as launchd supervision", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.XPC_SERVICE_NAME = "0";
+    spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({ mode: "spawned", pid: 4242 });
+    expect(scheduleDetachedLaunchdRestartHandoffMock).not.toHaveBeenCalled();
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenCalled();
   });
 
   it("spawns detached child with current exec argv", () => {

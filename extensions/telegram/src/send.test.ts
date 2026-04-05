@@ -480,6 +480,49 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("resolves @me using configured telegram default target", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+          defaultTo: "-100123",
+        },
+      },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "-100123" },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram("@me", "hi", {
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("-100123", "hi", {
+      parse_mode: "HTML",
+    });
+  });
+
+  it("errors clearly when @me is used without a configured telegram default target", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+
+    await expect(
+      sendMessageTelegram("@me", "hi", {
+        token: "tok",
+      }),
+    ).rejects.toThrow(/requires a configured default target/i);
+  });
+
   it("fails clearly when a legacy target cannot be resolved", async () => {
     const getChat = vi.fn().mockRejectedValue(new Error("400: Bad Request: chat not found"));
     const api = { getChat } as unknown as {

@@ -56,7 +56,7 @@ function resolveChannelValue(
   return resolveChannelConfigValue(config, channelId) ?? {};
 }
 
-const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
+const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy", "defaultTo"] as const;
 
 function renderExtraChannelFields(value: Record<string, unknown>) {
   const entries = EXTRA_CHANNEL_FIELDS.flatMap((field) => {

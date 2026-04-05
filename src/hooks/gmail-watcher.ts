@@ -6,11 +6,12 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import process from "node:process";
 import { hasBinary } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
+import { ensureTailscaleEndpoint, getGogCommandEnv } from "./gmail-setup-utils.js";
 import {
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
@@ -46,7 +47,10 @@ async function startGmailWatch(
 ): Promise<boolean> {
   const args = ["gog", ...buildGogWatchStartArgs(cfg)];
   try {
-    const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
+    const result = await runCommandWithTimeout(args, {
+      timeoutMs: 120_000,
+      env: await getGogCommandEnv(),
+    });
     if (result.code !== 0) {
       const message = result.stderr || result.stdout || "gog watch start failed";
       log.error(`watch start failed: ${message}`);
@@ -63,7 +67,7 @@ async function startGmailWatch(
 /**
  * Spawn the gog gmail watch serve process
  */
-function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
+async function spawnGogServe(cfg: GmailHookRuntimeConfig): Promise<ChildProcess> {
   const args = buildGogWatchServeArgs(cfg);
   log.info(`starting gog ${args.join(" ")}`);
   let addressInUse = false;
@@ -71,6 +75,7 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const child = spawn("gog", args, {
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
+    env: { ...process.env, ...(await getGogCommandEnv()) },
   });
 
   child.stdout?.on("data", (data: Buffer) => {
@@ -113,7 +118,9 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
       if (shuttingDown || !currentConfig) {
         return;
       }
-      watcherProcess = spawnGogServe(currentConfig);
+      void spawnGogServe(currentConfig).then((nextProcess) => {
+        watcherProcess = nextProcess;
+      });
     }, 5000);
   });
 
@@ -183,7 +190,7 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
 
   // Spawn the gog serve process
   shuttingDown = false;
-  watcherProcess = spawnGogServe(runtimeConfig);
+  watcherProcess = await spawnGogServe(runtimeConfig);
 
   // Set up renewal interval
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;

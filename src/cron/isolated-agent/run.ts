@@ -146,6 +146,9 @@ function buildCronAgentDefaultsConfig(params: {
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 
 type IsolatedDeliveryContract = "cron-owned" | "shared";
+const TIMEOUT_ONLY_PAYLOAD_PATTERN = /request timed out before a response was generated/i;
+const CRON_TIMEOUT_RETRY_MIN_MS = 120_000;
+const CRON_TIMEOUT_RETRY_MAX_MS = 1_800_000;
 
 function resolveCronToolPolicy(params: {
   deliveryRequested: boolean;
@@ -197,6 +200,35 @@ function appendCronDeliveryInstruction(params: {
     return params.commandBody;
   }
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+}
+
+function hasRetryableTimeoutOnlyPayload(params: {
+  payloads?: Array<{ text?: string; isError?: boolean }>;
+  runLevelError?: string;
+  didSendViaMessagingTool?: boolean;
+}) {
+  if (params.runLevelError || params.didSendViaMessagingTool) {
+    return false;
+  }
+  const payloads = params.payloads ?? [];
+  const hasNonErrorText = payloads.some(
+    (payload) => payload?.isError !== true && Boolean(payload?.text?.trim()),
+  );
+  if (hasNonErrorText) {
+    return false;
+  }
+  return payloads.some(
+    (payload) =>
+      payload?.isError === true &&
+      typeof payload.text === "string" &&
+      TIMEOUT_ONLY_PAYLOAD_PATTERN.test(payload.text),
+  );
+}
+
+function resolveTimeoutRetryMs(timeoutMs: number): number {
+  const doubled = timeoutMs * 2;
+  const bounded = Math.min(Math.max(doubled, CRON_TIMEOUT_RETRY_MIN_MS), CRON_TIMEOUT_RETRY_MAX_MS);
+  return Math.max(timeoutMs, bounded);
 }
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -425,7 +457,7 @@ export async function runCronIsolatedAgentTurn(params: {
     thinkLevel = "high";
   }
 
-  const timeoutMs = resolveAgentTimeoutMs({
+  let timeoutMs = resolveAgentTimeoutMs({
     cfg: cfgWithAgentDefaults,
     overrideSeconds:
       params.job.payload.kind === "agentTurn" ? params.job.payload.timeoutSeconds : undefined,
@@ -653,6 +685,28 @@ export async function runCronIsolatedAgentTurn(params: {
     await runPrompt(commandBody);
     if (!runResult) {
       throw new Error("cron isolated run returned no result");
+    }
+    if (
+      !isAborted() &&
+      hasRetryableTimeoutOnlyPayload({
+        payloads: runResult.payloads,
+        runLevelError: runResult.meta?.error,
+        didSendViaMessagingTool: runResult.didSendViaMessagingTool,
+      })
+    ) {
+      const nextTimeoutMs = resolveTimeoutRetryMs(timeoutMs);
+      if (nextTimeoutMs > timeoutMs) {
+        timeoutMs = nextTimeoutMs;
+      }
+      logWarn(
+        `[cron:${params.job.id}] First run timed out before a response; retrying once with timeoutMs=${timeoutMs}.`,
+      );
+      const timeoutRetryPrompt = [
+        "The previous attempt timed out before producing a response.",
+        "Retry now and complete the original cron task from scratch.",
+        "Return only the final result.",
+      ].join(" ");
+      await runPrompt(timeoutRetryPrompt);
     }
 
     // Guardrail for cron jobs: if the first turn is only an interim ack

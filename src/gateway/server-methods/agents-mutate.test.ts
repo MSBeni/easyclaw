@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
     agents: [],
   })),
   movePathToTrash: vi.fn(async () => "/trashed"),
+  cronList: vi.fn(async () => [] as Array<{ id: string; agentId: string }>),
+  cronRemove: vi.fn(async () => ({ ok: true, removed: true })),
   fsAccess: vi.fn(async () => {}),
   fsMkdir: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
@@ -116,13 +118,17 @@ const { agentsHandlers } = await import("./agents.js");
 /* Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function makeCall(method: keyof typeof agentsHandlers, params: Record<string, unknown>) {
+function makeCall(
+  method: keyof typeof agentsHandlers,
+  params: Record<string, unknown>,
+  contextOverride?: Record<string, unknown>,
+) {
   const respond = vi.fn();
   const handler = agentsHandlers[method];
   const promise = handler({
     params,
     respond,
-    context: {} as never,
+    context: (contextOverride ?? {}) as never,
     req: { type: "req" as const, id: "1", method },
     client: null,
     isWebchatConnect: () => false,
@@ -432,12 +438,23 @@ describe("agents.delete", () => {
     mocks.loadConfigReturn = {};
     mocks.findAgentEntryIndex.mockReturnValue(0);
     mocks.pruneAgentConfig.mockReturnValue({ config: {}, removedBindings: 2 });
+    mocks.cronList.mockResolvedValue([]);
+    mocks.cronRemove.mockResolvedValue({ ok: true, removed: true });
   });
 
   it("deletes an existing agent and trashes files by default", async () => {
-    const { respond, promise } = makeCall("agents.delete", {
-      agentId: "test-agent",
-    });
+    const { respond, promise } = makeCall(
+      "agents.delete",
+      {
+        agentId: "test-agent",
+      },
+      {
+        cron: {
+          list: mocks.cronList,
+          remove: mocks.cronRemove,
+        },
+      },
+    );
     await promise;
 
     expect(respond).toHaveBeenCalledWith(
@@ -453,10 +470,19 @@ describe("agents.delete", () => {
   it("skips file deletion when deleteFiles is false", async () => {
     mocks.fsAccess.mockClear();
 
-    const { respond, promise } = makeCall("agents.delete", {
-      agentId: "test-agent",
-      deleteFiles: false,
-    });
+    const { respond, promise } = makeCall(
+      "agents.delete",
+      {
+        agentId: "test-agent",
+        deleteFiles: false,
+      },
+      {
+        cron: {
+          list: mocks.cronList,
+          remove: mocks.cronRemove,
+        },
+      },
+    );
     await promise;
 
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
@@ -464,10 +490,52 @@ describe("agents.delete", () => {
     expect(mocks.fsAccess).not.toHaveBeenCalled();
   });
 
+  it("removes cron jobs for the agent when deleteCronJobs is true", async () => {
+    mocks.cronList.mockResolvedValue([
+      { id: "cron-1", agentId: "test-agent" },
+      { id: "cron-2", agentId: "other-agent" },
+      { id: "cron-3", agentId: "test-agent" },
+    ]);
+
+    const { respond, promise } = makeCall(
+      "agents.delete",
+      {
+        agentId: "test-agent",
+        deleteCronJobs: true,
+      },
+      {
+        cron: {
+          list: mocks.cronList,
+          remove: mocks.cronRemove,
+        },
+      },
+    );
+    await promise;
+
+    expect(mocks.cronList).toHaveBeenCalledWith({ includeDisabled: true });
+    expect(mocks.cronRemove).toHaveBeenCalledTimes(2);
+    expect(mocks.cronRemove).toHaveBeenNthCalledWith(1, "cron-1");
+    expect(mocks.cronRemove).toHaveBeenNthCalledWith(2, "cron-3");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, agentId: "test-agent", removedBindings: 2, removedCronJobs: 2 },
+      undefined,
+    );
+  });
+
   it("rejects deleting the main agent", async () => {
-    const { respond, promise } = makeCall("agents.delete", {
-      agentId: "main",
-    });
+    const { respond, promise } = makeCall(
+      "agents.delete",
+      {
+        agentId: "main",
+      },
+      {
+        cron: {
+          list: mocks.cronList,
+          remove: mocks.cronRemove,
+        },
+      },
+    );
     await promise;
 
     expect(respond).toHaveBeenCalledWith(
@@ -481,16 +549,62 @@ describe("agents.delete", () => {
   it("rejects deleting a nonexistent agent", async () => {
     mocks.findAgentEntryIndex.mockReturnValue(-1);
 
-    const { respond, promise } = makeCall("agents.delete", {
-      agentId: "ghost",
-    });
+    const { respond, promise } = makeCall(
+      "agents.delete",
+      {
+        agentId: "ghost",
+      },
+      {
+        cron: {
+          list: mocks.cronList,
+          remove: mocks.cronRemove,
+        },
+      },
+    );
     await promise;
 
     expectNotFoundResponseAndNoWrite(respond);
   });
 
+  it("allows orphan cleanup when agent is no longer configured but deleteCronJobs is true", async () => {
+    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.cronList.mockResolvedValue([{ id: "cron-1", agentId: "ghost" }]);
+
+    const { respond, promise } = makeCall(
+      "agents.delete",
+      {
+        agentId: "ghost",
+        deleteCronJobs: true,
+      },
+      {
+        cron: {
+          list: mocks.cronList,
+          remove: mocks.cronRemove,
+        },
+      },
+    );
+    await promise;
+
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.cronRemove).toHaveBeenCalledWith("cron-1");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, agentId: "ghost", removedBindings: 0, removedCronJobs: 1 },
+      undefined,
+    );
+  });
+
   it("rejects invalid params (missing agentId)", async () => {
-    const { respond, promise } = makeCall("agents.delete", {});
+    const { respond, promise } = makeCall(
+      "agents.delete",
+      {},
+      {
+        cron: {
+          list: mocks.cronList,
+          remove: mocks.cronRemove,
+        },
+      },
+    );
     await promise;
 
     expect(respond).toHaveBeenCalledWith(

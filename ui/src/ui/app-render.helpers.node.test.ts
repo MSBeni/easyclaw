@@ -3,6 +3,7 @@ import {
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
+  shouldShowLoginGate,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -11,6 +12,24 @@ type SessionRow = SessionsListResult["sessions"][number];
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
   return { kind: "direct", updatedAt: 0, ...overrides };
 }
+
+describe("shouldShowLoginGate", () => {
+  it("shows the login gate when disconnected without a restart message", () => {
+    expect(shouldShowLoginGate(false, null)).toBe(true);
+  });
+
+  it("keeps the dashboard visible after the first successful connection", () => {
+    expect(shouldShowLoginGate(false, "unauthorized: gateway token mismatch", true)).toBe(false);
+  });
+
+  it("keeps the dashboard visible while a restart reconnect is in progress", () => {
+    expect(shouldShowLoginGate(false, "Restarting: gateway restarting")).toBe(false);
+  });
+
+  it("never shows the login gate while connected", () => {
+    expect(shouldShowLoginGate(true, "Restarting: gateway restarting")).toBe(false);
+  });
+});
 
 /* ================================================================
  *  parseSessionKey – low-level key → type / fallback mapping

@@ -39,6 +39,7 @@ import {
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
   parseTelegramTarget,
+  stripTelegramInternalPrefixes,
 } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
@@ -259,6 +260,36 @@ function resolveToken(explicit: string | undefined, params: { accountId: string;
     );
   }
   return params.token.trim();
+}
+
+function resolveConfiguredTelegramDefaultTarget(
+  account: ResolvedTelegramAccount,
+): string | undefined {
+  const rawDefault = account.config.defaultTo;
+  if (typeof rawDefault === "number" && Number.isFinite(rawDefault)) {
+    return String(Math.trunc(rawDefault));
+  }
+  if (typeof rawDefault === "string" && rawDefault.trim()) {
+    return rawDefault.trim();
+  }
+  return undefined;
+}
+
+function resolveTelegramSelfTarget(params: {
+  to: string;
+  account: ResolvedTelegramAccount;
+}): string {
+  const stripped = stripTelegramInternalPrefixes(params.to).trim();
+  if (!/^@me$/i.test(stripped)) {
+    return params.to;
+  }
+  const defaultTarget = resolveConfiguredTelegramDefaultTarget(params.account);
+  if (defaultTarget) {
+    return defaultTarget;
+  }
+  throw new Error(
+    `Telegram recipient "@me" requires a configured default target (set channels.telegram.defaultTo or channels.telegram.accounts.${params.account.accountId}.defaultTo). In Control UI: Channels -> Telegram -> defaultTo.`,
+  );
 }
 
 async function resolveChatId(
@@ -593,12 +624,13 @@ export async function sendMessageTelegram(
   opts: TelegramSendOpts = {},
 ): Promise<TelegramSendResult> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
-  const target = parseTelegramTarget(to);
+  const effectiveTo = resolveTelegramSelfTarget({ to, account });
+  const target = parseTelegramTarget(effectiveTo);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
     lookupTarget: target.chatId,
-    persistTarget: to,
+    persistTarget: effectiveTo,
     verbose: opts.verbose,
   });
   const mediaUrl = opts.mediaUrl?.trim();
@@ -957,12 +989,13 @@ export async function sendTypingTelegram(
   opts: TelegramTypingOpts = {},
 ): Promise<{ ok: true }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
-  const target = parseTelegramTarget(to);
+  const effectiveTo = resolveTelegramSelfTarget({ to, account });
+  const target = parseTelegramTarget(effectiveTo);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
     lookupTarget: target.chatId,
-    persistTarget: to,
+    persistTarget: effectiveTo,
     verbose: opts.verbose,
   });
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -992,11 +1025,12 @@ export async function reactMessageTelegram(
   opts: TelegramReactionOpts = {},
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
-  const rawTarget = String(chatIdInput);
+  const rawTarget = resolveTelegramSelfTarget({ to: String(chatIdInput), account });
+  const target = parseTelegramTarget(rawTarget);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
-    lookupTarget: rawTarget,
+    lookupTarget: target.chatId,
     persistTarget: rawTarget,
     verbose: opts.verbose,
   });
@@ -1046,11 +1080,12 @@ export async function deleteMessageTelegram(
   opts: TelegramDeleteOpts = {},
 ): Promise<{ ok: true }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
-  const rawTarget = String(chatIdInput);
+  const rawTarget = resolveTelegramSelfTarget({ to: String(chatIdInput), account });
+  const target = parseTelegramTarget(rawTarget);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
-    lookupTarget: rawTarget,
+    lookupTarget: target.chatId,
     persistTarget: rawTarget,
     verbose: opts.verbose,
   });
@@ -1104,11 +1139,12 @@ export async function editMessageReplyMarkupTelegram(
     ...opts,
     cfg: opts.cfg,
   });
-  const rawTarget = String(chatIdInput);
+  const rawTarget = resolveTelegramSelfTarget({ to: String(chatIdInput), account });
+  const target = parseTelegramTarget(rawTarget);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
-    lookupTarget: rawTarget,
+    lookupTarget: target.chatId,
     persistTarget: rawTarget,
     verbose: opts.verbose,
   });
@@ -1147,11 +1183,12 @@ export async function editMessageTelegram(
     ...opts,
     cfg: opts.cfg,
   });
-  const rawTarget = String(chatIdInput);
+  const rawTarget = resolveTelegramSelfTarget({ to: String(chatIdInput), account });
+  const target = parseTelegramTarget(rawTarget);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
-    lookupTarget: rawTarget,
+    lookupTarget: target.chatId,
     persistTarget: rawTarget,
     verbose: opts.verbose,
   });
@@ -1278,12 +1315,13 @@ export async function sendStickerTelegram(
   }
 
   const { cfg, account, api } = resolveTelegramApiContext(opts);
-  const target = parseTelegramTarget(to);
+  const effectiveTo = resolveTelegramSelfTarget({ to, account });
+  const target = parseTelegramTarget(effectiveTo);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
     lookupTarget: target.chatId,
-    persistTarget: to,
+    persistTarget: effectiveTo,
     verbose: opts.verbose,
   });
 
@@ -1359,12 +1397,13 @@ export async function sendPollTelegram(
   opts: TelegramPollOpts = {},
 ): Promise<{ messageId: string; chatId: string; pollId?: string }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
-  const target = parseTelegramTarget(to);
+  const effectiveTo = resolveTelegramSelfTarget({ to, account });
+  const target = parseTelegramTarget(effectiveTo);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
     lookupTarget: target.chatId,
-    persistTarget: to,
+    persistTarget: effectiveTo,
     verbose: opts.verbose,
   });
 
@@ -1483,14 +1522,15 @@ export async function createForumTopicTelegram(
   }
 
   const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const effectiveTarget = resolveTelegramSelfTarget({ to: chatId, account });
   // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
   // but createForumTopic must always target the base supergroup chat id.
-  const target = parseTelegramTarget(chatId);
+  const target = parseTelegramTarget(effectiveTarget);
   const normalizedChatId = await resolveAndPersistChatId({
     cfg,
     api,
     lookupTarget: target.chatId,
-    persistTarget: chatId,
+    persistTarget: effectiveTarget,
     verbose: opts.verbose,
   });
 

@@ -442,4 +442,40 @@ describe("applySkillEnvOverrides", () => {
       }
     });
   });
+
+  it("injects OpenClaw Gmail gog env context for the gog skill", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "gog"),
+      name: "gog",
+      description: "Google Workspace CLI",
+    });
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const oauthDir = path.join(tempHome?.home ?? "", ".openclaw", "credentials");
+    await fs.mkdir(oauthDir, { recursive: true });
+    await fs.writeFile(path.join(oauthDir, "gog-keyring-password"), "persisted-password\n", "utf8");
+
+    withClearedEnv(
+      ["GOG_CLIENT", "GOG_ACCOUNT", "GOG_KEYRING_BACKEND", "GOG_KEYRING_PASSWORD"],
+      () => {
+        const restore = applySkillEnvOverrides({
+          skills: entries,
+          config: { hooks: { gmail: { account: "automation@example.com" } } },
+        });
+
+        try {
+          expect(process.env.GOG_CLIENT).toBe("openclaw-gmail-hook");
+          expect(process.env.GOG_ACCOUNT).toBe("automation@example.com");
+          expect(process.env.GOG_KEYRING_BACKEND).toBe("file");
+          expect(process.env.GOG_KEYRING_PASSWORD).toBe("persisted-password");
+        } finally {
+          restore();
+          expect(process.env.GOG_CLIENT).toBeUndefined();
+          expect(process.env.GOG_ACCOUNT).toBeUndefined();
+          expect(process.env.GOG_KEYRING_BACKEND).toBeUndefined();
+          expect(process.env.GOG_KEYRING_PASSWORD).toBeUndefined();
+        }
+      },
+    );
+  });
 });

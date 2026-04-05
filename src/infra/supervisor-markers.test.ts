@@ -16,14 +16,27 @@ describe("SUPERVISOR_HINT_ENV_VARS", () => {
 });
 
 describe("detectRespawnSupervisor", () => {
-  it("detects launchd and systemd only from non-blank platform-specific hints", () => {
+  it("detects launchd and systemd only from trusted platform-specific hints", () => {
+    expect(
+      detectRespawnSupervisor({ OPENCLAW_LAUNCHD_LABEL: " ai.openclaw.gateway " }, "darwin"),
+    ).toBe("launchd");
     expect(detectRespawnSupervisor({ LAUNCH_JOB_LABEL: " ai.openclaw.gateway " }, "darwin")).toBe(
       "launchd",
     );
+    expect(
+      detectRespawnSupervisor({ LAUNCH_JOB_LABEL: "com.apple.Terminal" }, "darwin"),
+    ).toBeNull();
     expect(detectRespawnSupervisor({ LAUNCH_JOB_LABEL: "   " }, "darwin")).toBeNull();
 
     expect(detectRespawnSupervisor({ INVOCATION_ID: "abc123" }, "linux")).toBe("systemd");
     expect(detectRespawnSupervisor({ JOURNAL_STREAM: "" }, "linux")).toBeNull();
+  });
+
+  it("does not treat generic XPC hints as launchd supervision on macOS", () => {
+    expect(detectRespawnSupervisor({ XPC_SERVICE_NAME: "0" }, "darwin")).toBeNull();
+    expect(
+      detectRespawnSupervisor({ XPC_SERVICE_NAME: "com.apple.Terminal" }, "darwin"),
+    ).toBeNull();
   });
 
   it("detects scheduled-task supervision on Windows from either hint family", () => {

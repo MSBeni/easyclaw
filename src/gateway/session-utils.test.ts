@@ -393,6 +393,20 @@ describe("gateway session utils", () => {
       expect(agents.map((agent) => agent.id)).toEqual(["main"]);
     });
   });
+
+  test("listAgentsForGateway ignores orphan agent containers without runtime state", async () => {
+    await withStateDirEnv("openclaw-agent-list-orphan-", async ({ stateDir }) => {
+      fs.mkdirSync(path.join(stateDir, "agents", "daily-briefing"), { recursive: true });
+      fs.mkdirSync(path.join(stateDir, "agents", "ops", "agent"), { recursive: true });
+
+      const cfg = {
+        session: { mainKey: "main" },
+      } as OpenClawConfig;
+
+      const { agents } = listAgentsForGateway(cfg);
+      expect(agents.map((agent) => agent.id)).toEqual(["main", "ops"]);
+    });
+  });
 });
 
 describe("resolveSessionModelRef", () => {

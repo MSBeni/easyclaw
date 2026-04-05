@@ -7,6 +7,7 @@ import {
   verifyBuilderPlan,
 } from "../controllers/builder.ts";
 import type { Tab } from "../navigation.ts";
+import { buildModelOptions } from "./agents-utils.ts";
 
 const BUILDER_TEMPLATE_OPTIONS = [
   { value: "", label: "Auto select" },
@@ -266,6 +267,16 @@ function navigateToConfig(
   params?: {
     connectorId?: string;
     connectorLabel?: string;
+    connectorKind?: string;
+    connectorSourceKind?: string;
+    connectorDocsPath?: string;
+    connectorSelectionLabel?: string;
+    connectorDetailLabel?: string;
+    connectorOnboarding?: boolean;
+    connectorRequiresConfig?: boolean;
+    connectorRequiresAuth?: boolean;
+    connectorInstallRequired?: boolean;
+    connectorInstallStrategy?: "none" | "bundled" | "npm" | "local" | "external";
     title?: string;
     detail?: string;
   },
@@ -286,6 +297,17 @@ function navigateToConfig(
   }
   state.builderSetupFocus = {
     connectorId: params?.connectorId?.trim() || null,
+    connectorLabel: params?.connectorLabel?.trim() || null,
+    connectorKind: params?.connectorKind?.trim() || null,
+    connectorSourceKind: params?.connectorSourceKind?.trim() || null,
+    connectorDocsPath: params?.connectorDocsPath?.trim() || null,
+    connectorSelectionLabel: params?.connectorSelectionLabel?.trim() || null,
+    connectorDetailLabel: params?.connectorDetailLabel?.trim() || null,
+    connectorOnboarding: params?.connectorOnboarding,
+    connectorRequiresConfig: params?.connectorRequiresConfig,
+    connectorRequiresAuth: params?.connectorRequiresAuth,
+    connectorInstallRequired: params?.connectorInstallRequired,
+    connectorInstallStrategy: params?.connectorInstallStrategy ?? null,
     title: actionTitle,
     detail:
       params?.detail?.trim() ||
@@ -300,6 +322,7 @@ export type BuilderProps = {
   state: AppViewState;
   onSetBrief: (brief: string) => void;
   onSetTemplate: (templateId: string) => void;
+  onSetModel: (modelId: string) => void;
   onPlan: () => void;
   onVerify: () => void;
   onConfirmApply: () => void;
@@ -326,6 +349,13 @@ export function renderBuilder(props: BuilderProps) {
   const plan = asObject(planResult?.plan);
   const issues = readObjectArray(plan, "issues");
   const blueprintStatus = readString(plan, "status", "ready");
+  const canQuickApply =
+    draft?.plannerStatus === "ready" && blueprintStatus === "ready" && !state.builderApplyResult;
+  const integrationByConnectorId = new Map(
+    (draft?.planning.integrations ?? []).map(
+      (integration) => [integration.connectorId, integration] as const,
+    ),
+  );
 
   return html`
     <div class="builder-layout">
@@ -358,6 +388,24 @@ export function renderBuilder(props: BuilderProps) {
               (option) => html`<option value=${option.value}>${option.label}</option>`,
             )}
           </select>
+        </label>
+
+        <label class="field" style="max-width:360px; margin-top:12px;">
+          <span>Model Override (optional)</span>
+          <select
+            .value=${state.builderModelId}
+            @change=${(event: Event) => props.onSetModel((event.target as HTMLSelectElement).value)}
+          >
+            <option value="">Use system default</option>
+            ${buildModelOptions(
+              state.configForm,
+              state.builderModelId || undefined,
+              state.cronModelSuggestions,
+            )}
+          </select>
+          <span class="card-sub" style="margin-top:6px;">
+            Sets the primary model for the created agent and its scheduled runs.
+          </span>
         </label>
 
         <div class="builder-actions" style="margin-top:16px;">
@@ -398,11 +446,27 @@ export function renderBuilder(props: BuilderProps) {
                     >
                       Rebuild
                     </button>
+                    <button
+                      class="btn btn--sm primary"
+                      ?disabled=${!canQuickApply}
+                      @click=${props.onConfirmApply}
+                    >
+                      Apply Plan
+                    </button>
                   </div>
                 `
               : nothing
           }
         </div>
+        ${
+          planResult && !state.builderApplyResult
+            ? html`
+                <div class="card-sub" style="margin-top: 8px">
+                  Build Plan only previews changes. Click Apply Plan to create/update the agent and cron jobs.
+                </div>
+              `
+            : nothing
+        }
 
         ${
           state.builderPlanError
@@ -431,7 +495,7 @@ export function renderBuilder(props: BuilderProps) {
                 <div class="builder-grid">
                   ${builderList("Reasons", draft.reasons)}
                   ${builderList("Assumptions", draft.assumptions)}
-                  ${builderQuestionList(draft.questions)}
+                  ${builderQuestionList(state, draft.questions)}
                   ${builderExtracted(draft)}
                 </div>
               </section>
@@ -511,10 +575,65 @@ export function renderBuilder(props: BuilderProps) {
                   )}
                 </div>
                 <div class="builder-grid builder-grid--2col" style="margin-top:4px;">
-                  ${builderSetupTaskList(state, draft.planning.setupTasks)}
+                  ${builderSetupTaskList(
+                    state,
+                    draft.planning.setupTasks.map((task) => ({
+                      ...task,
+                      connectorKind: integrationByConnectorId.get(task.connectorId)?.kind,
+                      connectorSourceKind: integrationByConnectorId.get(task.connectorId)
+                        ?.sourceKind,
+                      connectorDocsPath: integrationByConnectorId.get(task.connectorId)?.docsPath,
+                      connectorSelectionLabel: integrationByConnectorId.get(task.connectorId)
+                        ?.selectionLabel,
+                      connectorDetailLabel: integrationByConnectorId.get(task.connectorId)
+                        ?.detailLabel,
+                      connectorOnboarding: integrationByConnectorId.get(task.connectorId)
+                        ?.onboarding,
+                      connectorRequiresConfig: integrationByConnectorId.get(task.connectorId)
+                        ?.requiresConfig,
+                      connectorRequiresAuth: integrationByConnectorId.get(task.connectorId)
+                        ?.requiresAuth,
+                      connectorInstallRequired: integrationByConnectorId.get(task.connectorId)
+                        ?.installRequired,
+                      connectorInstallStrategy: integrationByConnectorId.get(task.connectorId)
+                        ?.installStrategy,
+                    })),
+                  )}
                   ${builderVerificationList(
                     state,
-                    draft.planning.verifications,
+                    draft.planning.verifications.map((verification) => ({
+                      ...verification,
+                      connectorKind: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.kind
+                        : undefined,
+                      connectorSourceKind: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.sourceKind
+                        : undefined,
+                      connectorDocsPath: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.docsPath
+                        : undefined,
+                      connectorSelectionLabel: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.selectionLabel
+                        : undefined,
+                      connectorDetailLabel: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.detailLabel
+                        : undefined,
+                      connectorOnboarding: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.onboarding
+                        : undefined,
+                      connectorRequiresConfig: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.requiresConfig
+                        : undefined,
+                      connectorRequiresAuth: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.requiresAuth
+                        : undefined,
+                      connectorInstallRequired: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.installRequired
+                        : undefined,
+                      connectorInstallStrategy: verification.connectorId
+                        ? integrationByConnectorId.get(verification.connectorId)?.installStrategy
+                        : undefined,
+                    })),
                     draft.planning.setupTasks,
                   )}
                 </div>
@@ -718,20 +837,65 @@ function formatMissingDataField(value: string): string {
     .join(" ");
 }
 
-function builderQuestionList(questions: Array<{ prompt: string; required: boolean }>) {
+type BuilderQuestion = { id?: string; prompt: string; required: boolean };
+
+const DELIVERY_CHANNEL_REF_MAP: Record<string, string> = {
+  telegram: "channels.telegram",
+  discord: "channels.discord",
+  slack: "channels.slack",
+  signal: "channels.signal",
+  whatsapp: "channels.whatsapp",
+  matrix: "channels.matrix",
+  msteams: "channels.msteams",
+  googlechat: "channels.googlechat",
+  imessage: "channels.imessage",
+};
+
+export function resolveBuilderQuestionConfigRefs(question: BuilderQuestion): string[] {
+  if (question.id !== "delivery-target") {
+    return [];
+  }
+  const prompt = question.prompt.toLowerCase();
+  const channel = Object.keys(DELIVERY_CHANNEL_REF_MAP).find((key) => prompt.includes(key));
+  if (!channel) {
+    return [];
+  }
+  return [DELIVERY_CHANNEL_REF_MAP[channel]];
+}
+
+function builderQuestionList(state: AppViewState, questions: BuilderQuestion[]) {
   if (questions.length === 0) {
     return nothing;
   }
   return html`
     <div>
       <div class="label" style="margin-bottom:8px;">Questions</div>
-      ${questions.map(
-        (question) => html`
-          <div class="tpl-note">
-            ${question.required ? "[required]" : "[optional]"} ${question.prompt}
-          </div>
-        `,
-      )}
+      ${questions.map((question) => {
+        const refs = resolveBuilderQuestionConfigRefs(question);
+        const hasTarget = resolveConfigTarget(refs);
+        return html`
+            <div class="tpl-note builder-issue-row">
+              <span>${question.required ? "[required]" : "[optional]"} ${question.prompt}</span>
+              ${
+                hasTarget
+                  ? html`
+                      <button
+                        class="builder-config-link"
+                        @click=${() =>
+                          navigateToConfig(state, refs, {
+                            title: "Delivery target setup",
+                            detail:
+                              "Set the channel default delivery target, save the change, then rebuild the Builder plan.",
+                          })}
+                      >
+                        Open setup &rarr;
+                      </button>
+                    `
+                  : nothing
+              }
+            </div>
+          `;
+      })}
     </div>
   `;
 }
@@ -884,19 +1048,25 @@ function builderAlternativeList(
       <div class="label" style="margin-bottom:8px;">Fallbacks</div>
       ${interesting.map((value) => {
         const fallbacks = value.candidates.filter((candidate) => !candidate.selected);
+        // Show top 3 inline, rest as a count
+        const visible = fallbacks.slice(0, 3);
+        const hiddenCount = fallbacks.length - visible.length;
         return html`
           <div class="tpl-note">
             <strong>${value.requirementLabel}:</strong>
-            ${fallbacks.map(
+            ${visible.map(
               (candidate) => html`
                 <span>
                   ${candidate.connectorLabel}
-                  <span class="mono">(${candidate.connectorId})</span>
-                  <span class="tpl-pill tpl-pill--muted">${candidate.source}</span>
                   <span class="tpl-pill tpl-pill--muted">${candidate.readiness}</span>
                 </span>
               `,
             )}
+            ${
+              hiddenCount > 0
+                ? html`<span class="tpl-pill tpl-pill--muted">+${hiddenCount} more</span>`
+                : nothing
+            }
           </div>
         `;
       })}
@@ -933,7 +1103,7 @@ function builderVariantList(
             value.connectorIds.length > 0
               ? html`
                   <div class="tpl-note">
-                    <span class="mono">${value.connectorIds.join(", ")}</span>
+                    <span class="mono">${value.connectorIds.slice(0, 4).join(", ")}${value.connectorIds.length > 4 ? ` +${value.connectorIds.length - 4} more` : ""}</span>
                   </div>
                 `
               : nothing
@@ -985,7 +1155,7 @@ function builderRuntimeGraphList(graph: {
           }
           ${
             node.connectorIds.length > 0
-              ? html`<div class="tpl-note"><span class="mono">${node.connectorIds.join(", ")}</span></div>`
+              ? html`<div class="tpl-note"><span class="mono">${node.connectorIds.slice(0, 4).join(", ")}${node.connectorIds.length > 4 ? ` +${node.connectorIds.length - 4} more` : ""}</span></div>`
               : nothing
           }
           ${
@@ -1061,6 +1231,16 @@ function builderIntegrationList(
     connectorId: string;
     issues: string[];
     lastVerifiedAt?: string;
+    kind?: string;
+    sourceKind?: string;
+    docsPath?: string;
+    selectionLabel?: string;
+    detailLabel?: string;
+    onboarding?: boolean;
+    requiresConfig?: boolean;
+    requiresAuth?: boolean;
+    installRequired?: boolean;
+    installStrategy?: "none" | "bundled" | "npm" | "local" | "external";
   }>,
   setupTasks: Array<{ connectorId: string; status: string }>,
 ) {
@@ -1092,6 +1272,16 @@ function builderIntegrationList(
                         navigateToConfig(state, [configRef], {
                           connectorId: value.connectorId,
                           connectorLabel: value.label,
+                          connectorKind: value.kind,
+                          connectorSourceKind: value.sourceKind,
+                          connectorDocsPath: value.docsPath,
+                          connectorSelectionLabel: value.selectionLabel,
+                          connectorDetailLabel: value.detailLabel,
+                          connectorOnboarding: value.onboarding,
+                          connectorRequiresConfig: value.requiresConfig,
+                          connectorRequiresAuth: value.requiresAuth,
+                          connectorInstallRequired: value.installRequired,
+                          connectorInstallStrategy: value.installStrategy,
                           title: value.label,
                           detail: `${value.label} still needs setup or verification before this workflow can run cleanly.`,
                         })}
@@ -1125,6 +1315,16 @@ function builderIntegrationList(
                             navigateToConfig(state, [configRef], {
                               connectorId: value.connectorId,
                               connectorLabel: value.label,
+                              connectorKind: value.kind,
+                              connectorSourceKind: value.sourceKind,
+                              connectorDocsPath: value.docsPath,
+                              connectorSelectionLabel: value.selectionLabel,
+                              connectorDetailLabel: value.detailLabel,
+                              connectorOnboarding: value.onboarding,
+                              connectorRequiresConfig: value.requiresConfig,
+                              connectorRequiresAuth: value.requiresAuth,
+                              connectorInstallRequired: value.installRequired,
+                              connectorInstallStrategy: value.installStrategy,
                               title: value.label,
                               detail: issue,
                             })}
@@ -1157,6 +1357,16 @@ function builderSetupTaskList(
     connectorId: string;
     connectorLabel: string;
     refs: string[];
+    connectorKind?: string;
+    connectorSourceKind?: string;
+    connectorDocsPath?: string;
+    connectorSelectionLabel?: string;
+    connectorDetailLabel?: string;
+    connectorOnboarding?: boolean;
+    connectorRequiresConfig?: boolean;
+    connectorRequiresAuth?: boolean;
+    connectorInstallRequired?: boolean;
+    connectorInstallStrategy?: "none" | "bundled" | "npm" | "local" | "external";
   }>,
 ) {
   if (values.length === 0) {
@@ -1188,6 +1398,16 @@ function builderSetupTaskList(
                         navigateToConfig(state, navRefs, {
                           connectorId: value.connectorId,
                           connectorLabel: value.connectorLabel,
+                          connectorKind: value.connectorKind,
+                          connectorSourceKind: value.connectorSourceKind,
+                          connectorDocsPath: value.connectorDocsPath,
+                          connectorSelectionLabel: value.connectorSelectionLabel,
+                          connectorDetailLabel: value.connectorDetailLabel,
+                          connectorOnboarding: value.connectorOnboarding,
+                          connectorRequiresConfig: value.connectorRequiresConfig,
+                          connectorRequiresAuth: value.connectorRequiresAuth,
+                          connectorInstallRequired: value.connectorInstallRequired,
+                          connectorInstallStrategy: value.connectorInstallStrategy,
                           title: value.title,
                           detail: value.detail,
                         })}
@@ -1224,6 +1444,16 @@ function builderVerificationList(
     detail: string;
     source?: string;
     checkedAt?: string;
+    connectorKind?: string;
+    connectorSourceKind?: string;
+    connectorDocsPath?: string;
+    connectorSelectionLabel?: string;
+    connectorDetailLabel?: string;
+    connectorOnboarding?: boolean;
+    connectorRequiresConfig?: boolean;
+    connectorRequiresAuth?: boolean;
+    connectorInstallRequired?: boolean;
+    connectorInstallStrategy?: "none" | "bundled" | "npm" | "local" | "external";
   }>,
   setupTasks: Array<{ connectorId: string; status: string }>,
 ) {
@@ -1264,6 +1494,16 @@ function builderVerificationList(
                         navigateToConfig(state, [configRef], {
                           connectorId: value.connectorId,
                           connectorLabel: value.connectorLabel,
+                          connectorKind: value.connectorKind,
+                          connectorSourceKind: value.connectorSourceKind,
+                          connectorDocsPath: value.connectorDocsPath,
+                          connectorSelectionLabel: value.connectorSelectionLabel,
+                          connectorDetailLabel: value.connectorDetailLabel,
+                          connectorOnboarding: value.connectorOnboarding,
+                          connectorRequiresConfig: value.connectorRequiresConfig,
+                          connectorRequiresAuth: value.connectorRequiresAuth,
+                          connectorInstallRequired: value.connectorInstallRequired,
+                          connectorInstallStrategy: value.connectorInstallStrategy,
                           title: value.probeLabel,
                           detail: value.detail,
                         })}

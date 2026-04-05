@@ -591,7 +591,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, agentId }, undefined);
   },
-  "agents.delete": async ({ params, respond }) => {
+  "agents.delete": async ({ params, respond, context }) => {
     if (!validateAgentsDeleteParams(params)) {
       respondInvalidMethodParams(respond, "agents.delete", validateAgentsDeleteParams.errors);
       return;
@@ -607,7 +607,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!isConfiguredAgent(cfg, agentId)) {
+    const configuredAgent = isConfiguredAgent(cfg, agentId);
+    const deleteCronJobs = params.deleteCronJobs === true;
+    if (!configuredAgent && !deleteCronJobs) {
       respondAgentNotFound(respond, agentId);
       return;
     }
@@ -616,9 +618,23 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const agentDir = resolveAgentDir(cfg, agentId);
     const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+    let removedCronJobs = 0;
 
-    const result = pruneAgentConfig(cfg, agentId);
-    await writeConfigFile(result.config);
+    if (deleteCronJobs) {
+      const jobs = await context.cron.list({ includeDisabled: true });
+      const matchingJobs = jobs.filter((job) => normalizeAgentId(job.agentId) === agentId);
+      for (const job of matchingJobs) {
+        const removed = await context.cron.remove(job.id);
+        if (removed.ok && removed.removed) {
+          removedCronJobs += 1;
+        }
+      }
+    }
+
+    const result = configuredAgent ? pruneAgentConfig(cfg, agentId) : null;
+    if (result) {
+      await writeConfigFile(result.config);
+    }
 
     if (deleteFiles) {
       await Promise.all([
@@ -628,7 +644,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
       ]);
     }
 
-    respond(true, { ok: true, agentId, removedBindings: result.removedBindings }, undefined);
+    respond(
+      true,
+      {
+        ok: true,
+        agentId,
+        removedBindings: result?.removedBindings ?? 0,
+        ...(deleteCronJobs ? { removedCronJobs } : {}),
+      },
+      undefined,
+    );
   },
   "agents.files.list": async ({ params, respond }) => {
     if (!validateAgentsFilesListParams(params)) {

@@ -331,6 +331,15 @@ function listExistingAgentIdsFromDisk(): string[] {
     const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
     return entries
       .filter((entry) => entry.isDirectory())
+      .filter((entry) => {
+        // A real agent on disk stores runtime state under "<id>/agent".
+        // Ignore orphan container directories left behind after partial cleanup.
+        try {
+          return fs.statSync(path.join(agentsDir, entry.name, "agent")).isDirectory();
+        } catch {
+          return false;
+        }
+      })
       .map((entry) => normalizeAgentId(entry.name))
       .filter(Boolean);
   } catch {

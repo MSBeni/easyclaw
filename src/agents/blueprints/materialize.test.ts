@@ -90,10 +90,11 @@ describe("agent blueprint materializer", () => {
     expect(metadata.manifest.templateId).toBe("daily-briefing");
 
     const cronStore = JSON.parse(await fs.readFile(cronStorePath, "utf-8")) as {
-      jobs: Array<{ name: string; delivery?: { to?: string } }>;
+      jobs: Array<{ name: string; payload?: { model?: string }; delivery?: { to?: string } }>;
     };
     expect(cronStore.jobs).toHaveLength(1);
     expect(cronStore.jobs[0]?.name).toBe("easyclaw:daily-briefing:weekday-morning-brief");
+    expect(cronStore.jobs[0]?.payload?.model).toBeTypeOf("string");
     expect(cronStore.jobs[0]?.delivery?.to).toBe("@owner");
   });
 
@@ -161,6 +162,88 @@ describe("agent blueprint materializer", () => {
     );
     expect(bindings).toHaveLength(1);
     expect(bindings?.[0]?.match.channel).toBe("slack");
+  });
+
+  it("inherits main auth profiles into the applied agent dir", async () => {
+    const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+    await fs.mkdir(mainAgentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(mainAgentDir, "auth-profiles.json"),
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "main-openai-key",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const result = await applyAgentBlueprint({
+      loaded: {
+        kind: "template",
+        source: "daily-briefing",
+        format: null,
+        bundle: dailyBriefingBlueprint,
+      },
+      variables: {
+        owner_target: "@owner",
+      },
+    });
+
+    const agentAuthPath = path.join(result.agent.agentDir, "auth-profiles.json");
+    const store = JSON.parse(await fs.readFile(agentAuthPath, "utf-8")) as {
+      profiles?: Record<string, { provider?: string }>;
+    };
+    expect(store.profiles?.["openai:default"]?.provider).toBe("openai");
+  });
+
+  it("pins cron payload model from resolved agent defaults", async () => {
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          cron: {
+            store: cronStorePath,
+          },
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai-codex/gpt-5.4",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    clearConfigCache();
+
+    await applyAgentBlueprint({
+      loaded: {
+        kind: "template",
+        source: "daily-briefing",
+        format: null,
+        bundle: dailyBriefingBlueprint,
+      },
+      variables: {
+        owner_target: "@owner",
+      },
+    });
+
+    const cronStore = JSON.parse(await fs.readFile(cronStorePath, "utf-8")) as {
+      jobs: Array<{ payload?: { model?: string } }>;
+    };
+    expect(cronStore.jobs[0]?.payload?.model).toBe("openai-codex/gpt-5.4");
   });
 
   it("fails fast when required template variables are missing", async () => {

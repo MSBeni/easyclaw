@@ -43,6 +43,7 @@ const BASE_METHODS = [
   "agents.delete",
   "agents.builder.plan",
   "agents.builder.verify",
+  "agents.builder.setup.run",
   "agents.builder.apply",
   "agents.templates.catalog",
   "agents.templates.plan",

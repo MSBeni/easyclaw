@@ -99,6 +99,50 @@ describe("resolveModelAuthMode", () => {
       "aws-sdk",
     );
   });
+
+  it("returns api-key when provider API key is configured as a SecretRef", () => {
+    expect(
+      resolveModelAuthMode(
+        "openai",
+        {
+          models: {
+            providers: {
+              openai: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_API_KEY",
+                },
+              },
+            },
+          },
+        },
+        { version: 1, profiles: {} },
+      ),
+    ).toBe("api-key");
+  });
+
+  it("resolves google-gemini aliases against google provider SecretRef config", () => {
+    expect(
+      resolveModelAuthMode(
+        "google-gemini",
+        {
+          models: {
+            providers: {
+              google: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "GEMINI_API_KEY",
+                },
+              },
+            },
+          },
+        },
+        { version: 1, profiles: {} },
+      ),
+    ).toBe("api-key");
+  });
 });
 
 describe("requireApiKey", () => {

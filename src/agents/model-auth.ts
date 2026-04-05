@@ -465,6 +465,11 @@ export function resolveModelAuthMode(
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
 
+  const providerConfig = resolveProviderConfig(cfg, resolved);
+  if (providerConfig && hasExplicitProviderApiKeyConfig(providerConfig)) {
+    return "api-key";
+  }
+
   if (hasUsableCustomProviderApiKey(cfg, resolved)) {
     return "api-key";
   }

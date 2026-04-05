@@ -17,7 +17,19 @@ export type RespawnSupervisor = "launchd" | "systemd" | "schtasks";
 function hasAnyHint(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
   return keys.some((key) => {
     const value = env[key];
-    return typeof value === "string" && value.trim().length > 0;
+    if (typeof value !== "string") {
+      return false;
+    }
+    const normalized = value.trim();
+    if (!normalized) {
+      return false;
+    }
+    // macOS Terminal sessions often expose XPC_SERVICE_NAME=0 even when the
+    // process is not the managed launchd service we can safely "supervise".
+    if (normalized === "0") {
+      return false;
+    }
+    return true;
   });
 }
 
@@ -26,7 +38,15 @@ export function detectRespawnSupervisor(
   platform: NodeJS.Platform = process.platform,
 ): RespawnSupervisor | null {
   if (platform === "darwin") {
-    return hasAnyHint(env, SUPERVISOR_HINTS.launchd) ? "launchd" : null;
+    const explicitLaunchdLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+    if (explicitLaunchdLabel) {
+      return "launchd";
+    }
+    const launchJobLabel = env.LAUNCH_JOB_LABEL?.trim();
+    if (launchJobLabel && launchJobLabel.toLowerCase().includes("openclaw")) {
+      return "launchd";
+    }
+    return null;
   }
   if (platform === "linux") {
     return hasAnyHint(env, SUPERVISOR_HINTS.systemd) ? "systemd" : null;

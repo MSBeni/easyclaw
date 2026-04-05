@@ -22,6 +22,8 @@ import { resolveCronStorePath } from "../../cron/store.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveDefaultAgentId } from "../agent-scope.js";
+import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveWorkspaceTemplateDir } from "../workspace-templates.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import type { AgentBlueprintPlan } from "./compiler.js";
@@ -41,6 +43,7 @@ type BlueprintSourceEntry = NonNullable<
 type BlueprintScheduleEntry = NonNullable<
   NonNullable<AgentBlueprintBundle["automation"]>["schedules"]
 >[number];
+type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 type ManagedBlueprintMetadata = {
   version: 1;
@@ -334,24 +337,12 @@ function pickAgentEntry(cfg: OpenClawConfig, agentId: string) {
   };
 }
 
-function applyBlueprintManagedAgentFields(params: {
-  cfg: OpenClawConfig;
+function buildBlueprintAgentEntry(params: {
+  entry?: AgentEntry;
   bundle: AgentBlueprintBundle;
   plan: AgentBlueprintPlan;
-  warnings: AgentBlueprintApplyWarning[];
-}): OpenClawConfig {
-  const { cfg, bundle, plan, warnings } = params;
-  let next = applyAgentConfig(cfg, {
-    agentId: plan.agent.agentId,
-    name: plan.agent.name,
-    workspace: plan.agent.workspaceDir,
-    agentDir: plan.agent.agentDir,
-    ...(plan.agent.modelSelection.mode === "explicit" && plan.agent.modelSelection.value
-      ? { model: plan.agent.modelSelection.value }
-      : {}),
-  });
-
-  const { list, index, entry } = pickAgentEntry(next, plan.agent.agentId);
+}): AgentEntry {
+  const { entry, bundle, plan } = params;
   const preservedTools = entry?.tools
     ? {
         ...(entry.tools.elevated ? { elevated: entry.tools.elevated } : {}),
@@ -362,7 +353,7 @@ function applyBlueprintManagedAgentFields(params: {
       }
     : undefined;
 
-  const nextEntry = {
+  return {
     ...(entry ?? { id: plan.agent.agentId }),
     id: plan.agent.agentId,
     name: plan.agent.name,
@@ -389,6 +380,31 @@ function applyBlueprintManagedAgentFields(params: {
     },
     subagents: bundle.runtime.subagents?.enabled ? { allowAgents: ["*"] } : undefined,
   };
+}
+
+function applyBlueprintManagedAgentFields(params: {
+  cfg: OpenClawConfig;
+  bundle: AgentBlueprintBundle;
+  plan: AgentBlueprintPlan;
+  warnings: AgentBlueprintApplyWarning[];
+}): OpenClawConfig {
+  const { cfg, bundle, plan, warnings } = params;
+  let next = applyAgentConfig(cfg, {
+    agentId: plan.agent.agentId,
+    name: plan.agent.name,
+    workspace: plan.agent.workspaceDir,
+    agentDir: plan.agent.agentDir,
+    ...(plan.agent.modelSelection.mode === "explicit" && plan.agent.modelSelection.value
+      ? { model: plan.agent.modelSelection.value }
+      : {}),
+  });
+
+  const { list, index, entry } = pickAgentEntry(next, plan.agent.agentId);
+  const nextEntry = buildBlueprintAgentEntry({
+    entry,
+    bundle,
+    plan,
+  });
 
   if (bundle.runtime.subagents?.mode) {
     warnings.push({
@@ -420,6 +436,38 @@ function applyBlueprintManagedAgentFields(params: {
   };
 
   return next;
+}
+
+function ensureBlueprintAgentListed(params: {
+  cfg: OpenClawConfig;
+  bundle: AgentBlueprintBundle;
+  plan: AgentBlueprintPlan;
+}): OpenClawConfig {
+  const { list, index, entry } = pickAgentEntry(params.cfg, params.plan.agent.agentId);
+  if (index >= 0 && entry) {
+    return params.cfg;
+  }
+
+  const nextList = [...list];
+  if (nextList.length === 0) {
+    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
+    if (defaultAgentId !== normalizeAgentId(params.plan.agent.agentId)) {
+      nextList.push({ id: defaultAgentId });
+    }
+  }
+  nextList.push(
+    buildBlueprintAgentEntry({
+      bundle: params.bundle,
+      plan: params.plan,
+    }),
+  );
+  return {
+    ...params.cfg,
+    agents: {
+      ...params.cfg.agents,
+      list: nextList,
+    },
+  };
 }
 
 function bindingKey(binding: AgentRouteBinding): string {
@@ -504,6 +552,7 @@ function buildCronMessage(plan: AgentBlueprintPlan, schedule: BlueprintScheduleE
 function buildCronJobCreate(params: {
   plan: AgentBlueprintPlan;
   schedule: BlueprintScheduleEntry;
+  model: string;
 }): CronJobCreate {
   const target = params.plan.delivery.target;
   const sessionTarget = target?.session?.trim()
@@ -529,10 +578,7 @@ function buildCronJobCreate(params: {
     payload: {
       kind: "agentTurn",
       message: buildCronMessage(params.plan, params.schedule),
-      ...(params.plan.agent.modelSelection.mode === "explicit" &&
-      params.plan.agent.modelSelection.value
-        ? { model: params.plan.agent.modelSelection.value }
-        : {}),
+      model: params.model,
       ...(params.plan.runtime.thinking ? { thinking: params.plan.runtime.thinking } : {}),
       deliver: delivery.mode === "announce",
       ...(delivery.mode === "announce" && typeof delivery.channel === "string"
@@ -705,12 +751,24 @@ export async function applyAgentBlueprint(params: {
     bundle: resolved.bundle,
     plan,
   });
+  // Ensure per-agent auth store is initialized and inherits main credentials when available.
+  ensureAuthProfileStore(plan.agent.agentDir, { allowKeychainPrompt: false });
+  nextConfig = ensureBlueprintAgentListed({
+    cfg: nextConfig,
+    bundle: resolved.bundle,
+    plan,
+  });
 
   await writeConfigFile(nextConfig, writeOptions);
 
   const cron = createCronServiceForApply(nextConfig);
   const existingJobs = await cron.list({ includeDisabled: true });
   const automationJobs: AgentBlueprintApplyResult["automation"]["jobs"] = [];
+  const resolvedCronModelRef = resolveDefaultModelForAgent({
+    cfg: nextConfig,
+    agentId: plan.agent.agentId,
+  });
+  const pinnedCronModel = `${resolvedCronModelRef.provider}/${resolvedCronModelRef.model}`;
   if (nextConfig.cron?.enabled === false && plan.automation.schedules.length > 0) {
     warnings.push({
       code: "cron-disabled",
@@ -720,7 +778,7 @@ export async function applyAgentBlueprint(params: {
   }
 
   for (const schedule of plan.automation.schedules) {
-    const input = buildCronJobCreate({ plan, schedule });
+    const input = buildCronJobCreate({ plan, schedule, model: pinnedCronModel });
     if (input.sessionTarget.startsWith("session:") && input.delivery?.mode !== "none") {
       warnings.push({
         code: "delivery-target-session-only",

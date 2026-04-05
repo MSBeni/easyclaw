@@ -55,6 +55,7 @@ function createState(): {
     cronJobsSortDir: "desc",
     cronStatus: null,
     cronError: null,
+    cronNotice: null,
     cronForm: { ...DEFAULT_CRON_FORM },
     cronFieldErrors: {},
     cronEditingJobId: null,

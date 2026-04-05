@@ -45,6 +45,50 @@ describe("agent blueprint builder", () => {
     expect(result.graphPlans).toHaveLength(1);
   });
 
+  it("enables source-fetch runtime capabilities for Gmail briefing workflows", () => {
+    const draft = buildAgentBlueprintDraft({
+      brief: "Create a daily Telegram briefing from my Gmail inbox every morning at 9am.",
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            defaultTo: "-1001234567890",
+          },
+        },
+      },
+    });
+
+    expect(draft.extracted.sourceChannels).toContain("gmail");
+    expect(draft.bundle.runtime.tools.profile).toBe("coding");
+    expect(draft.bundle.runtime.tools.alsoAllow ?? []).toEqual(
+      expect.arrayContaining(["cron", "message"]),
+    );
+    expect(draft.bundle.runtime.skills ?? []).toContain("gog");
+  });
+
+  it("pins an explicit runtime model when one is provided", async () => {
+    const result = await compileAgentBlueprintBuilderPlan({
+      brief: "Create a daily digest from my Gmail and send it to me on Telegram.",
+      modelId: "openai/gpt-4o",
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            defaultTo: "-1001234567890",
+          },
+        },
+      },
+    });
+
+    expect(result.plan.agent.modelSelection).toEqual({
+      mode: "explicit",
+      value: "openai/gpt-4o",
+    });
+    expect(result.draft.assumptions).toEqual(
+      expect.arrayContaining(["Pinned runtime model to openai/gpt-4o."]),
+    );
+  });
+
   it("asks for a support channel when the request is support-shaped but underspecified", () => {
     const draft = buildAgentBlueprintDraft({
       brief: "I want a customer support responder for billing questions.",
@@ -78,6 +122,51 @@ describe("agent blueprint builder", () => {
       )?.status,
     ).toBe("discovered");
     expect(draft.planning.setupTasks.map((task) => task.connectorId)).toContain("channel:telegram");
+  });
+
+  it("uses configured direct-channel defaults instead of @me", () => {
+    const draft = buildAgentBlueprintDraft({
+      brief: "Create a daily briefing and deliver it to Telegram every weekday morning.",
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            defaultTo: "-1001234567890",
+          },
+        },
+      },
+    });
+
+    expect(draft.extracted.deliveryTarget).toBe("telegram -1001234567890");
+    expect(draft.questions.map((question) => question.id)).not.toContain("delivery-target");
+    expect(draft.assumptions).toEqual(
+      expect.arrayContaining(["Used configured telegram default target."]),
+    );
+  });
+
+  it("asks for an explicit destination when direct-channel defaults are missing", () => {
+    const draft = buildAgentBlueprintDraft({
+      brief: "Create a daily briefing and deliver it to Telegram every weekday morning.",
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+          },
+        },
+      },
+    });
+
+    expect(draft.ready).toBe(false);
+    expect(draft.questions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "delivery-target",
+          required: true,
+        }),
+      ]),
+    );
+    expect(draft.extracted.deliveryTarget ?? "").not.toContain("@me");
+    expect(draft.extracted.deliveryTarget ?? "").not.toContain("{{owner_target}}");
   });
 
   it("defaults to the personal assistant template and creates a dedicated agent", () => {

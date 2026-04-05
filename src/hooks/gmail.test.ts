@@ -3,6 +3,7 @@ import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
   buildTopicPath,
+  parseSubscriptionPath,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
@@ -67,6 +68,13 @@ describe("gmail hook config", () => {
     });
   });
 
+  it("parses subscription path", () => {
+    expect(parseSubscriptionPath("projects/proj/subscriptions/sub")).toEqual({
+      projectId: "proj",
+      subscriptionName: "sub",
+    });
+  });
+
   it("resolves runtime config with defaults", () => {
     const result = resolveGmailHookRuntimeConfig(baseConfig, {});
     expect(result.ok).toBe(true);
@@ -76,6 +84,16 @@ describe("gmail hook config", () => {
       expect(result.value.includeBody).toBe(true);
       expect(result.value.serve.port).toBe(8788);
       expect(result.value.hookUrl).toBe(`http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`);
+    }
+  });
+
+  it("normalizes a full subscription path in runtime config", () => {
+    const result = resolveWithGmailOverrides({
+      subscription: "projects/demo/subscriptions/gog-gmail-watch-push",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.subscription).toBe("gog-gmail-watch-push");
     }
   });
 

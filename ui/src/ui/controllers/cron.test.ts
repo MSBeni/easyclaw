@@ -33,6 +33,7 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     cronJobsSortDir: "asc",
     cronStatus: null,
     cronError: null,
+    cronNotice: null,
     cronForm: { ...DEFAULT_CRON_FORM },
     cronFieldErrors: {},
     cronEditingJobId: null,
@@ -1066,5 +1067,45 @@ describe("cron controller", () => {
     await runCronJob(state, job, "due");
 
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
+  });
+
+  it("shows a queued notice after manual run is accepted", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "cron.run") {
+        expect(payload).toMatchObject({ id: "job-queue", mode: "force" });
+        return { ok: true, enqueued: true, runId: "manual:job-queue:1" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [], total: 0, hasMore: false, nextOffset: null };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, hasMore: false, nextOffset: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronRunsScope: "all",
+    });
+    const job = {
+      id: "job-queue",
+      name: "Queue test",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      state: {},
+    };
+
+    await runCronJob(state, job, "force");
+
+    expect(state.cronNotice).toBe("Run queued. Check Run history for progress.");
+    expect(state.cronError).toBeNull();
   });
 });

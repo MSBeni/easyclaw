@@ -14,7 +14,7 @@ function createSessions(): SessionsListResult {
     ts: 0,
     path: "",
     count: 0,
-    defaults: { model: null, contextTokens: null },
+    defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions: [],
   };
 }
@@ -26,7 +26,25 @@ function createChatHeaderState(
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
-  let currentModel = overrides.model ?? null;
+  let currentModel = null as string | null;
+  let currentModelProvider = null as string | null;
+  const applyModelRef = (raw: string | null | undefined) => {
+    const value = typeof raw === "string" ? raw.trim() : "";
+    if (!value) {
+      currentModel = null;
+      currentModelProvider = null;
+      return;
+    }
+    const slash = value.indexOf("/");
+    if (slash > 0) {
+      currentModelProvider = value.slice(0, slash);
+      currentModel = value.slice(slash + 1);
+      return;
+    }
+    currentModelProvider = "openai";
+    currentModel = value;
+  };
+  applyModelRef(overrides.model ?? null);
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? [
     { id: "gpt-5", name: "GPT-5", provider: "openai" },
@@ -34,7 +52,7 @@ function createChatHeaderState(
   ];
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === "sessions.patch") {
-      currentModel = (params.model as string | null | undefined) ?? null;
+      applyModelRef((params.model as string | null | undefined) ?? null);
       return { ok: true, key: "main" };
     }
     if (method === "chat.history") {
@@ -45,10 +63,18 @@ function createChatHeaderState(
         ts: 0,
         path: "",
         count: omitSessionFromList ? 0 : 1,
-        defaults: { model: "gpt-5", contextTokens: null },
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
         sessions: omitSessionFromList
           ? []
-          : [{ key: "main", kind: "direct", updatedAt: null, model: currentModel }],
+          : [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                model: currentModel,
+                modelProvider: currentModelProvider ?? undefined,
+              },
+            ],
       };
     }
     if (method === "models.list") {
@@ -64,10 +90,18 @@ function createChatHeaderState(
       ts: 0,
       path: "",
       count: omitSessionFromList ? 0 : 1,
-      defaults: { model: "gpt-5", contextTokens: null },
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
       sessions: omitSessionFromList
         ? []
-        : [{ key: "main", kind: "direct", updatedAt: null, model: currentModel }],
+        : [
+            {
+              key: "main",
+              kind: "direct",
+              updatedAt: null,
+              model: currentModel,
+              modelProvider: currentModelProvider ?? undefined,
+            },
+          ],
     },
     chatModelOverrides: {},
     chatModelCatalog: catalog,
@@ -565,16 +599,52 @@ describe("chat view", () => {
     expect(modelSelect).not.toBeNull();
     expect(modelSelect?.value).toBe("");
 
-    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "openai/gpt-5-mini",
     });
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+    vi.unstubAllGlobals();
+  });
+
+  it("uses provider-scoped refs when switching to a non-default provider model", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState({
+      models: [
+        { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+        { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash", provider: "google" },
+      ],
+    });
+    state.sessionsResult = {
+      ...state.sessionsResult!,
+      defaults: { modelProvider: "anthropic", model: "claude-opus-4-6", contextTokens: null },
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    modelSelect!.value = "google/gemini-2.0-flash";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "google/gemini-2.0-flash",
+    });
     vi.unstubAllGlobals();
   });
 
@@ -593,7 +663,7 @@ describe("chat view", () => {
       'select[data-chat-model-select="true"]',
     );
     expect(modelSelect).not.toBeNull();
-    expect(modelSelect?.value).toBe("gpt-5-mini");
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
 
     modelSelect!.value = "";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -621,6 +691,73 @@ describe("chat view", () => {
     expect(modelSelect?.disabled).toBe(true);
   });
 
+  it("prefers configured providers when duplicate model ids exist in the catalog", () => {
+    const { state } = createChatHeaderState({
+      models: [
+        {
+          id: "gpt-5.2",
+          name: "GPT-5.2",
+          provider: "azure-openai-responses",
+          configured: false,
+        },
+        {
+          id: "gpt-5.2",
+          name: "GPT-5.2",
+          provider: "openai",
+          configured: true,
+        },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const openaiOption = Array.from(
+      container.querySelectorAll<HTMLSelectElement>('select[data-chat-model-select="true"] option'),
+    ).find((option) => option.value === "openai/gpt-5.2");
+
+    expect(openaiOption).not.toBeUndefined();
+    expect(openaiOption?.disabled).toBe(false);
+    expect(openaiOption?.textContent ?? "").toContain("openai");
+    expect(openaiOption?.textContent ?? "").not.toContain("not configured");
+  });
+
+  it("hides unconfigured models from the chat picker", () => {
+    const { state } = createChatHeaderState({
+      models: [
+        {
+          id: "gpt-5.2",
+          name: "GPT-5.2",
+          provider: "openai",
+          configured: true,
+        },
+        {
+          id: "claude-opus-4-6",
+          name: "Claude Opus 4.6",
+          provider: "anthropic",
+          configured: true,
+        },
+        {
+          id: "gemini-2.5-pro",
+          name: "Gemini 2.5 Pro",
+          provider: "google-gemini",
+          configured: false,
+        },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const optionValues = Array.from(
+      container.querySelectorAll<HTMLSelectElement>('select[data-chat-model-select="true"] option'),
+    )
+      .map((option) => option.value)
+      .filter(Boolean);
+
+    expect(optionValues).toContain("openai/gpt-5.2");
+    expect(optionValues).toContain("anthropic/claude-opus-4-6");
+    expect(optionValues).not.toContain("google-gemini/gemini-2.5-pro");
+  });
+
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
     vi.stubGlobal(
       "fetch",
@@ -637,7 +774,7 @@ describe("chat view", () => {
     );
     expect(modelSelect).not.toBeNull();
 
-    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
     render(renderChatSessionSelect(state), container);
@@ -645,7 +782,7 @@ describe("chat view", () => {
     const rerendered = container.querySelector<HTMLSelectElement>(
       'select[data-chat-model-select="true"]',
     );
-    expect(rerendered?.value).toBe("gpt-5-mini");
+    expect(rerendered?.value).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
 

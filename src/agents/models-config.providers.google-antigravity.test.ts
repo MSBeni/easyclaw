@@ -126,4 +126,18 @@ describe("google-vertex provider normalization", () => {
 
     expect(normalized).toBe(providers);
   });
+
+  it("keeps google provider credentials when provider has no models array", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const providers = {
+      google: {
+        apiKey: "GEMINI_API_KEY", // pragma: allowlist secret
+      } satisfies ProviderConfig,
+    };
+
+    const normalized = normalizeProviders({ providers, agentDir });
+
+    expect(normalized).toBe(providers);
+    expect(normalized?.google?.apiKey).toBe("GEMINI_API_KEY");
+  });
 });

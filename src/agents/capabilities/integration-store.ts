@@ -139,6 +139,20 @@ export async function readPersistedPlannerIntegrations(params: {
         ? entry.contracts.filter((value): value is string => typeof value === "string")
         : [],
       verification: Array.isArray(entry.verification) ? entry.verification : [],
+      onboarding: typeof entry.onboarding === "boolean" ? entry.onboarding : false,
+      requiresConfig: typeof entry.requiresConfig === "boolean" ? entry.requiresConfig : true,
+      requiresAuth: typeof entry.requiresAuth === "boolean" ? entry.requiresAuth : false,
+      installRequired: typeof entry.installRequired === "boolean" ? entry.installRequired : false,
+      installStrategy:
+        entry.installStrategy === "bundled" ||
+        entry.installStrategy === "local" ||
+        entry.installStrategy === "external" ||
+        entry.installStrategy === "npm"
+          ? entry.installStrategy
+          : "none",
+      ...(typeof entry.docsPath === "string" ? { docsPath: entry.docsPath } : {}),
+      ...(typeof entry.selectionLabel === "string" ? { selectionLabel: entry.selectionLabel } : {}),
+      ...(typeof entry.detailLabel === "string" ? { detailLabel: entry.detailLabel } : {}),
       ...(typeof entry.lastVerifiedAt === "string" ? { lastVerifiedAt: entry.lastVerifiedAt } : {}),
       ...(typeof entry.lastObservedAt === "string" ? { lastObservedAt: entry.lastObservedAt } : {}),
       ...(typeof entry.updatedAt === "string" ? { updatedAt: entry.updatedAt } : {}),

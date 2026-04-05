@@ -16,6 +16,7 @@ export function renderAgentOverview(params: {
   basePath: string;
   defaultId: string | null;
   configForm: Record<string, unknown> | null;
+  modelSuggestions: string[];
   agentFilesList: AgentsFilesListResult | null;
   agentIdentity: AgentIdentityResult | null;
   agentIdentityLoading: boolean;
@@ -135,7 +136,11 @@ export function renderAgentOverview(params: {
                       </option>
                     `
               }
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined)}
+              ${buildModelOptions(
+                configForm,
+                effectivePrimary ?? undefined,
+                params.modelSuggestions,
+              )}
             </select>
           </label>
           <div class="field">

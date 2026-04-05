@@ -13,7 +13,12 @@ import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
-import { loadCronJobs, loadCronRuns, loadCronStatus } from "./controllers/cron.ts";
+import {
+  loadCronJobs,
+  loadCronModelSuggestions,
+  loadCronRuns,
+  loadCronStatus,
+} from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
@@ -218,7 +223,10 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "agents") {
     await loadAgents(host as unknown as OpenClawApp);
-    await loadConfig(host as unknown as OpenClawApp);
+    await Promise.all([
+      loadConfig(host as unknown as OpenClawApp),
+      loadCronModelSuggestions(host as unknown as OpenClawApp),
+    ]);
     const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
     if (agentIds.length > 0) {
       void loadAgentIdentities(host as unknown as OpenClawApp, agentIds);
@@ -237,6 +245,12 @@ export async function refreshActiveTab(host: SettingsHost) {
         void loadCron(host);
       }
     }
+  }
+  if (host.tab === "builder") {
+    await Promise.all([
+      loadConfig(host as unknown as OpenClawApp),
+      loadCronModelSuggestions(host as unknown as OpenClawApp),
+    ]);
   }
   if (host.tab === "nodes") {
     await loadNodes(host as unknown as OpenClawApp);
@@ -257,7 +271,8 @@ export async function refreshActiveTab(host: SettingsHost) {
     host.tab === "appearance" ||
     host.tab === "automation" ||
     host.tab === "infrastructure" ||
-    host.tab === "aiAgents"
+    host.tab === "aiAgents" ||
+    host.tab === "onboarding"
   ) {
     await loadConfigSchema(host as unknown as OpenClawApp);
     await loadConfig(host as unknown as OpenClawApp);
@@ -613,6 +628,7 @@ export async function loadCron(host: SettingsHost) {
   await Promise.all([
     loadChannels(app, false),
     loadCronStatus(app),
+    loadCronModelSuggestions(app),
     loadCronJobs(app),
     loadCronRuns(app, activeCronJobId),
   ]);

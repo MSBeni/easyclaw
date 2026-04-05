@@ -316,6 +316,7 @@ export type PresenceEntry = {
 };
 
 export type GatewaySessionsDefaults = {
+  modelProvider?: string | null;
   model: string | null;
   contextTokens: number | null;
 };
@@ -630,6 +631,8 @@ export type ModelCatalogEntry = {
   contextWindow?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image">;
+  /** Whether the provider has credentials configured. */
+  configured?: boolean;
 };
 
 export type ToolCatalogProfile =

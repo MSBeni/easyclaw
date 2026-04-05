@@ -44,6 +44,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     },
     selectedAgentId: "beta",
     activePanel: "overview",
+    modelSuggestions: [],
     config: {
       form: null,
       loading: false,
@@ -61,6 +62,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
       jobs: [],
       loading: false,
       error: null,
+      notice: null,
     },
     agentFiles: {
       list: null,
@@ -103,12 +105,14 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onChannelsRefresh: () => undefined,
     onCronRefresh: () => undefined,
     onCronRunNow: () => undefined,
+    onOpenCronTab: () => undefined,
     onSkillsFilterChange: () => undefined,
     onSkillsRefresh: () => undefined,
     onAgentSkillToggle: () => undefined,
     onAgentSkillsClear: () => undefined,
     onAgentSkillsDisableAll: () => undefined,
     onSetDefault: () => undefined,
+    onDeleteAgent: () => undefined,
     ...overrides,
   };
 }
@@ -170,5 +174,44 @@ describe("renderAgents", () => {
     );
 
     expect(skillsTab?.textContent?.trim()).toContain("1");
+  });
+
+  it("shows cron empty-state actions when selected agent has no jobs", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgents(
+        createProps({
+          activePanel: "cron",
+          selectedAgentId: "beta",
+          cron: {
+            status: {
+              enabled: true,
+              jobs: 0,
+              nextWakeAtMs: null,
+            },
+            jobs: [],
+            loading: false,
+            error: null,
+            notice: null,
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain(
+      "No jobs assigned. Create one from Cron Jobs, then run it on demand.",
+    );
+
+    const openCronButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Open Cron Jobs",
+    );
+    expect(openCronButton).toBeTruthy();
+
+    const runNowButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Run Now",
+    );
+    expect(runNowButton?.disabled).toBe(true);
   });
 });

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isChannelConfigured as isConfiguredChannelRef } from "../../config/plugin-auto-enable.js";
 import { stableStringify } from "../stable-stringify.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
 import { listConnectorsForContract } from "./registry.js";
@@ -81,6 +82,14 @@ export type PlannedIntegrationInstance = IntegrationInstance & {
   sourceKind: ConnectorDefinition["source"]["kind"];
   contracts: string[];
   verification: VerificationProbe[];
+  docsPath?: string;
+  selectionLabel?: string;
+  detailLabel?: string;
+  onboarding: boolean;
+  requiresConfig: boolean;
+  requiresAuth: boolean;
+  installRequired: boolean;
+  installStrategy: ConnectorDefinition["install"]["strategy"];
 };
 
 export type PlannedSetupTaskStatus = "completed" | "pending";
@@ -312,9 +321,10 @@ function preferredConnectorIdsForDescriptor(
 }
 
 function isChannelConfigured(cfg: OpenClawConfig | undefined, channel: string): boolean {
-  const channels = cfg?.channels as Record<string, unknown> | undefined;
-  const entry = channels?.[channel];
-  return Boolean(entry && typeof entry === "object");
+  if (!cfg) {
+    return false;
+  }
+  return isConfiguredChannelRef(cfg, channel);
 }
 
 function isGmailHookConfigured(cfg: OpenClawConfig | undefined): boolean {
@@ -473,6 +483,14 @@ function describeIntegrationInstance(
     sourceKind: connector.source.kind,
     contracts: connector.contracts,
     verification: connector.verification.probes,
+    docsPath: connector.metadata.docsPath,
+    selectionLabel: connector.metadata.selectionLabel,
+    detailLabel: connector.metadata.detailLabel,
+    onboarding: connector.setup.onboarding,
+    requiresConfig: connector.setup.requiresConfig,
+    requiresAuth: connector.setup.requiresAuth,
+    installRequired: connector.install.required,
+    installStrategy: connector.install.strategy,
   };
 }
 

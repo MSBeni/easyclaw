@@ -96,6 +96,18 @@ function createProviderWithModelsConfig(provider: string, models: Array<Record<s
   } as Partial<OpenClawConfig>;
 }
 
+function createModelConfigEntry(id: string, opts?: { reasoning?: boolean }) {
+  return {
+    id,
+    name: id,
+    reasoning: opts?.reasoning ?? false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 4096,
+  } as const;
+}
+
 function resolveConfiguredRefForTest(cfg: Partial<OpenClawConfig>) {
   return resolveConfiguredModelRef({
     cfg: cfg as OpenClawConfig,
@@ -113,6 +125,8 @@ describe("model-selection", () => {
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
       expect(normalizeProviderId("qwen")).toBe("qwen-portal");
       expect(normalizeProviderId("kimi-code")).toBe("kimi-coding");
+      expect(normalizeProviderId("google-gemini")).toBe("google");
+      expect(normalizeProviderId("google-generative-ai")).toBe("google");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
@@ -680,6 +694,40 @@ describe("model-selection", () => {
       ]);
       const result = resolveConfiguredRefForTest(cfg);
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("prefers a provider with configured auth hints when the default provider has none", () => {
+      const cfg = {
+        models: {
+          providers: {
+            anthropic: {
+              models: [createModelConfigEntry("claude-opus-4-6", { reasoning: true })],
+            },
+            openai: {
+              apiKey: "sk-test",
+              models: [createModelConfigEntry("gpt-5.2")],
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>;
+
+      const result = resolveConfiguredRefForTest(cfg);
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.2" });
+    });
+
+    it("uses provider default model hints when a configured provider omits models[]", () => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              apiKey: "sk-test",
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>;
+
+      const result = resolveConfiguredRefForTest(cfg);
+      expect(result).toEqual({ provider: "openai", model: "gpt-4o" });
     });
 
     it("should fall back to hardcoded default when no custom providers have models", () => {

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import process from "node:process";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   type OpenClawConfig,
@@ -15,9 +16,14 @@ import { displayPath } from "../utils.js";
 import {
   ensureDependency,
   ensureGcloudAuth,
+  getActiveGcloudAccount,
+  getGogCommandEnv,
+  getGogAuthStatus,
+  ensureGogAuth,
   ensureSubscription,
   ensureTailscaleEndpoint,
   ensureTopic,
+  validatePublicPushEndpoint,
   resolveProjectIdFromGogCredentials,
   runGcloud,
 } from "./gmail-setup-utils.js";
@@ -34,12 +40,14 @@ import {
   DEFAULT_GMAIL_SERVE_PORT,
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
+  OPENCLAW_GOG_CLIENT,
   type GmailHookOverrides,
   type GmailHookRuntimeConfig,
   generateHookToken,
   mergeHookPresets,
   normalizeHooksPath,
   normalizeServePath,
+  parseSubscriptionPath,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
@@ -66,7 +74,23 @@ export type GmailSetupOptions = GmailCommonOptions & {
   account: string;
   project?: string;
   pushEndpoint?: string;
+  interactiveAuth?: boolean;
   json?: boolean;
+};
+
+export type GmailSetupSummary = {
+  projectId: string;
+  topic: string;
+  subscription: string;
+  pushEndpoint: string;
+  hookUrl: string;
+  hookToken: string;
+  pushToken: string;
+  serve: {
+    bind: string;
+    port: number;
+    path: string;
+  };
 };
 
 export type GmailRunOptions = GmailCommonOptions & {
@@ -75,14 +99,58 @@ export type GmailRunOptions = GmailCommonOptions & {
 
 const DEFAULT_GMAIL_TOPIC_IAM_MEMBER = "serviceAccount:gmail-api-push@system.gserviceaccount.com";
 
-export async function runGmailSetup(opts: GmailSetupOptions) {
+function buildGmailGogLoginCommand(account: string): string {
+  return `gog login ${account} --client ${OPENCLAW_GOG_CLIENT} --services gmail --gmail-scope full --force-consent`;
+}
+
+async function ensureGmailSetupAuth(account: string, interactive: boolean) {
+  if (interactive) {
+    await ensureGcloudAuth(true);
+    await ensureGogAuth(account, true);
+    return;
+  }
+
+  const missing: string[] = [];
+  const gcloudAccount = await getActiveGcloudAccount();
+  if (!gcloudAccount) {
+    missing.push("gcloud login required. Run `gcloud auth login`.");
+  }
+  const gogStatus = await getGogAuthStatus();
+  if (!gogStatus.credentialsExists) {
+    missing.push(
+      "gog OAuth client credentials missing. Import them with `gog auth credentials set --client openclaw-gmail-hook <credentials.json>`.",
+    );
+  } else if (gogStatus.email !== account) {
+    if (gogStatus.email) {
+      missing.push(
+        `gog is signed in as ${gogStatus.email}. Run \`${buildGmailGogLoginCommand(account)}\`.`,
+      );
+    } else {
+      missing.push(`gog login required. Run \`${buildGmailGogLoginCommand(account)}\`.`);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(`${missing.join(" ")} Retry after both are complete.`);
+  }
+}
+
+export async function runGmailSetup(opts: GmailSetupOptions): Promise<GmailSetupSummary> {
   await ensureDependency("gcloud", ["--cask", "gcloud-cli"]);
   await ensureDependency("gog", ["gogcli"]);
   if (opts.tailscale !== "off" && !opts.pushEndpoint) {
     await ensureDependency("tailscale", ["tailscale"]);
   }
 
-  await ensureGcloudAuth();
+  const interactiveAuth = opts.interactiveAuth ?? true;
+  await ensureGmailSetupAuth(opts.account, interactiveAuth);
+
+  if (opts.pushEndpoint) {
+    const validation = validatePublicPushEndpoint(opts.pushEndpoint);
+    if (!validation.ok) {
+      throw new Error(validation.error);
+    }
+    opts.pushEndpoint = validation.normalized;
+  }
 
   const configSnapshot = await readConfigFileSnapshot();
   if (!configSnapshot.valid) {
@@ -109,7 +177,9 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const topicPath = buildTopicPath(projectId, topicName);
 
-  const subscription = opts.subscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
+  const subscriptionInput = opts.subscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
+  const subscription =
+    parseSubscriptionPath(subscriptionInput)?.subscriptionName ?? subscriptionInput;
   const label = opts.label ?? DEFAULT_GMAIL_LABEL;
   const hookUrl =
     opts.hookUrl ??
@@ -238,7 +308,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   }
   await writeConfigFile(validated.config);
 
-  const summary = {
+  const summary: GmailSetupSummary = {
     projectId,
     topic: topicPath,
     subscription,
@@ -255,7 +325,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   if (opts.json) {
     defaultRuntime.log(JSON.stringify(summary, null, 2));
-    return;
+    return summary;
   }
 
   defaultRuntime.log("Gmail hooks configured:");
@@ -266,6 +336,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   defaultRuntime.log(`- hook url: ${hookUrl}`);
   defaultRuntime.log(`- config: ${displayPath(CONFIG_PATH)}`);
   defaultRuntime.log(`Next: ${formatCliCommand("openclaw webhooks gmail run")}`);
+  return summary;
 }
 
 export async function runGmailService(opts: GmailRunOptions) {
@@ -311,7 +382,7 @@ export async function runGmailService(opts: GmailRunOptions) {
   await startGmailWatch(runtimeConfig);
 
   let shuttingDown = false;
-  let child = spawnGogServe(runtimeConfig);
+  let child = await spawnGogServe(runtimeConfig);
 
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
   const renewTimer = setInterval(() => {
@@ -346,15 +417,20 @@ export async function runGmailService(opts: GmailRunOptions) {
       if (shuttingDown) {
         return;
       }
-      child = spawnGogServe(runtimeConfig);
+      void spawnGogServe(runtimeConfig).then((nextChild) => {
+        child = nextChild;
+      });
     }, 2000);
   });
 }
 
-function spawnGogServe(cfg: GmailHookRuntimeConfig) {
+async function spawnGogServe(cfg: GmailHookRuntimeConfig) {
   const args = buildGogWatchServeArgs(cfg);
   defaultRuntime.log(`Starting gog ${args.join(" ")}`);
-  return spawn("gog", args, { stdio: "inherit" });
+  return spawn("gog", args, {
+    stdio: "inherit",
+    env: { ...process.env, ...(await getGogCommandEnv()) },
+  });
 }
 
 async function startGmailWatch(
@@ -362,9 +438,27 @@ async function startGmailWatch(
   fatal = false,
 ) {
   const args = ["gog", ...buildGogWatchStartArgs(cfg)];
-  const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
+  const result = await runCommandWithTimeout(args, {
+    timeoutMs: 120_000,
+    env: await getGogCommandEnv(),
+  });
   if (result.code !== 0) {
     const message = result.stderr || result.stdout || "gog watch start failed";
+    const normalized = message.trim();
+    if (
+      normalized.includes("insufficientPermissions") ||
+      normalized.includes("insufficient authentication scopes") ||
+      normalized.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT")
+    ) {
+      const scopeMessage = `Gmail API auth is missing required Gmail scopes. Re-run \`${buildGmailGogLoginCommand(
+        cfg.account,
+      )}\`, complete consent, then retry Gmail setup. Original error: ${normalized}`;
+      if (fatal) {
+        throw new Error(scopeMessage);
+      }
+      defaultRuntime.error(scopeMessage);
+      return;
+    }
     if (fatal) {
       throw new Error(message);
     }

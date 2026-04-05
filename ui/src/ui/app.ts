@@ -127,6 +127,7 @@ export class OpenClawApp extends LitElement {
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
+  @state() connectedEver = false;
   @state() theme: ThemeName = this.settings.theme ?? "claw";
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
@@ -235,6 +236,7 @@ export class OpenClawApp extends LitElement {
   @state() aiAgentsActiveSection: string | null = null;
   @state() aiAgentsActiveSubsection: string | null = null;
 
+  @state() onboardingStep: string | null = null;
   @state() channelsLoading = false;
   @state() channelsSnapshot: ChannelsStatusSnapshot | null = null;
   @state() channelsError: string | null = null;
@@ -262,7 +264,13 @@ export class OpenClawApp extends LitElement {
     "overview";
   @state() builderBrief = "";
   @state() builderTemplateId = "";
+  @state() builderModelId = "";
   @state() builderSetupFocus: AppViewState["builderSetupFocus"] = null;
+  @state() builderSetupInputs: Record<string, string> = {};
+  @state() builderSetupRunningConnectorId: string | null = null;
+  @state() builderSetupError: string | null = null;
+  @state() builderSetupResult: import("./controllers/builder.ts").BuilderSetupRunResult | null =
+    null;
   @state() builderPlan: import("./controllers/builder.ts").BuilderPlanResult | null = null;
   @state() builderPlanLoading = false;
   @state() builderPlanError: string | null = null;
@@ -391,6 +399,7 @@ export class OpenClawApp extends LitElement {
   @state() cronJobsSortDir: import("./types.js").CronSortDir = "asc";
   @state() cronStatus: CronStatus | null = null;
   @state() cronError: string | null = null;
+  @state() cronNotice: string | null = null;
   @state() cronForm: CronFormState = { ...DEFAULT_CRON_FORM };
   @state() cronFieldErrors: import("./controllers/cron.js").CronFieldErrors = {};
   @state() cronEditingJobId: string | null = null;

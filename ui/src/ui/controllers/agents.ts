@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { AgentsListResult, ToolsCatalogResult } from "../types.ts";
+import type { AgentsListResult, CronJob, ToolsCatalogResult } from "../types.ts";
 import { saveConfig } from "./config.ts";
 import type { ConfigState } from "./config.ts";
 
@@ -17,6 +17,10 @@ export type AgentsState = {
 };
 
 export type AgentsConfigSaveState = AgentsState & ConfigState;
+
+export type AgentsDeleteState = AgentsState & {
+  cronJobs: CronJob[];
+};
 
 export async function loadAgents(state: AgentsState) {
   if (!state.client || !state.connected) {
@@ -91,5 +95,51 @@ export async function saveAgentsConfig(state: AgentsConfigSaveState) {
   await loadAgents(state);
   if (selectedBefore && state.agentsList?.agents.some((entry) => entry.id === selectedBefore)) {
     state.agentsSelectedId = selectedBefore;
+  }
+}
+
+export async function deleteAgentWithFullCleanup(
+  state: AgentsDeleteState,
+  agentId: string,
+): Promise<boolean> {
+  const normalizedAgentId = agentId.trim();
+  if (!state.client || !state.connected || !normalizedAgentId || state.agentsLoading) {
+    return false;
+  }
+
+  const relatedCronJobs = state.cronJobs.filter((job) => job.agentId === normalizedAgentId).length;
+  const confirmDelete =
+    typeof globalThis.confirm === "function" ? globalThis.confirm.bind(globalThis) : () => true;
+  const confirmed = confirmDelete(
+    [
+      `Delete agent "${normalizedAgentId}" with full cleanup?`,
+      "",
+      "This will remove:",
+      "- agent config, bindings, workspace, and session transcripts",
+      "- all cron jobs targeting this agent",
+      "",
+      `Currently loaded cron jobs targeting this agent: ${relatedCronJobs}`,
+      "",
+      "Global integrations, channels, and provider auth remain unchanged.",
+    ].join("\n"),
+  );
+  if (!confirmed) {
+    return false;
+  }
+
+  state.agentsLoading = true;
+  state.agentsError = null;
+  try {
+    await state.client.request("agents.delete", {
+      agentId: normalizedAgentId,
+      deleteFiles: true,
+      deleteCronJobs: true,
+    });
+    return true;
+  } catch (err) {
+    state.agentsError = String(err);
+    return false;
+  } finally {
+    state.agentsLoading = false;
   }
 }

@@ -4,7 +4,9 @@ import type { AgentsState } from "./agents.ts";
 import {
   applyBuilderPlan,
   loadBuilderPlan,
+  runBuilderSetupAction,
   type BuilderState,
+  updateBuilderSetupInput,
   verifyBuilderPlan,
 } from "./builder.ts";
 import type { CronState } from "./cron.ts";
@@ -23,6 +25,11 @@ function createState(): {
     connected: true,
     builderBrief: "",
     builderTemplateId: "",
+    builderModelId: "",
+    builderSetupInputs: {},
+    builderSetupRunningConnectorId: null,
+    builderSetupError: null,
+    builderSetupResult: null,
     builderPlan: null,
     builderPlanLoading: false,
     builderPlanError: null,
@@ -56,6 +63,7 @@ function createState(): {
     cronJobsSortDir: "desc",
     cronStatus: null,
     cronError: null,
+    cronNotice: null,
     cronForm: { ...DEFAULT_CRON_FORM },
     cronFieldErrors: {},
     cronEditingJobId: null,
@@ -100,6 +108,25 @@ describe("builder controller", () => {
         draft: expect.objectContaining({ templateId: "daily-briefing" }),
       }),
     );
+  });
+
+  it("includes a model override in builder requests when selected", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Create a daily digest";
+    state.builderModelId = "openai/gpt-4o";
+    request.mockResolvedValue({
+      draft: {
+        templateId: "daily-briefing",
+      },
+      plan: { status: "ready" },
+    });
+
+    await loadBuilderPlan(state);
+
+    expect(request).toHaveBeenCalledWith("agents.builder.plan", {
+      brief: "Create a daily digest",
+      modelId: "openai/gpt-4o",
+    });
   });
 
   it("applies the builder plan and refreshes agents and cron state", async () => {
@@ -216,6 +243,226 @@ describe("builder controller", () => {
     expect(state.builderPlan).toEqual(
       expect.objectContaining({
         draft: expect.objectContaining({ templateId: "daily-briefing" }),
+      }),
+    );
+  });
+
+  it("updates local quick-setup input state", () => {
+    const { state } = createState();
+    updateBuilderSetupInput(state, "gmail.account", "automation@example.com");
+
+    expect(state.builderSetupInputs).toEqual({ "gmail.account": "automation@example.com" });
+    expect(state.builderSetupError).toBe(null);
+  });
+
+  it("runs a builder setup action and refreshes config and plan", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Create a daily Telegram briefing from my Gmail every morning at 9am.";
+    request
+      .mockResolvedValueOnce({
+        connectorId: "platform:gmail-hook",
+        status: "configured",
+        message: "Gmail hook configured.",
+        updatedRefs: ["hooks.gmail", "hooks.token"],
+        summary: {
+          projectId: "project-123",
+          topic: "projects/project-123/topics/gmail-push",
+        },
+      })
+      .mockResolvedValueOnce({
+        hash: "config-hash",
+        valid: true,
+        config: { hooks: { gmail: { account: "automation@example.com" } } },
+        raw: '{\n  "hooks": {}\n}',
+        issues: [],
+      })
+      .mockResolvedValueOnce({
+        draft: {
+          templateId: "daily-briefing",
+        },
+        plan: { status: "needs_setup" },
+      });
+
+    await runBuilderSetupAction(state, {
+      connectorId: "platform:gmail-hook",
+      inputs: {
+        account: "automation@example.com",
+        project: "project-123",
+      },
+    });
+
+    expect(request.mock.calls).toEqual([
+      [
+        "agents.builder.setup.run",
+        {
+          connectorId: "platform:gmail-hook",
+          inputs: {
+            account: "automation@example.com",
+            project: "project-123",
+          },
+        },
+      ],
+      ["config.get", {}],
+      [
+        "agents.builder.plan",
+        {
+          brief: "Create a daily Telegram briefing from my Gmail every morning at 9am.",
+        },
+      ],
+    ]);
+    expect(state.builderSetupResult).toEqual(
+      expect.objectContaining({
+        connectorId: "platform:gmail-hook",
+        status: "configured",
+      }),
+    );
+    expect(state.builderSetupRunningConnectorId).toBe(null);
+  });
+
+  it("keeps an auth handoff result without refreshing config or plan", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Create a daily Telegram briefing from my Gmail every morning at 9am.";
+    request.mockResolvedValueOnce({
+      connectorId: "platform:gmail-hook",
+      status: "needs_auth",
+      message: "Gmail setup needs sign-in before EasyClaw can finish the remaining steps.",
+      updatedRefs: [],
+      authSteps: [
+        {
+          id: "gcloud-auth",
+          label: "Sign in to Google Cloud",
+          detail: "Log in to the Google Cloud CLI.",
+          command: "gcloud auth login",
+          connectorId: "platform:gmail-hook:gcloud-auth",
+          inputs: {},
+        },
+      ],
+    });
+
+    await runBuilderSetupAction(state, {
+      connectorId: "platform:gmail-hook",
+      inputs: {
+        account: "automation@example.com",
+      },
+    });
+
+    expect(request.mock.calls).toEqual([
+      [
+        "agents.builder.setup.run",
+        {
+          connectorId: "platform:gmail-hook",
+          inputs: {
+            account: "automation@example.com",
+          },
+        },
+      ],
+    ]);
+    expect(state.builderSetupResult).toEqual(
+      expect.objectContaining({
+        status: "needs_auth",
+      }),
+    );
+    expect(state.builderSetupRunningConnectorId).toBe(null);
+  });
+
+  it("keeps a credentials handoff result without refreshing config or plan", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Create a daily Telegram briefing from my Gmail every morning at 9am.";
+    request.mockResolvedValueOnce({
+      connectorId: "platform:gmail-hook",
+      status: "needs_credentials",
+      message: "Gmail setup needs a Google OAuth client JSON before gog can sign in.",
+      updatedRefs: [],
+      credentialImport: {
+        connectorId: "platform:gmail-hook:gog-credentials",
+        label: "Import OAuth client JSON",
+        detail: "Upload the JSON file.",
+        consoleUrl: "https://console.cloud.google.com/apis/credentials",
+      },
+    });
+
+    await runBuilderSetupAction(state, {
+      connectorId: "platform:gmail-hook",
+      inputs: {
+        account: "automation@example.com",
+      },
+    });
+
+    expect(request.mock.calls).toEqual([
+      [
+        "agents.builder.setup.run",
+        {
+          connectorId: "platform:gmail-hook",
+          inputs: {
+            account: "automation@example.com",
+          },
+        },
+      ],
+    ]);
+    expect(state.builderSetupResult).toEqual(
+      expect.objectContaining({
+        status: "needs_credentials",
+      }),
+    );
+  });
+
+  it("falls back to a Gmail scope re-consent handoff when the gateway returns a raw auth error", async () => {
+    const { state, request } = createState();
+    request.mockRejectedValueOnce(
+      new Error(
+        "GatewayRequestError: Google API error (403 insufficientPermissions): Request had insufficient authentication scopes.",
+      ),
+    );
+
+    await runBuilderSetupAction(state, {
+      connectorId: "platform:gmail-hook",
+      inputs: {
+        account: "automation@example.com",
+      },
+    });
+
+    expect(state.builderSetupError).toBe(null);
+    expect(state.builderSetupResult).toEqual(
+      expect.objectContaining({
+        connectorId: "platform:gmail-hook",
+        status: "needs_auth",
+        authSteps: expect.arrayContaining([
+          expect.objectContaining({
+            connectorId: "platform:gmail-hook:gog-auth",
+            label: "Grant Gmail access in gog",
+            command:
+              "gog login automation@example.com --client openclaw-gmail-hook --services gmail --gmail-scope full --force-consent",
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("falls back to a Gmail credentials import handoff when the gateway returns a raw credentials error", async () => {
+    const { state, request } = createState();
+    request.mockRejectedValueOnce(
+      new Error(
+        "GatewayRequestError: gog OAuth client credentials missing. Import them with `gog auth credentials set --client openclaw-gmail-hook <credentials.json>` and retry.",
+      ),
+    );
+
+    await runBuilderSetupAction(state, {
+      connectorId: "platform:gmail-hook",
+      inputs: {
+        account: "automation@example.com",
+        project: "project-123",
+      },
+    });
+
+    expect(state.builderSetupError).toBe(null);
+    expect(state.builderSetupResult).toEqual(
+      expect.objectContaining({
+        connectorId: "platform:gmail-hook",
+        status: "needs_credentials",
+        credentialImport: expect.objectContaining({
+          connectorId: "platform:gmail-hook:gog-credentials",
+          consoleUrl: "https://console.cloud.google.com/apis/credentials?project=project-123",
+        }),
       }),
     );
   });

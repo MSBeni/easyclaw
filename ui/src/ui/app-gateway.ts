@@ -18,6 +18,7 @@ import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
+import { loadCronModelSuggestions } from "./controllers/cron.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
@@ -55,6 +56,7 @@ type GatewayHost = {
   clientInstanceId: string;
   client: GatewayBrowserClient | null;
   connected: boolean;
+  connectedEver?: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -203,6 +205,7 @@ export function connectGateway(host: GatewayHost) {
       }
       shutdownHost.pendingShutdownMessage = null;
       host.connected = true;
+      host.connectedEver = true;
       host.lastError = null;
       host.lastErrorCode = null;
       host.hello = hello;
@@ -215,6 +218,7 @@ export function connectGateway(host: GatewayHost) {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
+      void loadCronModelSuggestions(host as unknown as OpenClawApp);
       void loadHealthState(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });

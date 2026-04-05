@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { isChannelConfigured as isConfiguredChannelRef } from "../../config/plugin-auto-enable.js";
 import { hasConfiguredExecApprovalDmRoute } from "../../infra/exec-approval-surface.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
 import { listConnectorsForContract } from "./registry.js";
@@ -471,12 +472,10 @@ function resolveWorkflowSummary(params: {
 }
 
 function isChannelConfigured(cfg: OpenClawConfig | undefined, channel: string): boolean {
-  const channels = cfg?.channels as Record<string, unknown> | undefined;
-  if (!channels) {
+  if (!cfg) {
     return false;
   }
-  const entry = channels[channel];
-  return Boolean(entry && typeof entry === "object");
+  return isConfiguredChannelRef(cfg, channel);
 }
 
 function isGmailHookConfigured(cfg: OpenClawConfig | undefined): boolean {
