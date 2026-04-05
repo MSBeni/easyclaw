@@ -578,22 +578,31 @@ function buildSetupTask(
   if (!interesting) {
     return null;
   }
+  return buildSetupTaskFromConnectorInspection(connector, integration);
+}
 
-  const action = describeConnectorAction(connector, integration);
-  const status: PlannedSetupTaskStatus =
-    integration.status === "authenticated" ||
+function setupTaskStatusForIntegration(
+  integration: PlannedIntegrationInstance,
+): PlannedSetupTaskStatus {
+  return integration.status === "authenticated" ||
     integration.status === "verified" ||
     integration.status === "configured" ||
     integration.status === "installed"
-      ? "completed"
-      : "pending";
+    ? "completed"
+    : "pending";
+}
 
+function buildSetupTaskFromConnectorInspection(
+  connector: ConnectorDefinition,
+  integration: PlannedIntegrationInstance,
+): PlannedSetupTask {
+  const action = describeConnectorAction(connector, integration);
   return {
     id: `${connector.id}:setup`,
     connectorId: connector.id,
     connectorLabel: connector.label,
     kind: action.kind,
-    status,
+    status: setupTaskStatusForIntegration(integration),
     title: action.title,
     detail: action.detail,
     refs: dedupeStrings([...integration.configRefs, ...integration.authRefs]),
@@ -1140,6 +1149,32 @@ function buildPlannerTopology(params: {
         ],
       },
     ],
+  };
+}
+
+export type ConnectorSetupInspection = {
+  connector: ConnectorDefinition;
+  integration: PlannedIntegrationInstance;
+  setupTask: PlannedSetupTask;
+};
+
+export function inspectConnectorSetupState(params: {
+  connectorId: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  registry?: CapabilityRegistry;
+}): ConnectorSetupInspection | null {
+  const registry =
+    params.registry ?? buildOpenClawCapabilityRegistry({ workspaceDir: params.workspaceDir });
+  const connector = registry.connectorsById.get(params.connectorId);
+  if (!connector) {
+    return null;
+  }
+  const integration = describeIntegrationInstance(connector, params.cfg);
+  return {
+    connector,
+    integration,
+    setupTask: buildSetupTaskFromConnectorInspection(connector, integration),
   };
 }
 

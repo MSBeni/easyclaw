@@ -9,6 +9,7 @@ import {
   compileAgentBlueprintBuilderPlan,
   verifyAgentBlueprintBuilderPlan,
 } from "../../agents/blueprints/builder.js";
+import { inspectConnectorSetupState } from "../../agents/capabilities/planner.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import { runGmailSetup } from "../../hooks/gmail-ops.js";
@@ -98,6 +99,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return values.filter((value, index, all) => all.indexOf(value) === index);
 }
 
 function setTelegramDefaultTargetInConfig(params: {
@@ -304,6 +309,44 @@ function buildGmailCredentialImport(inputs: Record<string, unknown>) {
       label: "Import from Downloads and continue",
       detail:
         "After Google downloads the Desktop app OAuth client JSON, EasyClaw can find the newest matching file in Downloads, import it into gog, and continue into gog login automatically.",
+    },
+  };
+}
+
+function buildGenericSetupRunPayload(params: {
+  connectorId: string;
+  inspection: NonNullable<ReturnType<typeof inspectConnectorSetupState>>;
+}) {
+  const refs = dedupeStrings([
+    ...params.inspection.integration.configRefs,
+    ...params.inspection.integration.authRefs,
+  ]);
+  if (params.inspection.setupTask.status === "completed") {
+    return {
+      connectorId: params.connectorId,
+      status: "configured" as const,
+      message: params.inspection.setupTask.detail,
+      updatedRefs: refs,
+    };
+  }
+
+  const needsAuth =
+    params.inspection.connector.setup.requiresAuth &&
+    params.inspection.integration.status !== "install_required";
+  const status = needsAuth ? "needs_auth" : "needs_setup";
+  const detail =
+    params.inspection.integration.issues[0]?.trim() || params.inspection.setupTask.detail.trim();
+  const message = detail.length > 0 ? detail : `Finish ${params.inspection.connector.label} setup.`;
+  return {
+    connectorId: params.connectorId,
+    status,
+    message,
+    updatedRefs: refs,
+    resume: {
+      connectorId: params.connectorId,
+      label: "Re-check setup",
+      detail: `Run setup check again after updating ${params.inspection.connector.label}.`,
+      inputs: {},
     },
   };
 }
@@ -1443,16 +1486,34 @@ export const builderHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        default:
+        default: {
+          const cfg = loadConfig();
+          const inspection = inspectConnectorSetupState({
+            connectorId: parsed.connectorId,
+            cfg,
+            workspaceDir: process.cwd(),
+          });
+          if (!inspection) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `agents.builder.setup.run received unknown connectorId: ${parsed.connectorId}.`,
+              ),
+            );
+            return;
+          }
           respond(
-            false,
+            true,
+            buildGenericSetupRunPayload({
+              connectorId: parsed.connectorId,
+              inspection,
+            }),
             undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `agents.builder.setup.run does not support ${parsed.connectorId} yet.`,
-            ),
           );
           return;
+        }
       }
     } catch (error) {
       if (

@@ -724,6 +724,58 @@ describe("builder gateway handlers", () => {
     );
   });
 
+  it("returns generic auth guidance for connectors that are still disconnected", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:slack",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:slack",
+        status: "needs_auth",
+        updatedRefs: expect.arrayContaining(["channels.slack"]),
+        resume: expect.objectContaining({
+          connectorId: "channel:slack",
+        }),
+      }),
+    );
+  });
+
+  it("returns generic configured status for connectors already ready", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "platform:core-model",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "platform:core-model",
+        status: "configured",
+        updatedRefs: expect.arrayContaining(["models", "auth"]),
+      }),
+    );
+  });
+
+  it("rejects unknown connector ids in setup.run", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:not-real",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(call?.[2]?.message).toContain("unknown connectorId");
+  });
+
   it("rejects Gmail quick setup without an account", async () => {
     const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
       connectorId: "platform:gmail-hook",

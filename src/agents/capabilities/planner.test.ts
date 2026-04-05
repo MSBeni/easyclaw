@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
-import { buildRequirementPlannerResult } from "./planner.js";
+import { buildRequirementPlannerResult, inspectConnectorSetupState } from "./planner.js";
 import { buildRequirementSet } from "./requirements.js";
 
 describe("capability planner", () => {
@@ -224,5 +224,28 @@ describe("capability planner", () => {
         expect.stringContaining("channel:slack"),
       ]),
     );
+  });
+
+  it("inspects connector setup state for a specific connector", () => {
+    const inspected = inspectConnectorSetupState({
+      connectorId: "channel:slack",
+      cfg: {},
+      workspaceDir: process.cwd(),
+    });
+
+    expect(inspected?.integration.status).toBe("discovered");
+    expect(inspected?.setupTask.status).toBe("pending");
+    expect(inspected?.setupTask.kind).toBe("connect");
+    expect(inspected?.setupTask.refs).toEqual(["channels.slack"]);
+  });
+
+  it("returns null when inspecting an unknown connector", () => {
+    const inspected = inspectConnectorSetupState({
+      connectorId: "channel:not-real",
+      cfg: {},
+      workspaceDir: process.cwd(),
+    });
+
+    expect(inspected).toBeNull();
   });
 });

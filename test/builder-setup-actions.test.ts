@@ -175,6 +175,8 @@ describe("resolveQuickSetupForFocus", () => {
     expect(card?.title).toBe("Set up Google Chat");
     expect(card?.steps?.some((step) => step.instruction.includes("channel card below"))).toBe(true);
     expect(card?.docsHint).toBe("https://docs.openclaw.ai/channels/googlechat");
+    expect(card?.assist?.connectorId).toBe("channel:googlechat");
+    expect(card?.assist?.runLabel).toBe("Check setup status");
   });
 
   it("uses a generic connector setup card for uncovered platform and tool connectors", () => {
@@ -196,6 +198,8 @@ describe("resolveQuickSetupForFocus", () => {
     );
     expect(agentsCard?.title).toBe("Configure OpenClaw Agents Tools");
     expect(agentsCard?.steps?.at(-1)?.instruction).toContain("Return to Builder");
+    expect(webhookCard?.assist?.connectorId).toBe("platform:webhook-runtime");
+    expect(agentsCard?.assist?.connectorId).toBe("tools:agents");
   });
 });
 

@@ -117,6 +117,7 @@ function connectorSetupSubtitle(focus: BuilderSetupFocus): string {
 
 function buildGenericChannelQuickSetup(focus: BuilderSetupFocus): QuickSetupDef {
   const label = connectorSetupLabel(focus);
+  const connectorId = focus.connectorId?.trim() ?? "";
   const requiresInstall = Boolean(focus.connectorInstallRequired);
   const requiresAuth = Boolean(focus.connectorRequiresAuth);
   const docsHint = docsUrlFromPath(focus.connectorDocsPath);
@@ -158,11 +159,25 @@ function buildGenericChannelQuickSetup(focus: BuilderSetupFocus): QuickSetupDef 
     steps,
     docsHint,
     fields: [],
+    ...(connectorId
+      ? {
+          assist: {
+            connectorId,
+            title: `Check ${label} setup status`,
+            description:
+              "Run a safe readiness check for this connector and get the next step if setup is still incomplete.",
+            runLabel: "Check setup status",
+            runningLabel: "Checking setup...",
+            fields: [],
+          } satisfies QuickAssistAction,
+        }
+      : {}),
   };
 }
 
 function buildGenericConnectorQuickSetup(focus: BuilderSetupFocus): QuickSetupDef {
   const label = connectorSetupLabel(focus);
+  const connectorId = focus.connectorId?.trim() ?? "";
   const docsHint = docsUrlFromPath(focus.connectorDocsPath);
   const steps: SetupStep[] = [];
 
@@ -205,6 +220,19 @@ function buildGenericConnectorQuickSetup(focus: BuilderSetupFocus): QuickSetupDe
     steps,
     docsHint,
     fields: [],
+    ...(connectorId
+      ? {
+          assist: {
+            connectorId,
+            title: `Check ${label} setup status`,
+            description:
+              "Run a safe readiness check for this connector and get the next step if setup is still incomplete.",
+            runLabel: "Check setup status",
+            runningLabel: "Checking setup...",
+            fields: [],
+          } satisfies QuickAssistAction,
+        }
+      : {}),
   };
 }
 
@@ -734,6 +762,22 @@ function readAssistValue(
   return "";
 }
 
+function mapAssistInputs(
+  assist: QuickAssistAction,
+  inputs: Record<string, string>,
+): Record<string, string> {
+  if (assist.connectorId.startsWith("platform:gmail-hook")) {
+    return {
+      account: inputs["gmail.account"] ?? "",
+      project: inputs["gmail.project"] ?? "",
+      topic: inputs["gmail.topic"] ?? "",
+      subscription: inputs["gmail.subscription"] ?? "",
+      pushEndpoint: inputs["gmail.pushEndpoint"] ?? "",
+    };
+  }
+  return { ...inputs };
+}
+
 function renderAssistSetup(
   state: AppViewState,
   def: QuickSetupDef,
@@ -801,13 +845,7 @@ function renderAssistSetup(
             @click=${() =>
               void runBuilderSetupAction(state, {
                 connectorId: assist.connectorId,
-                inputs: {
-                  account: inputs["gmail.account"] ?? "",
-                  project: inputs["gmail.project"] ?? "",
-                  topic: inputs["gmail.topic"] ?? "",
-                  subscription: inputs["gmail.subscription"] ?? "",
-                  pushEndpoint: inputs["gmail.pushEndpoint"] ?? "",
-                },
+                inputs: mapAssistInputs(assist, inputs),
               })}
           >
             ${running ? assist.runningLabel : assist.runLabel}
