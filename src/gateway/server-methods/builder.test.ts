@@ -7,6 +7,14 @@ const mocks = vi.hoisted(() => ({
   compileAgentBlueprintBuilderPlan: vi.fn(),
   applyAgentBlueprintBuilderPlan: vi.fn(),
   verifyAgentBlueprintBuilderPlan: vi.fn(),
+  resolveSlackAccount: vi.fn(),
+  probeSlack: vi.fn(),
+  createSlackWebClient: vi.fn(),
+  slackApiCall: vi.fn(),
+  resolveDiscordAccount: vi.fn(),
+  probeDiscord: vi.fn(),
+  resolveSignalAccount: vi.fn(),
+  probeSignal: vi.fn(),
   resolveTelegramAccount: vi.fn(),
   fetchTelegramBotIdentity: vi.fn(),
   fetchTelegramLatestDeliveryTarget: vi.fn(),
@@ -55,6 +63,34 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../../extensions/telegram/src/accounts.js", () => ({
   resolveTelegramAccount: mocks.resolveTelegramAccount,
+}));
+
+vi.mock("../../../extensions/slack/src/accounts.js", () => ({
+  resolveSlackAccount: mocks.resolveSlackAccount,
+}));
+
+vi.mock("../../../extensions/slack/src/probe.js", () => ({
+  probeSlack: mocks.probeSlack,
+}));
+
+vi.mock("../../../extensions/slack/src/client.js", () => ({
+  createSlackWebClient: mocks.createSlackWebClient,
+}));
+
+vi.mock("../../../extensions/discord/src/accounts.js", () => ({
+  resolveDiscordAccount: mocks.resolveDiscordAccount,
+}));
+
+vi.mock("../../../extensions/discord/src/probe.js", () => ({
+  probeDiscord: mocks.probeDiscord,
+}));
+
+vi.mock("../../../extensions/signal/src/accounts.js", () => ({
+  resolveSignalAccount: mocks.resolveSignalAccount,
+}));
+
+vi.mock("../../../extensions/signal/src/probe.js", () => ({
+  probeSignal: mocks.probeSignal,
 }));
 
 vi.mock("../../../extensions/telegram/src/api-fetch.js", () => ({
@@ -113,6 +149,58 @@ function createInvokeParams(method: keyof typeof builderHandlers, params: Record
 describe("builder gateway handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.createSlackWebClient.mockReturnValue({
+      apiCall: mocks.slackApiCall,
+    });
+    mocks.slackApiCall.mockResolvedValue({
+      ok: true,
+      url: "wss://slack.example/socket",
+    });
+    mocks.resolveSlackAccount.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      botToken: "xoxb-test-token",
+      appToken: "xapp-test-token",
+      config: {
+        mode: "socket",
+      },
+    });
+    mocks.probeSlack.mockResolvedValue({
+      ok: true,
+      status: 200,
+      elapsedMs: 12,
+      bot: { id: "B123", name: "openclaw" },
+      team: { id: "T123", name: "OpenClaw Team" },
+    });
+    mocks.resolveDiscordAccount.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      token: "discord-token",
+      tokenSource: "config",
+      config: {},
+    });
+    mocks.probeDiscord.mockResolvedValue({
+      ok: true,
+      status: 200,
+      elapsedMs: 11,
+      bot: { id: "12345", username: "openclaw-bot" },
+    });
+    mocks.resolveSignalAccount.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      baseUrl: "http://127.0.0.1:8080",
+      configured: true,
+      config: {
+        account: "+15551234567",
+      },
+    });
+    mocks.probeSignal.mockResolvedValue({
+      ok: true,
+      status: 200,
+      elapsedMs: 10,
+      version: "0.13.0",
+      error: null,
+    });
     mocks.writeConfigFile.mockResolvedValue(undefined);
     mocks.resolveTelegramAccount.mockReturnValue({
       accountId: "default",
@@ -724,9 +812,40 @@ describe("builder gateway handlers", () => {
     );
   });
 
-  it("returns generic auth guidance for connectors that are still disconnected", async () => {
+  it("verifies Slack bot and app credentials with live API checks", async () => {
     const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
-      connectorId: "channel:slack",
+      connectorId: "channel:slack:verify-credentials",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.probeSlack).toHaveBeenCalledWith("xoxb-test-token", 5000);
+    expect(mocks.slackApiCall).toHaveBeenCalledWith("apps.connections.open");
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:slack:verify-credentials",
+        status: "configured",
+        message: expect.stringContaining("Slack credentials are valid"),
+      }),
+    );
+  });
+
+  it("reports Slack app-token setup requirements for socket mode", async () => {
+    mocks.resolveSlackAccount.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      botToken: "xoxb-test-token",
+      appToken: "",
+      config: {
+        mode: "socket",
+      },
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:slack:verify-credentials",
       inputs: {},
     });
     await invoke();
@@ -735,11 +854,70 @@ describe("builder gateway handlers", () => {
     expect(call?.[0]).toBe(true);
     expect(call?.[1]).toEqual(
       expect.objectContaining({
-        connectorId: "channel:slack",
+        connectorId: "channel:slack:verify-credentials",
+        status: "needs_setup",
+        message: expect.stringContaining("app token is missing"),
+      }),
+    );
+  });
+
+  it("verifies Discord token against the bot identity endpoint", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:discord:verify-token",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.probeDiscord).toHaveBeenCalledWith("discord-token", 5000, {
+      includeApplication: true,
+    });
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:discord:verify-token",
+        status: "configured",
+        message: expect.stringContaining("@openclaw-bot"),
+      }),
+    );
+  });
+
+  it("verifies Signal transport availability and readiness", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:signal:verify-transport",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.probeSignal).toHaveBeenCalledWith("http://127.0.0.1:8080", 5000);
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:signal:verify-transport",
+        status: "configured",
+        message: expect.stringContaining("Signal transport is reachable"),
+      }),
+    );
+  });
+
+  it("returns generic auth guidance for connectors that are still disconnected", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "platform:webhook-runtime",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "platform:webhook-runtime",
         status: "needs_auth",
-        updatedRefs: expect.arrayContaining(["channels.slack"]),
+        updatedRefs: expect.arrayContaining(["hooks.token"]),
         resume: expect.objectContaining({
-          connectorId: "channel:slack",
+          connectorId: "platform:webhook-runtime",
         }),
       }),
     );

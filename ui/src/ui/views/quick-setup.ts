@@ -363,6 +363,31 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
           ],
         },
       ],
+      assist: {
+        connectorId: "channel:discord:verify-token",
+        title: "Verify Discord bot token",
+        description:
+          "Run a live Discord API check (`GET /users/@me`) to confirm this token can authenticate the bot.",
+        runLabel: "Verify Discord token",
+        runningLabel: "Verifying token...",
+        fields: [
+          {
+            key: "discord.accountId",
+            label: "Account ID (optional)",
+            placeholder: "default",
+            type: "text",
+            help: "Leave blank for the default Discord account.",
+          },
+          {
+            key: "discord.token",
+            label: "Bot Token (optional override)",
+            placeholder: "MTAxNjQ5...",
+            type: "secret",
+            help: "Uses the saved token if left blank.",
+            configPath: ["channels", "discord", "token"],
+          },
+        ],
+      },
       docsHint: "https://docs.openclaw.ai/channels/discord",
     };
   }
@@ -413,6 +438,39 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
           help: "From api.slack.com → OAuth & Permissions → Bot User OAuth Token.",
         },
       ],
+      assist: {
+        connectorId: "channel:slack:verify-credentials",
+        title: "Verify Slack credentials",
+        description:
+          "Runs `auth.test` for the bot token and checks Socket Mode app-token connectivity when enabled.",
+        runLabel: "Verify Slack credentials",
+        runningLabel: "Verifying credentials...",
+        fields: [
+          {
+            key: "slack.accountId",
+            label: "Account ID (optional)",
+            placeholder: "default",
+            type: "text",
+            help: "Leave blank for the default Slack account.",
+          },
+          {
+            key: "slack.botToken",
+            label: "Bot Token (optional override)",
+            placeholder: "xoxb-...",
+            type: "secret",
+            help: "Uses the saved bot token if left blank.",
+            configPath: ["channels", "slack", "botToken"],
+          },
+          {
+            key: "slack.appToken",
+            label: "App Token (optional override)",
+            placeholder: "xapp-1-...",
+            type: "secret",
+            help: "Needed for Socket Mode checks; uses saved token if left blank.",
+            configPath: ["channels", "slack", "appToken"],
+          },
+        ],
+      },
       docsHint: "https://docs.openclaw.ai/channels/slack",
     };
   }
@@ -446,13 +504,46 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
       ],
       fields: [
         {
-          label: "Phone Number",
-          path: ["channels", "signal", "phone"],
+          label: "Signal Account",
+          path: ["channels", "signal", "account"],
           placeholder: "+1234567890",
           type: "text",
           help: "The phone number registered with Signal.",
         },
       ],
+      assist: {
+        connectorId: "channel:signal:verify-transport",
+        title: "Verify Signal transport",
+        description:
+          "Checks whether the configured signal-cli HTTP endpoint is reachable and ready for this account.",
+        runLabel: "Verify Signal transport",
+        runningLabel: "Verifying transport...",
+        fields: [
+          {
+            key: "signal.accountId",
+            label: "Account ID (optional)",
+            placeholder: "default",
+            type: "text",
+            help: "Leave blank for the default Signal account.",
+          },
+          {
+            key: "signal.account",
+            label: "Signal Account (optional override)",
+            placeholder: "+1234567890",
+            type: "text",
+            help: "Uses saved account/accountUuid if left blank.",
+            configPath: ["channels", "signal", "account"],
+          },
+          {
+            key: "signal.httpUrl",
+            label: "signal-cli HTTP URL (optional override)",
+            placeholder: "http://127.0.0.1:8080",
+            type: "text",
+            help: "Uses the saved Signal endpoint if left blank.",
+            configPath: ["channels", "signal", "httpUrl"],
+          },
+        ],
+      },
       docsHint: "https://docs.openclaw.ai/channels/signal",
     };
   }

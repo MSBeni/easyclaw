@@ -166,6 +166,35 @@ describe("resolveQuickSetupForFocus", () => {
     expect(card?.assist?.fields).toEqual([]);
   });
 
+  it("includes connector-specific verify assists for Discord, Slack, and Signal", () => {
+    const connectors = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() });
+    const discord = connectors.find((value) => value.id === "channel:discord");
+    const slack = connectors.find((value) => value.id === "channel:slack");
+    const signal = connectors.find((value) => value.id === "channel:signal");
+    expect(discord).toBeTruthy();
+    expect(slack).toBeTruthy();
+    expect(signal).toBeTruthy();
+
+    const discordCard = resolveQuickSetupForFocus(buildFocus(discord!));
+    const slackCard = resolveQuickSetupForFocus(buildFocus(slack!));
+    const signalCard = resolveQuickSetupForFocus(buildFocus(signal!));
+
+    expect(discordCard?.assist?.connectorId).toBe("channel:discord:verify-token");
+    expect(slackCard?.assist?.connectorId).toBe("channel:slack:verify-credentials");
+    expect(signalCard?.assist?.connectorId).toBe("channel:signal:verify-transport");
+  });
+
+  it("maps Signal quick-setup account field to channels.signal.account", () => {
+    const signal = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
+      (value) => value.id === "channel:signal",
+    );
+    expect(signal).toBeTruthy();
+
+    const card = resolveQuickSetupForFocus(buildFocus(signal!));
+    const signalField = card?.fields.find((field) => field.label === "Signal Account");
+    expect(signalField?.path).toEqual(["channels", "signal", "account"]);
+  });
+
   it("uses a generic channel setup card for uncovered chat connectors", () => {
     const connector = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
       (value) => value.id === "channel:googlechat",

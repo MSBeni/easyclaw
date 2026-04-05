@@ -1,3 +1,11 @@
+import { resolveDiscordAccount } from "../../../extensions/discord/src/accounts.js";
+import { probeDiscord } from "../../../extensions/discord/src/probe.js";
+import { normalizeDiscordToken } from "../../../extensions/discord/src/token.js";
+import { resolveSignalAccount } from "../../../extensions/signal/src/accounts.js";
+import { probeSignal } from "../../../extensions/signal/src/probe.js";
+import { resolveSlackAccount } from "../../../extensions/slack/src/accounts.js";
+import { createSlackWebClient } from "../../../extensions/slack/src/client.js";
+import { probeSlack } from "../../../extensions/slack/src/probe.js";
 import { resolveTelegramAccount } from "../../../extensions/telegram/src/accounts.js";
 import {
   fetchTelegramBotIdentity,
@@ -86,6 +94,23 @@ function stringInput(record: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function firstStringInput(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = stringInput(record, key);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function normalizeSetupSecret(value: string): string {
+  if (!value || value === REDACTED_SENTINEL) {
+    return "";
+  }
+  return value;
+}
+
 function normalizeSetupTelegramToken(value: string): string {
   const normalized = normalizeTelegramBotToken(value);
   if (!normalized || normalized === REDACTED_SENTINEL) {
@@ -103,6 +128,36 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function dedupeStrings(values: string[]): string[] {
   return values.filter((value, index, all) => all.indexOf(value) === index);
+}
+
+function channelAccountRef(channel: string, accountId: string): string {
+  return accountId && accountId !== "default"
+    ? `channels.${channel}.accounts.${accountId}`
+    : `channels.${channel}`;
+}
+
+async function probeSlackAppToken(
+  appToken: string,
+  timeoutMs: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const client = createSlackWebClient(appToken, { timeout: timeoutMs });
+  try {
+    const response = await client.apiCall("apps.connections.open");
+    const record = asRecord(response);
+    const ok = typeof record?.ok === "boolean" ? record.ok : true;
+    if (!ok) {
+      return {
+        ok: false,
+        error: stringInput(record ?? {}, "error") || "Slack rejected the app token.",
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error instanceof Error ? error.message : error),
+    };
+  }
 }
 
 function setTelegramDefaultTargetInConfig(params: {
@@ -885,6 +940,312 @@ export const builderHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        case "channel:slack:verify-credentials": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, [
+            "slack.accountId",
+            "accountId",
+            "account",
+          ]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const account = resolveSlackAccount({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const resolvedAccountId = accountId || account.accountId || "default";
+          const mode =
+            firstStringInput(parsed.inputs, ["slack.mode", "mode"]) ||
+            account.config.mode ||
+            "socket";
+          const botToken =
+            normalizeSetupSecret(
+              firstStringInput(parsed.inputs, ["slack.botToken", "botToken", "token"]),
+            ) || normalizeSetupSecret(account.botToken?.trim() ?? "");
+          const appToken =
+            normalizeSetupSecret(firstStringInput(parsed.inputs, ["slack.appToken", "appToken"])) ||
+            normalizeSetupSecret(account.appToken?.trim() ?? "");
+          if (!botToken) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Slack bot token is missing for account "${resolvedAccountId}". Save Bot Token, then run Verify Slack credentials.`,
+                updatedRefs: [],
+                summary: {
+                  command: "auth.test",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Slack credentials",
+                  detail: "After saving Bot Token, run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const botProbe = await probeSlack(botToken, 5000);
+          if (!botProbe.ok) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Slack bot token verification failed: ${botProbe.error ?? "unknown error"}`,
+                updatedRefs: [],
+                summary: {
+                  command: "auth.test",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Slack credentials",
+                  detail: "Fix Slack credentials and run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          if (mode !== "http") {
+            if (!appToken) {
+              respond(
+                true,
+                {
+                  connectorId: parsed.connectorId,
+                  status: "needs_setup",
+                  message: `Slack app token is missing for account "${resolvedAccountId}" in socket mode. Save App Token, then run Verify Slack credentials.`,
+                  updatedRefs: [],
+                  summary: {
+                    command: "apps.connections.open",
+                    accountId: resolvedAccountId,
+                  },
+                  resume: {
+                    connectorId: parsed.connectorId,
+                    label: "Verify Slack credentials",
+                    detail: "After saving App Token, run verification again.",
+                    inputs: accountId ? { accountId } : {},
+                  },
+                },
+                undefined,
+              );
+              return;
+            }
+            const appProbe = await probeSlackAppToken(appToken, 5000);
+            if (!appProbe.ok) {
+              respond(
+                true,
+                {
+                  connectorId: parsed.connectorId,
+                  status: "needs_setup",
+                  message: `Slack app token verification failed: ${appProbe.error}`,
+                  updatedRefs: [],
+                  summary: {
+                    command: "apps.connections.open",
+                    accountId: resolvedAccountId,
+                  },
+                  resume: {
+                    connectorId: parsed.connectorId,
+                    label: "Verify Slack credentials",
+                    detail: "Fix Slack App Token and run verification again.",
+                    inputs: accountId ? { accountId } : {},
+                  },
+                },
+                undefined,
+              );
+              return;
+            }
+          }
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `Slack credentials are valid${botProbe.team?.name ? ` for ${botProbe.team.name}` : ""} (account ${resolvedAccountId}).`,
+              updatedRefs: [channelAccountRef("slack", resolvedAccountId)],
+              summary: {
+                command: mode === "http" ? "auth.test" : "auth.test + apps.connections.open",
+                accountId: resolvedAccountId,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
+        case "channel:discord:verify-token": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, [
+            "discord.accountId",
+            "accountId",
+            "account",
+          ]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const account = resolveDiscordAccount({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const resolvedAccountId = accountId || account.accountId || "default";
+          const inputToken = normalizeDiscordToken(
+            firstStringInput(parsed.inputs, ["discord.token", "token", "botToken"]),
+            "agents.builder.setup.run.inputs.discord.token",
+          );
+          const token =
+            (inputToken && inputToken !== REDACTED_SENTINEL ? inputToken : "") ||
+            normalizeSetupSecret(account.token);
+          if (!token) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Discord bot token is missing for account "${resolvedAccountId}". Save Token, then run Verify Discord token.`,
+                updatedRefs: [],
+                summary: {
+                  command: "GET /users/@me",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Discord token",
+                  detail: "After saving Token, run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const verified = await probeDiscord(token, 5000, { includeApplication: true });
+          if (!verified.ok) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Discord token verification failed: ${verified.error ?? "unknown error"}`,
+                updatedRefs: [],
+                summary: {
+                  command: "GET /users/@me",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Discord token",
+                  detail: "Fix Discord token and run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const botLabel = verified.bot?.username
+            ? `@${verified.bot.username}`
+            : "the configured bot";
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `Discord token is valid for ${botLabel} (account ${resolvedAccountId}).`,
+              updatedRefs: [channelAccountRef("discord", resolvedAccountId)],
+              summary: {
+                command: "GET /users/@me",
+                accountId: resolvedAccountId,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
+        case "channel:signal:verify-transport": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, [
+            "signal.accountId",
+            "accountId",
+            "account",
+          ]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const account = resolveSignalAccount({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const resolvedAccountId = accountId || account.accountId || "default";
+          const signalAccount =
+            firstStringInput(parsed.inputs, ["signal.account", "signalAccount"]) ||
+            account.config.account?.trim() ||
+            account.config.accountUuid?.trim() ||
+            "";
+          const baseUrl =
+            firstStringInput(parsed.inputs, ["signal.httpUrl", "httpUrl", "baseUrl"]) ||
+            account.baseUrl;
+          if (!signalAccount) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Signal account identifier is missing for account "${resolvedAccountId}". Set channels.signal.account (or accountUuid), then run Verify Signal transport.`,
+                updatedRefs: [],
+                summary: {
+                  command: "signal-cli version",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Signal transport",
+                  detail: "After setting Signal account details, run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const probe = await probeSignal(baseUrl, 5000);
+          if (!probe.ok) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Signal transport check failed: ${probe.error ?? "unreachable"}`,
+                updatedRefs: [],
+                summary: {
+                  command: "signal-cli version",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Signal transport",
+                  detail: "Start signal-cli HTTP transport and run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `Signal transport is reachable${probe.version ? ` (signal-cli ${probe.version})` : ""} for account ${resolvedAccountId}.`,
+              updatedRefs: [channelAccountRef("signal", resolvedAccountId)],
+              summary: {
+                command: "signal-cli version",
+                accountId: resolvedAccountId,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
         case "platform:gmail-hook:tailscale-install": {
           const account = stringInput(parsed.inputs, "account");
           if (!account) {
@@ -1554,6 +1915,35 @@ export const builderHandlers: GatewayRequestHandlers = {
               detail: isVerify
                 ? "Make sure the Telegram bot token is configured, then retry verification."
                 : "Make sure the Telegram bot token is configured and the bot has recent messages, then retry.",
+              inputs: {},
+            },
+          },
+          undefined,
+        );
+        return;
+      }
+      if (
+        parsed.connectorId === "channel:slack:verify-credentials" ||
+        parsed.connectorId === "channel:discord:verify-token" ||
+        parsed.connectorId === "channel:signal:verify-transport"
+      ) {
+        const label =
+          parsed.connectorId === "channel:slack:verify-credentials"
+            ? "Verify Slack credentials"
+            : parsed.connectorId === "channel:discord:verify-token"
+              ? "Verify Discord token"
+              : "Verify Signal transport";
+        respond(
+          true,
+          {
+            connectorId: parsed.connectorId,
+            status: "needs_setup",
+            message: `${label} is blocked: ${String(error instanceof Error ? error.message : error)}`,
+            updatedRefs: [],
+            resume: {
+              connectorId: parsed.connectorId,
+              label,
+              detail: "Fix the channel setup inputs and run verification again.",
               inputs: {},
             },
           },
