@@ -56,6 +56,7 @@ export type CronState = {
   cronJobsSortDir: CronSortDir;
   cronStatus: CronStatus | null;
   cronError: string | null;
+  cronNotice: string | null;
   cronForm: CronFormState;
   cronFieldErrors: CronFieldErrors;
   cronEditingJobId: string | null;
@@ -173,6 +174,34 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
 
 export function hasCronFormErrors(errors: CronFieldErrors): boolean {
   return Object.keys(errors).length > 0;
+}
+
+type CronRunRequestResult =
+  | { ok: true; enqueued: true; runId?: string }
+  | { ok: true; ran: true }
+  | { ok: true; ran: false; reason?: string }
+  | { ok?: boolean }
+  | null;
+
+function buildCronRunNotice(result: CronRunRequestResult, mode: "force" | "due"): string {
+  if (!result || typeof result !== "object") {
+    return "Run request sent.";
+  }
+  if ("enqueued" in result && result.enqueued) {
+    return "Run queued. Check Run history for progress.";
+  }
+  if ("ran" in result && result.ran) {
+    return "Run started.";
+  }
+  if ("ran" in result && !result.ran && result.reason === "already-running") {
+    return "Run already in progress for this job.";
+  }
+  if ("ran" in result && !result.ran && result.reason === "not-due") {
+    return mode === "due"
+      ? "Run skipped because the job is not due yet."
+      : "Run skipped by scheduler.";
+  }
+  return "Run request sent.";
 }
 
 export async function loadCronStatus(state: CronState) {
@@ -622,6 +651,7 @@ export async function addCronJob(state: CronState) {
   }
   state.cronBusy = true;
   state.cronError = null;
+  state.cronNotice = null;
   try {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
@@ -712,6 +742,7 @@ export async function toggleCronJob(state: CronState, job: CronJob, enabled: boo
   }
   state.cronBusy = true;
   state.cronError = null;
+  state.cronNotice = null;
   try {
     await state.client.request("cron.update", { id: job.id, patch: { enabled } });
     await loadCronJobs(state);
@@ -729,8 +760,15 @@ export async function runCronJob(state: CronState, job: CronJob, mode: "force" |
   }
   state.cronBusy = true;
   state.cronError = null;
+  state.cronNotice = null;
   try {
-    await state.client.request("cron.run", { id: job.id, mode });
+    const result = await state.client.request("cron.run", {
+      id: job.id,
+      mode,
+    });
+    state.cronNotice = buildCronRunNotice(result, mode);
+
+    await Promise.all([loadCronStatus(state), loadCronJobs(state)]);
     if (state.cronRunsScope === "all") {
       await loadCronRuns(state, null);
     } else {
@@ -738,6 +776,7 @@ export async function runCronJob(state: CronState, job: CronJob, mode: "force" |
     }
   } catch (err) {
     state.cronError = String(err);
+    state.cronNotice = null;
   } finally {
     state.cronBusy = false;
   }
@@ -749,6 +788,7 @@ export async function removeCronJob(state: CronState, job: CronJob) {
   }
   state.cronBusy = true;
   state.cronError = null;
+  state.cronNotice = null;
   try {
     await state.client.request("cron.remove", { id: job.id });
     if (state.cronEditingJobId === job.id) {

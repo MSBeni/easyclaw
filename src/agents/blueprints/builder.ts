@@ -1,3 +1,5 @@
+import { getChannelDock } from "../../channels/dock.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -28,7 +30,6 @@ import type { AgentBlueprintBundle } from "./schema.js";
 
 const DIRECT_DELIVERY_CHANNELS = new Set(["telegram", "discord", "signal", "whatsapp"]);
 const WEEKDAY_CRON = "1-5";
-const DEFAULT_DIRECT_TARGET = "@me";
 
 const DAY_SPECS: Array<{ pattern: RegExp; day: string; label: string }> = [
   { pattern: /\bmonday\b/i, day: "1", label: "Mondays" },
@@ -169,7 +170,7 @@ type InferredSchedule = {
 
 type InferredDelivery = {
   channel?: string;
-  to?: string;
+  to?: string | null;
   assumptions: string[];
   questions: AgentBlueprintBuilderQuestion[];
 };
@@ -382,7 +383,24 @@ function inferDelivery(
   brief: string,
   outputChannels: string[],
   requirements: RequirementSet,
+  cfg?: OpenClawConfig,
 ): InferredDelivery {
+  const requiresExplicitDeliveryTarget =
+    requirements.workflow.primaryGoal === "briefing" ||
+    requirements.workflow.executionMode === "scheduled";
+  const resolveConfiguredDefaultTarget = (channel: string): string | null => {
+    if (!cfg) {
+      return null;
+    }
+    const dock = getChannelDock(channel as ChannelId);
+    const resolveDefaultTo = dock?.config?.resolveDefaultTo;
+    if (typeof resolveDefaultTo !== "function") {
+      return null;
+    }
+    const resolved = resolveDefaultTo({ cfg })?.trim();
+    return resolved ? resolved : null;
+  };
+
   const assumptions: string[] = [];
   const questions: AgentBlueprintBuilderQuestion[] = [];
   const deliveryMatch = brief.match(
@@ -395,8 +413,17 @@ function inferDelivery(
       return { channel, to, assumptions, questions };
     }
     if (DIRECT_DELIVERY_CHANNELS.has(channel)) {
-      assumptions.push(`Defaulted ${channel} delivery to ${DEFAULT_DIRECT_TARGET}.`);
-      return { channel, to: DEFAULT_DIRECT_TARGET, assumptions, questions };
+      const configuredTarget = resolveConfiguredDefaultTarget(channel);
+      if (configuredTarget) {
+        assumptions.push(`Used configured ${channel} default target.`);
+        return { channel, to: configuredTarget, assumptions, questions };
+      }
+      questions.push({
+        id: "delivery-target",
+        prompt: `Which ${channel} destination should receive the digest?`,
+        required: true,
+      });
+      return { channel, to: null, assumptions, questions };
     }
     questions.push({
       id: "delivery-target",
@@ -418,10 +445,27 @@ function inferDelivery(
       };
     }
     if (DIRECT_DELIVERY_CHANNELS.has(channel)) {
-      assumptions.push(`Defaulted ${channel} delivery to ${DEFAULT_DIRECT_TARGET}.`);
+      const configuredTarget = resolveConfiguredDefaultTarget(channel);
+      if (configuredTarget) {
+        assumptions.push(`Used configured ${channel} default target.`);
+        return {
+          channel,
+          to: configuredTarget,
+          assumptions,
+          questions,
+        };
+      }
+      if (!requiresExplicitDeliveryTarget) {
+        return { assumptions, questions };
+      }
+      questions.push({
+        id: "delivery-target",
+        prompt: `Which ${channel} destination should receive the result?`,
+        required: true,
+      });
       return {
         channel,
-        to: DEFAULT_DIRECT_TARGET,
+        to: null,
         assumptions,
         questions,
       };
@@ -435,25 +479,54 @@ function inferDelivery(
   }
 
   if (/\b(send|deliver|post).*\b(me|for me)\b/i.test(brief)) {
-    assumptions.push("Defaulted delivery to Telegram @me.");
+    const configuredTelegramTarget = resolveConfiguredDefaultTarget("telegram");
+    if (configuredTelegramTarget) {
+      assumptions.push("Used configured telegram default target.");
+      return {
+        channel: "telegram",
+        to: configuredTelegramTarget,
+        assumptions,
+        questions,
+      };
+    }
+    questions.push({
+      id: "delivery-target",
+      prompt: "Which Telegram destination should receive the digest?",
+      required: true,
+    });
     return {
       channel: "telegram",
-      to: DEFAULT_DIRECT_TARGET,
+      to: null,
       assumptions,
       questions,
     };
   }
 
   if (requirements.workflow.primaryGoal === "briefing") {
-    assumptions.push("Defaulted delivery to Telegram @me.");
+    const configuredTelegramTarget = resolveConfiguredDefaultTarget("telegram");
+    if (configuredTelegramTarget) {
+      assumptions.push("Used configured telegram default target.");
+      return {
+        channel: "telegram",
+        to: configuredTelegramTarget,
+        assumptions,
+        questions,
+      };
+    }
+    questions.push({
+      id: "delivery-target",
+      prompt: "Which Telegram destination should receive the digest?",
+      required: true,
+    });
+    assumptions.push("Delivery target needs confirmation before scheduling.");
+    return {
+      channel: "telegram",
+      to: null,
+      assumptions,
+      questions,
+    };
   }
   return {
-    ...(requirements.workflow.primaryGoal === "briefing"
-      ? {
-          channel: "telegram",
-          to: DEFAULT_DIRECT_TARGET,
-        }
-      : {}),
     assumptions,
     questions,
   };
@@ -583,6 +656,52 @@ function inferPlannerSourceChannels(
   return dedupeChannels(sources);
 }
 
+function includesContract(requirements: RequirementSet, contractId: string): boolean {
+  return requirements.inputs.some((entry) => entry.contractIds.includes(contractId));
+}
+
+function ensureSourceRuntimeCapabilities(params: {
+  bundle: AgentBlueprintBundle;
+  requirements: RequirementSet;
+  sourceChannels: string[];
+}): { bundle: AgentBlueprintBundle; assumptions: string[] } {
+  const next = structuredClone(params.bundle);
+  const assumptions: string[] = [];
+  const requiresExpandedTooling =
+    params.sourceChannels.includes("gmail") ||
+    includesContract(params.requirements, "ingest.feed") ||
+    includesContract(params.requirements, "fetch.web") ||
+    includesContract(params.requirements, "fs.read") ||
+    includesContract(params.requirements, "memory.search");
+
+  if (requiresExpandedTooling) {
+    if (next.runtime.tools.profile !== "coding" && next.runtime.tools.profile !== "full") {
+      next.runtime.tools.profile = "coding";
+      assumptions.push(
+        "Enabled the coding tool profile so this workflow can gather source data before summarizing.",
+      );
+    }
+
+    const alsoAllow = new Set(next.runtime.tools.alsoAllow ?? []);
+    alsoAllow.add("cron");
+    alsoAllow.add("message");
+    next.runtime.tools.alsoAllow = Array.from(alsoAllow);
+  }
+
+  if (params.sourceChannels.includes("gmail")) {
+    const skills = new Set(next.runtime.skills ?? []);
+    if (!skills.has("gog")) {
+      skills.add("gog");
+      next.runtime.skills = Array.from(skills);
+      assumptions.push(
+        "Enabled the gog skill so Gmail digests can pull mailbox data during scheduled runs.",
+      );
+    }
+  }
+
+  return { bundle: next, assumptions };
+}
+
 function applyPlannerWorkflowShape(
   bundle: AgentBlueprintBundle,
   params: {
@@ -590,6 +709,7 @@ function applyPlannerWorkflowShape(
     templateId: string;
     requirements: RequirementSet;
     planning: RequirementPlannerResult;
+    cfg?: OpenClawConfig;
   },
 ): InferredWorkflowShape {
   const next = structuredClone(bundle);
@@ -623,17 +743,22 @@ function applyPlannerWorkflowShape(
     assumptions.push("Kept the starter weekday morning schedule.");
   }
 
-  const delivery = inferDelivery(params.brief, outputChannels, params.requirements);
+  const delivery = inferDelivery(params.brief, outputChannels, params.requirements, params.cfg);
   questions.push(...delivery.questions);
   assumptions.push(...delivery.assumptions);
-  if (delivery.channel || delivery.to) {
+  if (delivery.channel || delivery.to !== undefined) {
+    const nextTarget = { ...next.delivery?.target };
+    if (delivery.channel) {
+      nextTarget.channel = delivery.channel;
+    }
+    if (delivery.to === null) {
+      delete nextTarget.to;
+    } else if (delivery.to) {
+      nextTarget.to = delivery.to;
+    }
     next.delivery = {
       ...next.delivery,
-      target: {
-        ...next.delivery?.target,
-        ...(delivery.channel ? { channel: delivery.channel } : {}),
-        ...(delivery.to ? { to: delivery.to } : {}),
-      },
+      target: nextTarget,
     };
   }
 
@@ -672,6 +797,14 @@ function applyPlannerWorkflowShape(
   if (sourceChannels.length > 0) {
     assumptions.push(`Used sources inferred from the planner: ${sourceChannels.join(", ")}.`);
   }
+
+  const withSourceCapabilities = ensureSourceRuntimeCapabilities({
+    bundle: next,
+    requirements: params.requirements,
+    sourceChannels,
+  });
+  assumptions.push(...withSourceCapabilities.assumptions);
+  next.runtime = withSourceCapabilities.bundle.runtime;
 
   if (params.requirements.policyGaps.some((gap) => gap.contractIds.includes("approval.request"))) {
     next.safety = {
@@ -1048,6 +1181,7 @@ async function hydratePersistedPlanningState(
 function buildAgentBlueprintDraftInternal(params: {
   brief: string;
   templateId?: string;
+  modelId?: string;
   cfg?: OpenClawConfig;
 }): {
   draft: AgentBlueprintBuilderDraft;
@@ -1090,10 +1224,17 @@ function buildAgentBlueprintDraftInternal(params: {
     templateId: selection.templateId,
     requirements: extractedRequirements,
     planning: initialPlanning,
+    cfg: params.cfg,
   });
   bundle = customized.bundle;
   assumptions.push(...customized.assumptions);
   questions.push(...customized.questions);
+
+  const explicitModelId = params.modelId?.trim();
+  if (explicitModelId) {
+    bundle.runtime.model = explicitModelId;
+    assumptions.push(`Pinned runtime model to ${explicitModelId}.`);
+  }
 
   const uniqueQuestions = questions.filter(
     (question, index, all) => all.findIndex((entry) => entry.id === question.id) === index,
@@ -1154,6 +1295,7 @@ function buildAgentBlueprintDraftInternal(params: {
 export function buildAgentBlueprintDraft(params: {
   brief: string;
   templateId?: string;
+  modelId?: string;
   cfg?: OpenClawConfig;
 }): AgentBlueprintBuilderDraft {
   return buildAgentBlueprintDraftInternal(params).draft;
@@ -1169,6 +1311,7 @@ function stripBundleFromDraft(
 export async function compileAgentBlueprintBuilderPlan(params: {
   brief: string;
   templateId?: string;
+  modelId?: string;
   cfg?: OpenClawConfig;
 }): Promise<AgentBlueprintBuilderPlan> {
   const built = buildAgentBlueprintDraftInternal({
@@ -1199,6 +1342,7 @@ export async function compileAgentBlueprintBuilderPlan(params: {
 export async function applyAgentBlueprintBuilderPlan(params: {
   brief: string;
   templateId?: string;
+  modelId?: string;
   cfg?: OpenClawConfig;
 }): Promise<AgentBlueprintBuilderApplyResult> {
   const cfg = params.cfg ?? loadConfig();
@@ -1269,6 +1413,7 @@ export async function applyAgentBlueprintBuilderPlan(params: {
 export async function verifyAgentBlueprintBuilderPlan(params: {
   brief: string;
   templateId?: string;
+  modelId?: string;
   cfg?: OpenClawConfig;
 }): Promise<AgentBlueprintBuilderVerifyResult> {
   const cfg = params.cfg ?? loadConfig();
