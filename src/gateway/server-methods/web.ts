@@ -1,4 +1,9 @@
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { loadConfig } from "../../config/config.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import {
   ErrorCodes,
   errorShape,
@@ -11,8 +16,7 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
-const resolveWebLoginProvider = () => {
-  const plugins = listChannelPlugins();
+function resolveWebLoginProviderFromPlugins(plugins: ChannelPlugin[]): ChannelPlugin | null {
   return (
     plugins.find((plugin) =>
       (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
@@ -24,7 +28,46 @@ const resolveWebLoginProvider = () => {
     ) ??
     null
   );
-};
+}
+
+const resolveWebLoginProvider = () => resolveWebLoginProviderFromPlugins(listChannelPlugins());
+
+function bootstrapWebLoginProvider(): {
+  provider: ChannelPlugin | null;
+  diagnostics: string[];
+} {
+  try {
+    const cfg = loadConfig();
+    const autoEnabled = applyPluginAutoEnable({ config: cfg }).config;
+    const defaultAgentId = resolveDefaultAgentId(autoEnabled);
+    const workspaceDir = resolveAgentWorkspaceDir(autoEnabled, defaultAgentId);
+    const registry = loadOpenClawPlugins({
+      config: autoEnabled,
+      workspaceDir,
+    });
+    const provider = resolveWebLoginProviderFromPlugins(
+      registry.channels.map((entry) => entry.plugin),
+    );
+    const diagnostics = registry.diagnostics
+      .filter((entry) => {
+        const pluginId = entry.pluginId?.toLowerCase() ?? "";
+        const source = entry.source?.toLowerCase() ?? "";
+        const message = entry.message.toLowerCase();
+        return (
+          pluginId === "whatsapp" || source.includes("whatsapp") || message.includes("whatsapp")
+        );
+      })
+      .map((entry) => entry.message.trim())
+      .filter(Boolean)
+      .slice(0, 2);
+    return { provider, diagnostics };
+  } catch (error) {
+    return {
+      provider: null,
+      diagnostics: [`plugin bootstrap failed: ${formatForLog(error)}`],
+    };
+  }
+}
 
 function resolveAccountId(params: unknown): string | undefined {
   return typeof (params as { accountId?: unknown }).accountId === "string"
@@ -32,13 +75,16 @@ function resolveAccountId(params: unknown): string | undefined {
     : undefined;
 }
 
-function respondProviderUnavailable(respond: RespondFn) {
+function respondProviderUnavailable(respond: RespondFn, diagnostics?: string[]) {
+  const details = diagnostics?.filter(Boolean).join(" | ") ?? "";
   respond(
     false,
     undefined,
     errorShape(
       ErrorCodes.INVALID_REQUEST,
-      "web login provider is not available (enable channels.whatsapp.enabled and apply config; if plugins.allow is set, include whatsapp).",
+      details
+        ? `web login provider is not available (enable channels.whatsapp.enabled and apply config; if plugins.allow is set, include whatsapp). Details: ${details}`
+        : "web login provider is not available (enable channels.whatsapp.enabled and apply config; if plugins.allow is set, include whatsapp).",
     ),
   );
 }
@@ -66,9 +112,15 @@ export const webHandlers: GatewayRequestHandlers = {
     }
     try {
       const accountId = resolveAccountId(params);
-      const provider = resolveWebLoginProvider();
+      let provider = resolveWebLoginProvider();
+      let diagnostics: string[] = [];
       if (!provider) {
-        respondProviderUnavailable(respond);
+        const bootstrapped = bootstrapWebLoginProvider();
+        provider = bootstrapped.provider;
+        diagnostics = bootstrapped.diagnostics;
+      }
+      if (!provider) {
+        respondProviderUnavailable(respond, diagnostics);
         return;
       }
       await context.stopChannel(provider.id, accountId);
@@ -104,9 +156,15 @@ export const webHandlers: GatewayRequestHandlers = {
     }
     try {
       const accountId = resolveAccountId(params);
-      const provider = resolveWebLoginProvider();
+      let provider = resolveWebLoginProvider();
+      let diagnostics: string[] = [];
       if (!provider) {
-        respondProviderUnavailable(respond);
+        const bootstrapped = bootstrapWebLoginProvider();
+        provider = bootstrapped.provider;
+        diagnostics = bootstrapped.diagnostics;
+      }
+      if (!provider) {
+        respondProviderUnavailable(respond, diagnostics);
         return;
       }
       if (!provider.gateway?.loginWithQrWait) {
