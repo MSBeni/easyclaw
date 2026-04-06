@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyAgentBlueprintBuilderPlan,
   buildAgentBlueprintDraft,
   compileAgentBlueprintBuilderPlan,
   __testing,
@@ -20,7 +21,7 @@ describe("agent blueprint builder", () => {
     expect(result.draft.extracted.deliveryTarget).toContain("slack");
     expect(result.draft.extracted.schedule).toContain("0 9");
     expect(result.draft.requirements.setupGaps.map((gap) => gap.code)).toEqual(
-      expect.arrayContaining(["gmail-hook", "channel:slack"]),
+      expect.arrayContaining(["gmail-hook", "channel:slack", "runtime-model-unresolved"]),
     );
     expect(result.draft.planning.selections.map((selection) => selection.connectorId)).toEqual(
       expect.arrayContaining([
@@ -41,7 +42,14 @@ describe("agent blueprint builder", () => {
       )?.status,
     ).toBe("blocked");
     expect(result.plan.source?.kind).toBe("builder");
-    expect(result.plan.status).toBe("ready");
+    expect(result.plan.status).toBe("invalid");
+    expect(result.plan.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "model-selection-unresolved",
+        }),
+      ]),
+    );
     expect(result.graphPlans).toHaveLength(1);
   });
 
@@ -87,6 +95,53 @@ describe("agent blueprint builder", () => {
     expect(result.draft.assumptions).toEqual(
       expect.arrayContaining(["Pinned runtime model to openai/gpt-4o."]),
     );
+  });
+
+  it("blocks apply when runtime model selection is unresolved", async () => {
+    await expect(
+      applyAgentBlueprintBuilderPlan({
+        brief: "I want an assistant that keeps me organized.",
+        cfg: {},
+      }),
+    ).rejects.toThrow(/choose a runtime model/i);
+  });
+
+  it("blocks apply when model provider auth is not runnable", async () => {
+    await expect(
+      applyAgentBlueprintBuilderPlan({
+        brief: "I want an assistant that keeps me organized.",
+        modelId: "builder-auth-runnable-test/model-x",
+        cfg: {
+          agents: {
+            defaults: {
+              model: "builder-auth-runnable-test/model-x",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/OpenClaw Core Model Runtime auth is not runnable/i);
+  });
+
+  it("blocks apply when required channel auth is not runnable", async () => {
+    await expect(
+      applyAgentBlueprintBuilderPlan({
+        brief: "Create a support bot on Telegram for customer questions.",
+        modelId: "amazon-bedrock/claude-sonnet",
+        cfg: {
+          agents: {
+            defaults: {
+              model: "amazon-bedrock/claude-sonnet",
+            },
+          },
+          channels: {
+            telegram: {
+              enabled: false,
+              botToken: "123:abc",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/Telegram auth is not runnable/i);
   });
 
   it("asks for a support channel when the request is support-shaped but underspecified", () => {
@@ -172,6 +227,13 @@ describe("agent blueprint builder", () => {
   it("defaults to the personal assistant template and creates a dedicated agent", () => {
     const draft = buildAgentBlueprintDraft({
       brief: "I want an assistant that keeps me organized.",
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4o",
+          },
+        },
+      },
     });
 
     expect(draft.templateId).toBe("personal-assistant");

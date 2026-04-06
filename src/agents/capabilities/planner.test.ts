@@ -239,6 +239,35 @@ describe("capability planner", () => {
     expect(inspected?.setupTask.refs).toEqual(["channels.slack"]);
   });
 
+  it("marks core model setup as pending when no default model is configured", () => {
+    const inspected = inspectConnectorSetupState({
+      connectorId: "platform:core-model",
+      cfg: {},
+      workspaceDir: process.cwd(),
+    });
+
+    expect(inspected?.integration.status).toBe("discovered");
+    expect(inspected?.setupTask.status).toBe("pending");
+    expect(inspected?.integration.issues).toContain("default model selection is not configured");
+  });
+
+  it("marks core model setup as configured when a default model is set", () => {
+    const inspected = inspectConnectorSetupState({
+      connectorId: "platform:core-model",
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4o",
+          },
+        },
+      },
+      workspaceDir: process.cwd(),
+    });
+
+    expect(inspected?.integration.status).toBe("configured");
+    expect(inspected?.setupTask.status).toBe("completed");
+  });
+
   it("returns null when inspecting an unknown connector", () => {
     const inspected = inspectConnectorSetupState({
       connectorId: "channel:not-real",

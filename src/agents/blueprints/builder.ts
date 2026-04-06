@@ -1,6 +1,9 @@
 import { getChannelDock } from "../../channels/dock.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   applyRequirementGaps,
@@ -21,6 +24,9 @@ import {
   writePlannerIntegrations,
 } from "../capabilities/index.js";
 import type { PlannerStatus } from "../capabilities/schema.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
+import { ensureAuthProfileStore, resolveApiKeyForProvider } from "../model-auth.js";
+import { parseModelRef } from "../model-selection.js";
 import { compileAgentBlueprintPlan, type AgentBlueprintPlan } from "./compiler.js";
 import { researchAgentBlueprint } from "./examples.js";
 import type { LoadedAgentBlueprint } from "./files.js";
@@ -857,6 +863,204 @@ function summarizeSourceChannels(bundle: AgentBlueprintBundle): string[] {
   return (bundle.ingress?.sources ?? []).map((source) => source.value);
 }
 
+function resolveConfiguredBundleModel(params: {
+  bundle: AgentBlueprintBundle;
+  cfg?: OpenClawConfig;
+}): string | undefined {
+  const runtimeModel = params.bundle.runtime.model?.trim();
+  if (runtimeModel && runtimeModel !== "user-selected") {
+    return runtimeModel;
+  }
+  const defaultModel = resolveAgentModelPrimaryValue(params.cfg?.agents?.defaults?.model);
+  if (defaultModel && defaultModel !== "user-selected") {
+    return defaultModel;
+  }
+  const agentId = normalizeAgentId(params.bundle.agent.agentId);
+  const existingAgent = (params.cfg?.agents?.list ?? []).find(
+    (agent) => normalizeAgentId(agent.id) === agentId,
+  );
+  const existingModel = resolveAgentModelPrimaryValue(existingAgent?.model);
+  if (existingModel && existingModel !== "user-selected") {
+    return existingModel;
+  }
+  return undefined;
+}
+
+function normalizeAuthRunnableError(value: unknown): string {
+  if (value instanceof Error) {
+    const message = value.message.trim();
+    return message || value.name;
+  }
+  if (typeof value === "string") {
+    const message = value.trim();
+    return message || "unknown error";
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return `${value}`;
+  }
+  if (typeof value === "symbol") {
+    return value.description ? `symbol:${value.description}` : "symbol";
+  }
+  if (value && typeof value === "object") {
+    try {
+      const serialized = JSON.stringify(value);
+      if (serialized && serialized !== "{}") {
+        return serialized;
+      }
+    } catch {
+      // fall through to constructor-name fallback
+    }
+    const constructorName =
+      typeof value.constructor?.name === "string" ? value.constructor.name : "";
+    if (constructorName && constructorName !== "Object") {
+      return constructorName;
+    }
+  }
+  return "unknown error";
+}
+
+async function checkModelAuthRunnable(params: {
+  bundle: AgentBlueprintBundle;
+  cfg: OpenClawConfig;
+}): Promise<string | null> {
+  const selectedModel = resolveConfiguredBundleModel({
+    bundle: params.bundle,
+    cfg: params.cfg,
+  });
+  if (!selectedModel) {
+    return "OpenClaw Core Model Runtime auth is not runnable: choose a runtime model.";
+  }
+
+  const parsed = parseModelRef(selectedModel, DEFAULT_PROVIDER);
+  if (!parsed) {
+    return `OpenClaw Core Model Runtime auth is not runnable: "${selectedModel}" is not a valid model reference.`;
+  }
+
+  try {
+    await resolveApiKeyForProvider({
+      provider: parsed.provider,
+      cfg: params.cfg,
+      store: ensureAuthProfileStore(undefined, { allowKeychainPrompt: false }),
+    });
+  } catch (error) {
+    return `OpenClaw Core Model Runtime auth is not runnable for ${parsed.provider}/${parsed.model}: ${normalizeAuthRunnableError(error)}`;
+  }
+
+  return null;
+}
+
+async function checkChannelAuthRunnable(params: {
+  integration: PlannedIntegrationInstance;
+  cfg: OpenClawConfig;
+  timeoutMs: number;
+}): Promise<string | null> {
+  const channelId = params.integration.connectorId.replace(/^channel:/, "");
+  const plugin = getChannelPlugin(channelId);
+  if (!plugin) {
+    return `${params.integration.label} auth is not runnable: plugin "${channelId}" is not active in this runtime.`;
+  }
+
+  const accountIds = plugin.config.listAccountIds(params.cfg);
+  const defaultAccountId = resolveChannelDefaultAccountId({
+    plugin,
+    cfg: params.cfg,
+    accountIds,
+  });
+  const account = plugin.config.resolveAccount(params.cfg, defaultAccountId);
+  const accountId =
+    typeof account.accountId === "string" && account.accountId.trim()
+      ? account.accountId.trim()
+      : defaultAccountId || "default";
+  const enabled =
+    plugin.config.isEnabled?.(account, params.cfg) ??
+    (typeof account.enabled === "boolean" ? account.enabled : true);
+  if (!enabled) {
+    return `${params.integration.label} auth is not runnable: account "${accountId}" is disabled.`;
+  }
+  const configured = plugin.config.isConfigured
+    ? await plugin.config.isConfigured(account, params.cfg)
+    : true;
+  if (!configured) {
+    return `${params.integration.label} auth is not runnable: account "${accountId}" is missing required credentials.`;
+  }
+
+  if (!plugin.status?.probeAccount) {
+    return null;
+  }
+
+  try {
+    const probe = await plugin.status.probeAccount({
+      account,
+      timeoutMs: params.timeoutMs,
+      cfg: params.cfg,
+    });
+    const record = probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
+    if (record && record.ok === false) {
+      const detail =
+        typeof record.error === "string" && record.error.trim().length > 0
+          ? record.error.trim()
+          : "live probe returned an unhealthy response";
+      return `${params.integration.label} auth is not runnable: ${detail}.`;
+    }
+  } catch (error) {
+    return `${params.integration.label} auth is not runnable: ${normalizeAuthRunnableError(error)}.`;
+  }
+
+  return null;
+}
+
+async function collectApplyAuthRunnableBlockers(params: {
+  draft: AgentBlueprintBuilderDraft;
+  cfg: OpenClawConfig;
+  timeoutMs?: number;
+}): Promise<string[]> {
+  const blockers: string[] = [];
+  const timeoutMs = Math.max(1_000, params.timeoutMs ?? 5_000);
+  const seenConnectorIds = new Set<string>();
+  const modelIssue = await checkModelAuthRunnable({
+    bundle: params.draft.bundle,
+    cfg: params.cfg,
+  });
+  if (modelIssue) {
+    blockers.push(modelIssue);
+  }
+  seenConnectorIds.add("platform:core-model");
+
+  for (const integration of params.draft.planning.integrations) {
+    if (!integration.requiresAuth || seenConnectorIds.has(integration.connectorId)) {
+      continue;
+    }
+    seenConnectorIds.add(integration.connectorId);
+
+    if (integration.connectorId === "platform:core-model") {
+      const issue = await checkModelAuthRunnable({
+        bundle: params.draft.bundle,
+        cfg: params.cfg,
+      });
+      if (issue) {
+        blockers.push(issue);
+      }
+      continue;
+    }
+
+    if (
+      integration.sourceKind === "builtin_channel" ||
+      integration.sourceKind === "channel_catalog"
+    ) {
+      const issue = await checkChannelAuthRunnable({
+        integration,
+        cfg: params.cfg,
+        timeoutMs,
+      });
+      if (issue) {
+        blockers.push(issue);
+      }
+    }
+  }
+
+  return blockers;
+}
+
 function createBundleSetupGaps(
   bundle: AgentBlueprintBundle,
   cfg?: OpenClawConfig,
@@ -908,6 +1112,16 @@ function createBundleSetupGaps(
       message: "Enable cron before applying a scheduled builder workflow.",
       contractIds: ["schedule.trigger"],
       connectorIds: ["tools:automation"],
+    });
+  }
+
+  if (!resolveConfiguredBundleModel({ bundle, cfg })) {
+    gaps.push({
+      kind: "setup",
+      code: "runtime-model-unresolved",
+      message: "Choose a runtime model before applying this agent.",
+      contractIds: ["transform.summarize"],
+      connectorIds: ["platform:core-model"],
     });
   }
 
@@ -1361,6 +1575,13 @@ export async function applyAgentBlueprintBuilderPlan(params: {
       .map((gap) => gap.message)
       .join(" ");
     throw new Error(`Builder planner is ${draft.plannerStatus}. ${blockers}`.trim());
+  }
+  const authBlockers = await collectApplyAuthRunnableBlockers({
+    draft,
+    cfg,
+  });
+  if (authBlockers.length > 0) {
+    throw new Error(`Builder auth is not runnable. ${authBlockers.join(" ")}`.trim());
   }
   const graphPlans = await compileRuntimeGraphPlans({
     graph: draft.runtimeGraph,

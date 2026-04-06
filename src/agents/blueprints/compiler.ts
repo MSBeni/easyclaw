@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { AgentRouteBinding } from "../../config/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
@@ -52,7 +53,8 @@ export type AgentBlueprintPlanIssue = {
     | "schedule-without-scheduled-mode"
     | "source-without-scheduled-mode"
     | "thread-binding-not-yet-materialized"
-    | "subagent-mode-ignored";
+    | "subagent-mode-ignored"
+    | "model-selection-unresolved";
   message: string;
 };
 
@@ -269,19 +271,45 @@ function compileToolPolicy(runtime: AgentBlueprintBundle["runtime"]): CompiledBl
   };
 }
 
-function collectPlanIssues(bundle: AgentBlueprintBundle): AgentBlueprintPlanIssue[] {
+function resolveBlueprintConfiguredModel(params: {
+  bundle: AgentBlueprintBundle;
+  cfg: OpenClawConfig;
+}): string | undefined {
+  const runtimeModel = params.bundle.runtime.model?.trim();
+  if (runtimeModel && runtimeModel !== "user-selected") {
+    return runtimeModel;
+  }
+  const defaultModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
+  if (defaultModel && defaultModel !== "user-selected") {
+    return defaultModel;
+  }
+  const agentId = normalizeAgentId(params.bundle.agent.agentId);
+  const existingAgent = (params.cfg.agents?.list ?? []).find(
+    (agent) => normalizeAgentId(agent.id) === agentId,
+  );
+  const existingModel = resolveAgentModelPrimaryValue(existingAgent?.model);
+  if (existingModel && existingModel !== "user-selected") {
+    return existingModel;
+  }
+  return undefined;
+}
+
+function collectPlanIssues(params: {
+  bundle: AgentBlueprintBundle;
+  resolvedModel?: string;
+}): AgentBlueprintPlanIssue[] {
   const issues: AgentBlueprintPlanIssue[] = [];
-  const interactionMode = bundle.ingress?.interactionMode;
-  const schedules = bundle.automation?.schedules ?? [];
-  const bindings = bundle.ingress?.bindings ?? [];
-  const sources = bundle.ingress?.sources ?? [];
+  const interactionMode = params.bundle.ingress?.interactionMode;
+  const schedules = params.bundle.automation?.schedules ?? [];
+  const bindings = params.bundle.ingress?.bindings ?? [];
+  const sources = params.bundle.ingress?.sources ?? [];
   const needsDeliveryTarget =
     interactionMode === "scheduled" &&
-    bundle.delivery?.mode &&
-    bundle.delivery.mode !== "reply" &&
-    !bundle.delivery.target;
+    params.bundle.delivery?.mode &&
+    params.bundle.delivery.mode !== "reply" &&
+    !params.bundle.delivery.target;
 
-  for (const fileName of bundle.workspace.bootstrapFiles ?? []) {
+  for (const fileName of params.bundle.workspace.bootstrapFiles ?? []) {
     if (!RECOGNIZED_BOOTSTRAP_FILES.has(fileName as WorkspaceBootstrapFileName)) {
       issues.push({
         severity: "error",
@@ -344,7 +372,15 @@ function collectPlanIssues(bundle: AgentBlueprintBundle): AgentBlueprintPlanIssu
     }
   }
 
-  if (bundle.runtime.subagents?.enabled === false && bundle.runtime.subagents.mode) {
+  if (!params.resolvedModel) {
+    issues.push({
+      severity: "error",
+      code: "model-selection-unresolved",
+      message: "Choose a runtime model before applying this builder plan.",
+    });
+  }
+
+  if (params.bundle.runtime.subagents?.enabled === false && params.bundle.runtime.subagents.mode) {
     issues.push({
       severity: "warning",
       code: "subagent-mode-ignored",
@@ -415,14 +451,17 @@ export async function compileAgentBlueprintPlan(params: {
   const bundle = structuredClone(params.bundle);
   const agentId = normalizeAgentId(bundle.agent.agentId);
   const cfg = params.cfg ?? {};
-  const issues = collectPlanIssues(bundle);
+  const configuredModel = resolveBlueprintConfiguredModel({ bundle, cfg });
+  const issues = collectPlanIssues({
+    bundle,
+    resolvedModel: configuredModel,
+  });
   const bindings = (bundle.ingress?.bindings ?? []).map((binding) => ({
     requested: binding,
     routeBinding: binding.thread ? undefined : buildRouteBinding(agentId, binding),
     description: buildBindingDescription(binding),
   }));
   const workspaceFiles = await buildWorkspaceFilePlans(bundle);
-  const explicitModel = bundle.runtime.model?.trim();
 
   return {
     ...(params.source ? { source: params.source } : {}),
@@ -434,10 +473,9 @@ export async function compileAgentBlueprintPlan(params: {
       name: bundle.agent.name,
       workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
       agentDir: resolveAgentDir(cfg, agentId),
-      modelSelection:
-        explicitModel && explicitModel !== "user-selected"
-          ? { mode: "explicit", value: explicitModel }
-          : { mode: "prompt-user" },
+      modelSelection: configuredModel
+        ? { mode: "explicit", value: configuredModel }
+        : { mode: "prompt-user" },
       identity: bundle.agent.identity,
     },
     workspace: {

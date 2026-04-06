@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { isChannelConfigured as isConfiguredChannelRef } from "../../config/plugin-auto-enable.js";
 import { stableStringify } from "../stable-stringify.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
@@ -337,6 +338,26 @@ function hasExecApprovalsConfigured(cfg: OpenClawConfig | undefined): boolean {
   return Boolean(exec?.enabled && ((exec.targets?.length ?? 0) > 0 || exec.mode));
 }
 
+function hasCoreModelSelectionConfigured(cfg: OpenClawConfig | undefined): boolean {
+  if (!cfg) {
+    return false;
+  }
+  const defaultModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
+  if (defaultModel && defaultModel !== "user-selected") {
+    return true;
+  }
+  for (const agent of cfg.agents?.list ?? []) {
+    if (agent.default !== true) {
+      continue;
+    }
+    const model = resolveAgentModelPrimaryValue(agent.model);
+    if (model && model !== "user-selected") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function statusRank(status: IntegrationInstance["status"]): number {
   switch (status) {
     case "verified":
@@ -445,7 +466,10 @@ function describeIntegrationInstance(
   } else if (connector.source.kind === "core_platform") {
     switch (connector.id) {
       case "platform:core-model":
-        status = "configured";
+        status = hasCoreModelSelectionConfigured(cfg) ? "configured" : "discovered";
+        if (status !== "configured") {
+          issues.push("default model selection is not configured");
+        }
         break;
       case "platform:exec-approvals":
         status = hasExecApprovalsConfigured(cfg) ? "configured" : "discovered";

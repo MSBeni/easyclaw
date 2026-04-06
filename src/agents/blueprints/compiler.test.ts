@@ -5,10 +5,18 @@ import { dailyBriefingBlueprint, personalAssistantBlueprint } from "./examples.j
 import type { AgentBlueprintBundle } from "./schema.js";
 
 describe("agent blueprint compiler", () => {
+  const configuredModelCfg = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-4o",
+      },
+    },
+  };
+
   it("builds a ready dry-run plan for the daily briefing template", async () => {
     const plan = await compileAgentBlueprintPlan({
       bundle: dailyBriefingBlueprint,
-      cfg: {},
+      cfg: configuredModelCfg,
       source: {
         kind: "template",
         value: dailyBriefingBlueprintId(),
@@ -19,6 +27,10 @@ describe("agent blueprint compiler", () => {
     expect(plan.status).toBe("ready");
     expect(plan.agent.agentId).toBe("daily-briefing");
     expect(plan.agent.workspaceDir).toBe(resolveAgentWorkspaceDir({}, "daily-briefing"));
+    expect(plan.agent.modelSelection).toEqual({
+      mode: "explicit",
+      value: "openai/gpt-4o",
+    });
     expect(plan.runtime.tools.profile).toBe("messaging");
     expect(plan.runtime.tools.allow).toContain("message");
     expect(plan.runtime.tools.allow).toContain("cron");
@@ -35,7 +47,7 @@ describe("agent blueprint compiler", () => {
     const bundle: AgentBlueprintBundle = structuredClone(dailyBriefingBlueprint);
     delete bundle.automation;
 
-    const plan = await compileAgentBlueprintPlan({ bundle, cfg: {} });
+    const plan = await compileAgentBlueprintPlan({ bundle, cfg: configuredModelCfg });
 
     expect(plan.status).toBe("invalid");
     expect(plan.issues).toEqual(
@@ -55,7 +67,7 @@ describe("agent blueprint compiler", () => {
       bindings: [{ channel: "telegram", thread: true }],
     };
 
-    const plan = await compileAgentBlueprintPlan({ bundle, cfg: {} });
+    const plan = await compileAgentBlueprintPlan({ bundle, cfg: configuredModelCfg });
 
     expect(plan.status).toBe("ready");
     expect(plan.routing.bindings[0]?.routeBinding).toBeUndefined();
@@ -69,13 +81,22 @@ describe("agent blueprint compiler", () => {
     );
   });
 
-  it("uses prompt-user model selection when the template defers model choice", async () => {
+  it("marks plans invalid when model selection is unresolved", async () => {
     const plan = await compileAgentBlueprintPlan({
       bundle: personalAssistantBlueprint,
       cfg: {},
     });
 
+    expect(plan.status).toBe("invalid");
     expect(plan.agent.modelSelection).toEqual({ mode: "prompt-user" });
+    expect(plan.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "error",
+          code: "model-selection-unresolved",
+        }),
+      ]),
+    );
   });
 });
 

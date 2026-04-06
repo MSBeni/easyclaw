@@ -1014,6 +1014,38 @@ describe("builder gateway handlers", () => {
     );
   });
 
+  it("returns retry guidance when Google Chat credentials are missing", async () => {
+    mocks.resolveGoogleChatAccount.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      config: {
+        audienceType: "app-url",
+        audience: "https://chat.googleapis.com/",
+      },
+      credentialSource: "none",
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:googlechat:verify-auth",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:googlechat:verify-auth",
+        status: "needs_setup",
+        message: expect.stringContaining("service-account credentials are missing"),
+        resume: expect.objectContaining({
+          connectorId: "channel:googlechat:verify-auth",
+          label: "Verify Google Chat auth",
+        }),
+      }),
+    );
+  });
+
   it("verifies Matrix credentials with whoami probe", async () => {
     const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
       connectorId: "channel:matrix:verify-credentials",
@@ -1035,6 +1067,36 @@ describe("builder gateway handlers", () => {
         connectorId: "channel:matrix:verify-credentials",
         status: "configured",
         message: expect.stringContaining("Matrix credentials are valid"),
+      }),
+    );
+  });
+
+  it("returns retry guidance when Matrix credential verification fails", async () => {
+    mocks.probeMatrix.mockResolvedValue({
+      ok: false,
+      status: 401,
+      elapsedMs: 8,
+      error: "Unauthorized",
+      userId: "@openclaw-bot:matrix.org",
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:matrix:verify-credentials",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:matrix:verify-credentials",
+        status: "needs_setup",
+        message: expect.stringContaining("Matrix credential verification failed"),
+        resume: expect.objectContaining({
+          connectorId: "channel:matrix:verify-credentials",
+          label: "Verify Matrix credentials",
+        }),
       }),
     );
   });
@@ -1076,6 +1138,44 @@ describe("builder gateway handlers", () => {
     );
   });
 
+  it("returns retry guidance when Microsoft Teams verification fails", async () => {
+    mocks.loadConfig.mockReturnValueOnce({
+      agents: { default: "main" },
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "teams-app-id",
+          appPassword: "teams-app-password",
+          tenantId: "teams-tenant",
+        },
+      },
+    });
+    mocks.probeMSTeams.mockResolvedValue({
+      ok: false,
+      error: "missing credentials",
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:msteams:verify-credentials",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:msteams:verify-credentials",
+        status: "needs_setup",
+        message: expect.stringContaining("Microsoft Teams credential verification failed"),
+        resume: expect.objectContaining({
+          connectorId: "channel:msteams:verify-credentials",
+          label: "Verify Teams credentials",
+        }),
+      }),
+    );
+  });
+
   it("verifies iMessage transport using imsg rpc", async () => {
     const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
       connectorId: "channel:imessage:verify-transport",
@@ -1091,6 +1191,33 @@ describe("builder gateway handlers", () => {
         connectorId: "channel:imessage:verify-transport",
         status: "configured",
         message: expect.stringContaining("iMessage transport is reachable"),
+      }),
+    );
+  });
+
+  it("returns retry guidance when iMessage transport verification fails", async () => {
+    mocks.probeIMessage.mockResolvedValue({
+      ok: false,
+      error: "imsg rpc unavailable",
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:imessage:verify-transport",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:imessage:verify-transport",
+        status: "needs_setup",
+        message: expect.stringContaining("iMessage transport verification failed"),
+        resume: expect.objectContaining({
+          connectorId: "channel:imessage:verify-transport",
+          label: "Verify iMessage transport",
+        }),
       }),
     );
   });
@@ -1117,6 +1244,14 @@ describe("builder gateway handlers", () => {
   });
 
   it("returns generic configured status for connectors already ready", async () => {
+    mocks.loadConfig.mockReturnValueOnce({
+      agents: {
+        default: "main",
+        defaults: {
+          model: "openai/gpt-4o",
+        },
+      },
+    });
     const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
       connectorId: "platform:core-model",
       inputs: {},
@@ -1129,6 +1264,25 @@ describe("builder gateway handlers", () => {
       expect.objectContaining({
         connectorId: "platform:core-model",
         status: "configured",
+        updatedRefs: expect.arrayContaining(["models", "auth"]),
+      }),
+    );
+  });
+
+  it("returns model setup guidance when no default model is configured", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "platform:core-model",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "platform:core-model",
+        status: "needs_auth",
+        message: expect.stringContaining("default model selection is not configured"),
         updatedRefs: expect.arrayContaining(["models", "auth"]),
       }),
     );
