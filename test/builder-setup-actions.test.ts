@@ -166,22 +166,38 @@ describe("resolveQuickSetupForFocus", () => {
     expect(card?.assist?.fields).toEqual([]);
   });
 
-  it("includes connector-specific verify assists for Discord, Slack, and Signal", () => {
+  it("includes connector-specific verify assists for top messaging connectors", () => {
     const connectors = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() });
     const discord = connectors.find((value) => value.id === "channel:discord");
     const slack = connectors.find((value) => value.id === "channel:slack");
     const signal = connectors.find((value) => value.id === "channel:signal");
+    const googleChat = connectors.find((value) => value.id === "channel:googlechat");
+    const matrix = connectors.find((value) => value.id === "channel:matrix");
+    const msteams = connectors.find((value) => value.id === "channel:msteams");
+    const imessage = connectors.find((value) => value.id === "channel:imessage");
     expect(discord).toBeTruthy();
     expect(slack).toBeTruthy();
     expect(signal).toBeTruthy();
+    expect(googleChat).toBeTruthy();
+    expect(matrix).toBeTruthy();
+    expect(msteams).toBeTruthy();
+    expect(imessage).toBeTruthy();
 
     const discordCard = resolveQuickSetupForFocus(buildFocus(discord!));
     const slackCard = resolveQuickSetupForFocus(buildFocus(slack!));
     const signalCard = resolveQuickSetupForFocus(buildFocus(signal!));
+    const googleChatCard = resolveQuickSetupForFocus(buildFocus(googleChat!));
+    const matrixCard = resolveQuickSetupForFocus(buildFocus(matrix!));
+    const msteamsCard = resolveQuickSetupForFocus(buildFocus(msteams!));
+    const imessageCard = resolveQuickSetupForFocus(buildFocus(imessage!));
 
     expect(discordCard?.assist?.connectorId).toBe("channel:discord:verify-token");
     expect(slackCard?.assist?.connectorId).toBe("channel:slack:verify-credentials");
     expect(signalCard?.assist?.connectorId).toBe("channel:signal:verify-transport");
+    expect(googleChatCard?.assist?.connectorId).toBe("channel:googlechat:verify-auth");
+    expect(matrixCard?.assist?.connectorId).toBe("channel:matrix:verify-credentials");
+    expect(msteamsCard?.assist?.connectorId).toBe("channel:msteams:verify-credentials");
+    expect(imessageCard?.assist?.connectorId).toBe("channel:imessage:verify-transport");
   });
 
   it("guides WhatsApp pairing in-place from quick setup", () => {
@@ -210,14 +226,14 @@ describe("resolveQuickSetupForFocus", () => {
 
   it("uses a generic channel setup card for uncovered chat connectors", () => {
     const connector = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
-      (value) => value.id === "channel:googlechat",
+      (value) => value.id === "channel:nostr",
     );
     expect(connector).toBeTruthy();
     const card = resolveQuickSetupForFocus(buildFocus(connector!));
-    expect(card?.title).toBe("Set up Google Chat");
+    expect(card?.title).toBe("Set up Nostr");
     expect(card?.steps?.some((step) => step.instruction.includes("channel card below"))).toBe(true);
-    expect(card?.docsHint).toBe("https://docs.openclaw.ai/channels/googlechat");
-    expect(card?.assist?.connectorId).toBe("channel:googlechat");
+    expect(card?.docsHint).toBe("https://docs.openclaw.ai/channels/nostr");
+    expect(card?.assist?.connectorId).toBe("channel:nostr");
     expect(card?.assist?.runLabel).toBe("Check setup status");
   });
 

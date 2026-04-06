@@ -1,6 +1,14 @@
 import { resolveDiscordAccount } from "../../../extensions/discord/src/accounts.js";
 import { probeDiscord } from "../../../extensions/discord/src/probe.js";
 import { normalizeDiscordToken } from "../../../extensions/discord/src/token.js";
+import { resolveGoogleChatAccount } from "../../../extensions/googlechat/src/accounts.js";
+import { probeGoogleChat } from "../../../extensions/googlechat/src/api.js";
+import { resolveIMessageAccount } from "../../../extensions/imessage/src/accounts.js";
+import { probeIMessage } from "../../../extensions/imessage/src/probe.js";
+import { resolveMatrixAccount } from "../../../extensions/matrix/src/matrix/accounts.js";
+import { resolveMatrixAuth } from "../../../extensions/matrix/src/matrix/client/config.js";
+import { probeMatrix } from "../../../extensions/matrix/src/matrix/probe.js";
+import { probeMSTeams } from "../../../extensions/msteams/src/probe.js";
 import { resolveSignalAccount } from "../../../extensions/signal/src/accounts.js";
 import { probeSignal } from "../../../extensions/signal/src/probe.js";
 import { resolveSlackAccount } from "../../../extensions/slack/src/accounts.js";
@@ -1246,6 +1254,398 @@ export const builderHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        case "channel:googlechat:verify-auth": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, [
+            "googlechat.accountId",
+            "accountId",
+            "account",
+          ]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const account = resolveGoogleChatAccount({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const resolvedAccountId = accountId || account.accountId || "default";
+          if (!account.enabled) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Google Chat is disabled for account "${resolvedAccountId}". Enable channels.googlechat, then run Verify Google Chat auth again.`,
+                updatedRefs: [],
+                summary: {
+                  command: "GET /v1/spaces?pageSize=1",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Google Chat auth",
+                  detail: "Enable Google Chat in config, then run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          if (account.credentialSource === "none") {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Google Chat service-account credentials are missing for account "${resolvedAccountId}". Set channels.googlechat.serviceAccount (or serviceAccountFile), then run Verify Google Chat auth.`,
+                updatedRefs: [],
+                summary: {
+                  command: "GET /v1/spaces?pageSize=1",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Google Chat auth",
+                  detail: "After setting service-account credentials, run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+
+          const verified = await probeGoogleChat(account);
+          if (!verified.ok) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Google Chat auth verification failed: ${verified.error ?? "unknown error"}`,
+                updatedRefs: [],
+                summary: {
+                  command: "GET /v1/spaces?pageSize=1",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Google Chat auth",
+                  detail: "Fix service-account credentials and run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+
+          const audienceType =
+            firstStringInput(parsed.inputs, ["googlechat.audienceType", "audienceType"]) ||
+            account.config.audienceType?.trim() ||
+            "";
+          const audience =
+            firstStringInput(parsed.inputs, ["googlechat.audience", "audience"]) ||
+            account.config.audience?.trim() ||
+            "";
+          if (!audienceType || !audience) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message:
+                  "Google Chat API auth is valid, but webhook auth fields are incomplete. Set channels.googlechat.audienceType and channels.googlechat.audience, then rerun verification.",
+                updatedRefs: [],
+                summary: {
+                  command: "GET /v1/spaces?pageSize=1",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Google Chat auth",
+                  detail:
+                    "After setting audienceType + audience for webhook verification, run again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `Google Chat credentials are valid (account ${resolvedAccountId}, source ${account.credentialSource}).`,
+              updatedRefs: [channelAccountRef("googlechat", resolvedAccountId)],
+              summary: {
+                command: "GET /v1/spaces?pageSize=1",
+                accountId: resolvedAccountId,
+                credentialSource: account.credentialSource,
+                audienceType,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
+        case "channel:matrix:verify-credentials": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, [
+            "matrix.accountId",
+            "accountId",
+            "account",
+          ]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const account = resolveMatrixAccount({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const resolvedAccountId = accountId || account.accountId || "default";
+          if (!account.enabled) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Matrix is disabled for account "${resolvedAccountId}". Enable channels.matrix, then run Verify Matrix credentials.`,
+                updatedRefs: [],
+                summary: {
+                  command: "whoami",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Matrix credentials",
+                  detail: "Enable Matrix in config, then run verification again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+
+          const auth = await resolveMatrixAuth({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const verified = await probeMatrix({
+            homeserver: auth.homeserver,
+            accessToken: auth.accessToken,
+            userId: auth.userId,
+            timeoutMs: 5000,
+          });
+          if (!verified.ok) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Matrix credential verification failed: ${verified.error ?? "unknown error"}`,
+                updatedRefs: [],
+                summary: {
+                  command: "whoami",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Matrix credentials",
+                  detail: "Fix Matrix homeserver/token (or password login) and rerun verification.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `Matrix credentials are valid for ${auth.userId || "the configured account"} (account ${resolvedAccountId}).`,
+              updatedRefs: [channelAccountRef("matrix", resolvedAccountId)],
+              summary: {
+                command: "whoami",
+                accountId: resolvedAccountId,
+                userId: auth.userId,
+                homeserver: auth.homeserver,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
+        case "channel:msteams:verify-credentials": {
+          const cfg = loadConfig();
+          const appId = normalizeSetupSecret(
+            firstStringInput(parsed.inputs, ["msteams.appId", "appId"]),
+          );
+          const appPassword = normalizeSetupSecret(
+            firstStringInput(parsed.inputs, ["msteams.appPassword", "appPassword", "appSecret"]),
+          );
+          const tenantId = normalizeSetupSecret(
+            firstStringInput(parsed.inputs, ["msteams.tenantId", "tenantId"]),
+          );
+          const msteamsConfig = {
+            ...asRecord(cfg.channels?.msteams),
+            ...(appId ? { appId } : {}),
+            ...(appPassword ? { appPassword } : {}),
+            ...(tenantId ? { tenantId } : {}),
+          };
+          if (msteamsConfig.enabled === false) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message:
+                  "Microsoft Teams is disabled. Enable channels.msteams, then run Verify Teams credentials.",
+                updatedRefs: [],
+                summary: {
+                  command: "Bot Framework token",
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Teams credentials",
+                  detail: "Enable Microsoft Teams in config, then rerun verification.",
+                  inputs: {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+
+          const verified = await probeMSTeams(msteamsConfig);
+          if (!verified.ok) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Microsoft Teams credential verification failed: ${verified.error ?? "missing credentials"}`,
+                updatedRefs: [],
+                summary: {
+                  command: "Bot Framework token",
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify Teams credentials",
+                  detail: "Set appId, appPassword, and tenantId, then rerun verification.",
+                  inputs: {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const graphDetail =
+            verified.graph && !verified.graph.ok
+              ? ` Graph token probe failed: ${verified.graph.error ?? "unknown error"}.`
+              : "";
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `Microsoft Teams credentials are valid${verified.appId ? ` for app ${verified.appId}` : ""}.${graphDetail}`,
+              updatedRefs: ["channels.msteams"],
+              summary: {
+                command: "Bot Framework token + Graph token",
+                appId: verified.appId,
+                graphOk: verified.graph?.ok ?? null,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
+        case "channel:imessage:verify-transport": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, [
+            "imessage.accountId",
+            "accountId",
+            "account",
+          ]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const account = resolveIMessageAccount({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const resolvedAccountId = accountId || account.accountId || "default";
+          if (!account.enabled) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `iMessage is disabled for account "${resolvedAccountId}". Enable channels.imessage, then run Verify iMessage transport.`,
+                updatedRefs: [],
+                summary: {
+                  command: "imsg rpc --help + chats.list",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify iMessage transport",
+                  detail: "Enable iMessage in config, then rerun verification.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const cliPath = firstStringInput(parsed.inputs, ["imessage.cliPath", "cliPath"]);
+          const dbPath = firstStringInput(parsed.inputs, ["imessage.dbPath", "dbPath"]);
+          const verified = await probeIMessage(5000, {
+            ...(cliPath ? { cliPath } : {}),
+            ...(dbPath ? { dbPath } : {}),
+          });
+          if (!verified.ok) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `iMessage transport verification failed: ${verified.error ?? "unknown error"}`,
+                updatedRefs: [],
+                summary: {
+                  command: "imsg rpc --help + chats.list",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Verify iMessage transport",
+                  detail:
+                    "Install/fix imsg RPC and iMessage access on this macOS host, then rerun verification.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `iMessage transport is reachable for account ${resolvedAccountId}.`,
+              updatedRefs: [channelAccountRef("imessage", resolvedAccountId)],
+              summary: {
+                command: "imsg rpc --help + chats.list",
+                accountId: resolvedAccountId,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
         case "platform:gmail-hook:tailscale-install": {
           const account = stringInput(parsed.inputs, "account");
           if (!account) {
@@ -1925,14 +2325,26 @@ export const builderHandlers: GatewayRequestHandlers = {
       if (
         parsed.connectorId === "channel:slack:verify-credentials" ||
         parsed.connectorId === "channel:discord:verify-token" ||
-        parsed.connectorId === "channel:signal:verify-transport"
+        parsed.connectorId === "channel:signal:verify-transport" ||
+        parsed.connectorId === "channel:googlechat:verify-auth" ||
+        parsed.connectorId === "channel:matrix:verify-credentials" ||
+        parsed.connectorId === "channel:msteams:verify-credentials" ||
+        parsed.connectorId === "channel:imessage:verify-transport"
       ) {
         const label =
           parsed.connectorId === "channel:slack:verify-credentials"
             ? "Verify Slack credentials"
             : parsed.connectorId === "channel:discord:verify-token"
               ? "Verify Discord token"
-              : "Verify Signal transport";
+              : parsed.connectorId === "channel:signal:verify-transport"
+                ? "Verify Signal transport"
+                : parsed.connectorId === "channel:googlechat:verify-auth"
+                  ? "Verify Google Chat auth"
+                  : parsed.connectorId === "channel:matrix:verify-credentials"
+                    ? "Verify Matrix credentials"
+                    : parsed.connectorId === "channel:msteams:verify-credentials"
+                      ? "Verify Teams credentials"
+                      : "Verify iMessage transport";
         respond(
           true,
           {

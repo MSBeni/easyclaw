@@ -13,6 +13,14 @@ const mocks = vi.hoisted(() => ({
   slackApiCall: vi.fn(),
   resolveDiscordAccount: vi.fn(),
   probeDiscord: vi.fn(),
+  resolveGoogleChatAccount: vi.fn(),
+  probeGoogleChat: vi.fn(),
+  resolveIMessageAccount: vi.fn(),
+  probeIMessage: vi.fn(),
+  resolveMatrixAccount: vi.fn(),
+  resolveMatrixAuth: vi.fn(),
+  probeMatrix: vi.fn(),
+  probeMSTeams: vi.fn(),
   resolveSignalAccount: vi.fn(),
   probeSignal: vi.fn(),
   resolveTelegramAccount: vi.fn(),
@@ -83,6 +91,38 @@ vi.mock("../../../extensions/discord/src/accounts.js", () => ({
 
 vi.mock("../../../extensions/discord/src/probe.js", () => ({
   probeDiscord: mocks.probeDiscord,
+}));
+
+vi.mock("../../../extensions/googlechat/src/accounts.js", () => ({
+  resolveGoogleChatAccount: mocks.resolveGoogleChatAccount,
+}));
+
+vi.mock("../../../extensions/googlechat/src/api.js", () => ({
+  probeGoogleChat: mocks.probeGoogleChat,
+}));
+
+vi.mock("../../../extensions/imessage/src/accounts.js", () => ({
+  resolveIMessageAccount: mocks.resolveIMessageAccount,
+}));
+
+vi.mock("../../../extensions/imessage/src/probe.js", () => ({
+  probeIMessage: mocks.probeIMessage,
+}));
+
+vi.mock("../../../extensions/matrix/src/matrix/accounts.js", () => ({
+  resolveMatrixAccount: mocks.resolveMatrixAccount,
+}));
+
+vi.mock("../../../extensions/matrix/src/matrix/client/config.js", () => ({
+  resolveMatrixAuth: mocks.resolveMatrixAuth,
+}));
+
+vi.mock("../../../extensions/matrix/src/matrix/probe.js", () => ({
+  probeMatrix: mocks.probeMatrix,
+}));
+
+vi.mock("../../../extensions/msteams/src/probe.js", () => ({
+  probeMSTeams: mocks.probeMSTeams,
 }));
 
 vi.mock("../../../extensions/signal/src/accounts.js", () => ({
@@ -184,6 +224,58 @@ describe("builder gateway handlers", () => {
       status: 200,
       elapsedMs: 11,
       bot: { id: "12345", username: "openclaw-bot" },
+    });
+    mocks.resolveGoogleChatAccount.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      config: {
+        audienceType: "app-url",
+        audience: "https://chat.googleapis.com/",
+      },
+      credentialSource: "inline",
+    });
+    mocks.probeGoogleChat.mockResolvedValue({
+      ok: true,
+      status: 200,
+    });
+    mocks.resolveIMessageAccount.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      config: {
+        cliPath: "imsg",
+      },
+    });
+    mocks.probeIMessage.mockResolvedValue({
+      ok: true,
+    });
+    mocks.resolveMatrixAccount.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      homeserver: "https://matrix.org",
+      userId: "@openclaw-bot:matrix.org",
+      config: {},
+    });
+    mocks.resolveMatrixAuth.mockResolvedValue({
+      homeserver: "https://matrix.org",
+      userId: "@openclaw-bot:matrix.org",
+      accessToken: "matrix-token",
+      deviceName: undefined,
+      initialSyncLimit: undefined,
+      encryption: false,
+    });
+    mocks.probeMatrix.mockResolvedValue({
+      ok: true,
+      status: 200,
+      elapsedMs: 15,
+      error: null,
+      userId: "@openclaw-bot:matrix.org",
+    });
+    mocks.probeMSTeams.mockResolvedValue({
+      ok: true,
+      appId: "teams-app-id",
+      graph: { ok: true },
     });
     mocks.resolveSignalAccount.mockReturnValue({
       accountId: "default",
@@ -898,6 +990,107 @@ describe("builder gateway handlers", () => {
         connectorId: "channel:signal:verify-transport",
         status: "configured",
         message: expect.stringContaining("Signal transport is reachable"),
+      }),
+    );
+  });
+
+  it("verifies Google Chat service-account auth and audience readiness", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:googlechat:verify-auth",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.resolveGoogleChatAccount).toHaveBeenCalled();
+    expect(mocks.probeGoogleChat).toHaveBeenCalled();
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:googlechat:verify-auth",
+        status: "configured",
+        message: expect.stringContaining("Google Chat credentials are valid"),
+      }),
+    );
+  });
+
+  it("verifies Matrix credentials with whoami probe", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:matrix:verify-credentials",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.resolveMatrixAuth).toHaveBeenCalled();
+    expect(mocks.probeMatrix).toHaveBeenCalledWith({
+      homeserver: "https://matrix.org",
+      accessToken: "matrix-token",
+      userId: "@openclaw-bot:matrix.org",
+      timeoutMs: 5000,
+    });
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:matrix:verify-credentials",
+        status: "configured",
+        message: expect.stringContaining("Matrix credentials are valid"),
+      }),
+    );
+  });
+
+  it("verifies Microsoft Teams credentials", async () => {
+    mocks.loadConfig.mockReturnValueOnce({
+      agents: { default: "main" },
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "teams-app-id",
+          appPassword: "teams-app-password",
+          tenantId: "teams-tenant",
+        },
+      },
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:msteams:verify-credentials",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.probeMSTeams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "teams-app-id",
+        appPassword: "teams-app-password",
+        tenantId: "teams-tenant",
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:msteams:verify-credentials",
+        status: "configured",
+        message: expect.stringContaining("Microsoft Teams credentials are valid"),
+      }),
+    );
+  });
+
+  it("verifies iMessage transport using imsg rpc", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:imessage:verify-transport",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.probeIMessage).toHaveBeenCalledWith(5000, {});
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:imessage:verify-transport",
+        status: "configured",
+        message: expect.stringContaining("iMessage transport is reachable"),
       }),
     );
   });

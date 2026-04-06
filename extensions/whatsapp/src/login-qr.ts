@@ -36,6 +36,8 @@ type ActiveLogin = {
 };
 
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
+const WAIT_FOR_SCAN_HINT =
+  "Still waiting for the QR scan. If your phone shows “Can’t link new devices at this time”, wait a few minutes and use relink for a fresh QR.";
 const activeLogins = new Map<string, ActiveLogin>();
 
 function closeSocket(sock: WaSocket) {
@@ -122,7 +124,7 @@ export async function startWebLoginWithQr(
   if (hasWeb && !opts.force) {
     const who = selfId.e164 ?? selfId.jid ?? "unknown";
     return {
-      message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
+      message: `WhatsApp is already linked (${who}). Use relink (or force) if you want a fresh QR.`,
     };
   }
 
@@ -243,7 +245,7 @@ export async function waitForWebLogin(
     if (remaining <= 0) {
       return {
         connected: false,
-        message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+        message: WAIT_FOR_SCAN_HINT,
       };
     }
     const timeout = new Promise<"timeout">((resolve) =>
@@ -254,7 +256,7 @@ export async function waitForWebLogin(
     if (result === "timeout") {
       return {
         connected: false,
-        message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+        message: WAIT_FOR_SCAN_HINT,
       };
     }
 

@@ -183,10 +183,35 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
   });
 }
 
+function parseStatusCode(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = Number.parseInt(trimmed, 10);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
 export function getStatusCode(err: unknown) {
-  return (
-    (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status
+  const direct = parseStatusCode(
+    (err as { output?: { statusCode?: unknown } })?.output?.statusCode ??
+      (err as { status?: unknown })?.status ??
+      (err as { data?: { reason?: unknown } })?.data?.reason,
+  );
+  if (direct != null) {
+    return direct;
+  }
+  return parseStatusCode(
+    (err as { error?: { output?: { statusCode?: unknown } } })?.error?.output?.statusCode ??
+      (err as { error?: { status?: unknown } })?.error?.status ??
+      (err as { error?: { data?: { reason?: unknown } } })?.error?.data?.reason,
   );
 }
 

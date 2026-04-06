@@ -33,6 +33,9 @@ function createHost() {
     client: {},
     lastError: null as string | null,
     whatsappLoginMessage: null as string | null,
+    whatsappLoginQrDataUrl: null as string | null,
+    whatsappLoginConnected: null as boolean | null,
+    channelsSnapshot: null,
     configForm: null as Record<string, unknown> | null,
     configSnapshot: null,
   };
@@ -108,5 +111,107 @@ describe("handleWhatsAppStart auto-enable flow", () => {
     expect(mocks.applyConfig).toHaveBeenCalledTimes(1);
     expect(host.whatsappLoginMessage).toContain("Auto-enable failed");
     expect(mocks.loadChannels).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-relinks when Show QR reports already linked but runtime shows auth failure", async () => {
+    const host = createHost();
+    mocks.startWhatsAppLogin
+      .mockImplementationOnce(async (state: typeof host) => {
+        state.whatsappLoginMessage =
+          "WhatsApp is already linked (+15551234567). Use relink if you want a fresh QR.";
+      })
+      .mockImplementationOnce(async (state: typeof host) => {
+        state.whatsappLoginMessage = "Scan this QR in WhatsApp Linked Devices.";
+      });
+    mocks.loadChannels.mockImplementation(async (state: typeof host) => {
+      state.channelsSnapshot = {
+        ts: Date.now(),
+        channelOrder: ["whatsapp"],
+        channelLabels: { whatsapp: "WhatsApp" },
+        channels: {},
+        channelAccounts: {
+          whatsapp: [
+            {
+              accountId: "default",
+              linked: true,
+              connected: false,
+              lastError: "status=401 Unauthorized Connection Failure",
+            },
+          ],
+        },
+        channelDefaultAccountId: { whatsapp: "default" },
+      };
+    });
+
+    await handleWhatsAppStart(host as unknown as Parameters<typeof handleWhatsAppStart>[0], false);
+
+    expect(mocks.startWhatsAppLogin).toHaveBeenCalledTimes(2);
+    expect(mocks.startWhatsAppLogin).toHaveBeenNthCalledWith(1, host, false);
+    expect(mocks.startWhatsAppLogin).toHaveBeenNthCalledWith(2, host, true);
+    expect(host.whatsappLoginMessage).toContain("Scan this QR");
+    expect(host.whatsappLoginConnected).toBe(false);
+    expect(mocks.loadChannels).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks WhatsApp connected when already linked and channel status is healthy", async () => {
+    const host = createHost();
+    mocks.startWhatsAppLogin.mockImplementation(async (state: typeof host) => {
+      state.whatsappLoginMessage =
+        "WhatsApp is already linked (+15551234567). Use relink if you want a fresh QR.";
+    });
+    mocks.loadChannels.mockImplementation(async (state: typeof host) => {
+      state.channelsSnapshot = {
+        ts: Date.now(),
+        channelOrder: ["whatsapp"],
+        channelLabels: { whatsapp: "WhatsApp" },
+        channels: {},
+        channelAccounts: {
+          whatsapp: [{ accountId: "default", linked: true, connected: true }],
+        },
+        channelDefaultAccountId: { whatsapp: "default" },
+      };
+    });
+
+    await handleWhatsAppStart(host as unknown as Parameters<typeof handleWhatsAppStart>[0], false);
+
+    expect(mocks.startWhatsAppLogin).toHaveBeenCalledTimes(1);
+    expect(mocks.waitWhatsAppLogin).not.toHaveBeenCalled();
+    expect(host.whatsappLoginConnected).toBe(true);
+    expect(mocks.loadChannels).toHaveBeenCalledTimes(2);
+  });
+
+  it("auto-waits after QR is shown so pairing can finalize without an extra click", async () => {
+    const host = createHost();
+    let statusRefreshes = 0;
+    mocks.startWhatsAppLogin.mockImplementation(async (state: typeof host) => {
+      state.whatsappLoginMessage = "Scan this QR in WhatsApp Linked Devices.";
+      state.whatsappLoginQrDataUrl = "data:image/png;base64,abc";
+    });
+    mocks.waitWhatsAppLogin.mockImplementation(async (state: typeof host) => {
+      state.whatsappLoginMessage = "✅ Linked! WhatsApp is ready.";
+      state.whatsappLoginConnected = true;
+      state.whatsappLoginQrDataUrl = null;
+    });
+    mocks.loadChannels.mockImplementation(async (state: typeof host) => {
+      statusRefreshes += 1;
+      const connected = statusRefreshes >= 2;
+      state.channelsSnapshot = {
+        ts: Date.now(),
+        channelOrder: ["whatsapp"],
+        channelLabels: { whatsapp: "WhatsApp" },
+        channels: {},
+        channelAccounts: {
+          whatsapp: [{ accountId: "default", linked: true, connected }],
+        },
+        channelDefaultAccountId: { whatsapp: "default" },
+      };
+    });
+
+    await handleWhatsAppStart(host as unknown as Parameters<typeof handleWhatsAppStart>[0], false);
+
+    expect(mocks.startWhatsAppLogin).toHaveBeenCalledTimes(1);
+    expect(mocks.waitWhatsAppLogin).toHaveBeenCalledTimes(1);
+    expect(host.whatsappLoginConnected).toBe(true);
+    expect(mocks.loadChannels).toHaveBeenCalledTimes(2);
   });
 });

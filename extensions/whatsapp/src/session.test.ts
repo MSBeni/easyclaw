@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
+const { createWaSocket, formatError, getStatusCode, logWebSelfId, waitForWaConnection } =
   await import("./session.js");
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
@@ -151,6 +151,15 @@ describe("web session", () => {
     expect(formatError(err)).toContain("status=408");
     expect(formatError(err)).toContain("Request Time-out");
     expect(formatError(err)).toContain("QR refs attempts ended");
+  });
+
+  it("extracts status code from nested Boom error shapes", () => {
+    const err = {
+      error: {
+        data: { reason: "401", location: "cln" },
+      },
+    };
+    expect(getStatusCode(err)).toBe(401);
   });
 
   it("does not clobber creds backup when creds.json is corrupted", async () => {

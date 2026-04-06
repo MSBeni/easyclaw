@@ -548,6 +548,315 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
     };
   }
 
+  // Google Chat
+  if (id.includes("googlechat") || refKey.startsWith("channels.googlechat")) {
+    return {
+      title: "Set up Google Chat",
+      subtitle: "Connect Google Chat with service-account auth and webhook verification.",
+      difficulty: "moderate",
+      timeEstimate: "10 minutes",
+      steps: [
+        {
+          instruction: "Create or open a Google Cloud project and enable the Google Chat API.",
+          link: "https://console.cloud.google.com/apis/library/chat.googleapis.com",
+          linkLabel: "Google Cloud Console",
+        },
+        {
+          instruction:
+            "Create a service account, download its JSON key, and paste it below (or configure a serviceAccountFile path).",
+        },
+        {
+          instruction:
+            "Set audienceType + audience for webhook request validation (app-url is recommended for most setups).",
+        },
+        {
+          instruction:
+            "Save config, then run Verify Google Chat auth to validate both API access and webhook auth readiness.",
+        },
+      ],
+      fields: [
+        {
+          label: "Service Account JSON",
+          path: ["channels", "googlechat", "serviceAccount"],
+          placeholder: '{"type":"service_account",...}',
+          type: "secret",
+          help: "Google service account JSON for Chat API access.",
+        },
+        {
+          label: "Audience Type",
+          path: ["channels", "googlechat", "audienceType"],
+          placeholder: "app-url",
+          type: "select",
+          options: [
+            { value: "app-url", label: "App URL (recommended)" },
+            { value: "project-number", label: "Project Number" },
+          ],
+          help: "How OpenClaw validates inbound webhook tokens.",
+        },
+        {
+          label: "Audience",
+          path: ["channels", "googlechat", "audience"],
+          placeholder: "https://chat.googleapis.com/ or 123456789012",
+          type: "text",
+          help: "Audience value matching your selected audience type.",
+        },
+      ],
+      assist: {
+        connectorId: "channel:googlechat:verify-auth",
+        title: "Verify Google Chat auth",
+        description:
+          "Runs a live Google Chat API auth check and confirms audienceType + audience are set for webhook validation.",
+        runLabel: "Verify Google Chat auth",
+        runningLabel: "Verifying auth...",
+        fields: [
+          {
+            key: "googlechat.accountId",
+            label: "Account ID (optional)",
+            placeholder: "default",
+            type: "text",
+            help: "Leave blank for the default Google Chat account.",
+          },
+          {
+            key: "googlechat.audienceType",
+            label: "Audience Type (optional override)",
+            placeholder: "app-url",
+            type: "text",
+            help: "Uses saved value if left blank.",
+            configPath: ["channels", "googlechat", "audienceType"],
+          },
+          {
+            key: "googlechat.audience",
+            label: "Audience (optional override)",
+            placeholder: "https://chat.googleapis.com/",
+            type: "text",
+            help: "Uses saved value if left blank.",
+            configPath: ["channels", "googlechat", "audience"],
+          },
+        ],
+      },
+      docsHint: "https://docs.openclaw.ai/channels/googlechat",
+    };
+  }
+
+  // Matrix
+  if (id.includes("matrix") || refKey.startsWith("channels.matrix")) {
+    return {
+      title: "Set up Matrix",
+      subtitle: "Connect to a Matrix homeserver using access token or password auth.",
+      difficulty: "moderate",
+      timeEstimate: "5 minutes",
+      steps: [
+        {
+          instruction:
+            "Choose the homeserver and user account your bot should use (for example matrix.org or your own homeserver).",
+        },
+        {
+          instruction:
+            "Paste homeserver URL, user ID, and access token below. (Password auth also works if configured in Channels.)",
+        },
+        {
+          instruction:
+            "Save config, then run Verify Matrix credentials to validate whoami/auth reachability.",
+        },
+      ],
+      fields: [
+        {
+          label: "Homeserver",
+          path: ["channels", "matrix", "homeserver"],
+          placeholder: "https://matrix.org",
+          type: "text",
+        },
+        {
+          label: "User ID",
+          path: ["channels", "matrix", "userId"],
+          placeholder: "@bot:matrix.org",
+          type: "text",
+        },
+        {
+          label: "Access Token",
+          path: ["channels", "matrix", "accessToken"],
+          placeholder: "syt_...",
+          type: "secret",
+        },
+      ],
+      assist: {
+        connectorId: "channel:matrix:verify-credentials",
+        title: "Verify Matrix credentials",
+        description:
+          "Runs a Matrix auth probe (`whoami`) for the selected account and confirms the homeserver/token combination works.",
+        runLabel: "Verify Matrix credentials",
+        runningLabel: "Verifying credentials...",
+        fields: [
+          {
+            key: "matrix.accountId",
+            label: "Account ID (optional)",
+            placeholder: "default",
+            type: "text",
+            help: "Leave blank for the default Matrix account.",
+          },
+        ],
+      },
+      docsHint: "https://docs.openclaw.ai/channels/matrix",
+    };
+  }
+
+  // Microsoft Teams
+  if (id.includes("msteams") || refKey.startsWith("channels.msteams")) {
+    return {
+      title: "Set up Microsoft Teams",
+      subtitle: "Connect Bot Framework credentials for Teams messaging.",
+      difficulty: "advanced",
+      timeEstimate: "15 minutes",
+      steps: [
+        {
+          instruction:
+            "Create or open your Azure Bot registration and copy App ID, App Password, and Tenant ID.",
+          link: "https://portal.azure.com/#create/Microsoft.AzureBot",
+          linkLabel: "Azure Bot Portal",
+        },
+        {
+          instruction:
+            "Paste credentials below and save. Keep these values secret and rotate if leaked.",
+        },
+        {
+          instruction:
+            "Run Verify Teams credentials to validate Bot Framework auth and optional Graph token availability.",
+        },
+      ],
+      fields: [
+        {
+          label: "App ID",
+          path: ["channels", "msteams", "appId"],
+          placeholder: "00000000-0000-0000-0000-000000000000",
+          type: "text",
+        },
+        {
+          label: "App Password",
+          path: ["channels", "msteams", "appPassword"],
+          placeholder: "",
+          type: "secret",
+        },
+        {
+          label: "Tenant ID",
+          path: ["channels", "msteams", "tenantId"],
+          placeholder: "common",
+          type: "text",
+        },
+      ],
+      assist: {
+        connectorId: "channel:msteams:verify-credentials",
+        title: "Verify Teams credentials",
+        description:
+          "Checks Bot Framework token acquisition and attempts a Graph token probe to validate Microsoft Teams auth readiness.",
+        runLabel: "Verify Teams credentials",
+        runningLabel: "Verifying credentials...",
+        fields: [
+          {
+            key: "msteams.appId",
+            label: "App ID (optional override)",
+            placeholder: "00000000-0000-0000-0000-000000000000",
+            type: "text",
+            help: "Uses saved value if left blank.",
+            configPath: ["channels", "msteams", "appId"],
+          },
+          {
+            key: "msteams.appPassword",
+            label: "App Password (optional override)",
+            placeholder: "",
+            type: "secret",
+            help: "Uses saved value if left blank.",
+            configPath: ["channels", "msteams", "appPassword"],
+          },
+          {
+            key: "msteams.tenantId",
+            label: "Tenant ID (optional override)",
+            placeholder: "common",
+            type: "text",
+            help: "Uses saved value if left blank.",
+            configPath: ["channels", "msteams", "tenantId"],
+          },
+        ],
+      },
+      docsHint: "https://docs.openclaw.ai/channels/msteams",
+    };
+  }
+
+  // iMessage
+  if (id.includes("imessage") || refKey.startsWith("channels.imessage")) {
+    return {
+      title: "Set up iMessage",
+      subtitle: "Connect iMessage transport on macOS using imsg RPC.",
+      difficulty: "moderate",
+      timeEstimate: "3 minutes",
+      steps: [
+        {
+          instruction:
+            "Use a macOS host signed into Messages.app. OpenClaw needs local iMessage access.",
+        },
+        {
+          instruction:
+            "Set iMessage enabled and optional imsg/db paths below, then save your changes.",
+        },
+        {
+          instruction:
+            "Run Verify iMessage transport to confirm imsg RPC responds (`chats.list`) from this host.",
+        },
+      ],
+      fields: [
+        {
+          label: "Enabled",
+          path: ["channels", "imessage", "enabled"],
+          placeholder: "true",
+          type: "select",
+          options: [
+            { value: "true", label: "Enabled" },
+            { value: "false", label: "Disabled" },
+          ],
+        },
+        {
+          label: "imsg CLI Path (optional)",
+          path: ["channels", "imessage", "cliPath"],
+          placeholder: "imsg",
+          type: "text",
+        },
+      ],
+      assist: {
+        connectorId: "channel:imessage:verify-transport",
+        title: "Verify iMessage transport",
+        description:
+          "Checks iMessage transport health by probing imsg RPC support and a lightweight chats.list request.",
+        runLabel: "Verify iMessage transport",
+        runningLabel: "Verifying transport...",
+        fields: [
+          {
+            key: "imessage.accountId",
+            label: "Account ID (optional)",
+            placeholder: "default",
+            type: "text",
+            help: "Leave blank for the default iMessage account.",
+          },
+          {
+            key: "imessage.cliPath",
+            label: "imsg CLI Path (optional override)",
+            placeholder: "imsg",
+            type: "text",
+            help: "Uses saved value if left blank.",
+            configPath: ["channels", "imessage", "cliPath"],
+          },
+          {
+            key: "imessage.dbPath",
+            label: "iMessage DB Path (optional override)",
+            placeholder: "~/Library/Messages/chat.db",
+            type: "text",
+            help: "Uses saved value if left blank.",
+            configPath: ["channels", "imessage", "dbPath"],
+          },
+        ],
+      },
+      docsHint: "https://docs.openclaw.ai/channels/imessage",
+    };
+  }
+
   // WhatsApp (Web)
   if (id.includes("whatsapp") || refKey.startsWith("channels.whatsapp")) {
     return {

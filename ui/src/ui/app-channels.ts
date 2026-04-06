@@ -15,7 +15,10 @@ import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 const WEB_LOGIN_PROVIDER_UNAVAILABLE = "web login provider is not available";
+const WHATSAPP_ALREADY_LINKED = "whatsapp is already linked";
 const WHATSAPP_LOGIN_RETRY_DELAYS_MS = [300, 700, 1200];
+const WHATSAPP_CONNECTED_CONVERGENCE_DELAYS_MS = [400, 800, 1200, 1600];
+const WHATSAPP_AUTH_FAILURE_HINTS = ["401", "unauthorized", "logged out", "connection failure"];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -50,6 +53,91 @@ function readStringArray(value: unknown): string[] {
 
 function isWhatsAppProviderUnavailable(message: string | null | undefined): boolean {
   return message?.toLowerCase().includes(WEB_LOGIN_PROVIDER_UNAVAILABLE) ?? false;
+}
+
+function isWhatsAppAlreadyLinked(message: string | null | undefined): boolean {
+  return message?.toLowerCase().includes(WHATSAPP_ALREADY_LINKED) ?? false;
+}
+
+function hasWhatsAppAuthFailureHint(message: string | null | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  const normalized = message.toLowerCase();
+  return WHATSAPP_AUTH_FAILURE_HINTS.some((hint) => normalized.includes(hint));
+}
+
+function readRecordBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+  if (!record) {
+    return null;
+  }
+  const value = record[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function readRecordString(record: Record<string, unknown> | null, key: string): string | null {
+  if (!record) {
+    return null;
+  }
+  const value = record[key];
+  return typeof value === "string" ? value : null;
+}
+
+function resolveWhatsAppPrimaryAccount(host: OpenClawApp): Record<string, unknown> | null {
+  const accounts = host.channelsSnapshot?.channelAccounts?.whatsapp;
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return null;
+  }
+  return asRecord(accounts[0]);
+}
+
+function syncWhatsAppConnectedFromSnapshot(host: OpenClawApp) {
+  const account = resolveWhatsAppPrimaryAccount(host);
+  const connected = readRecordBoolean(account, "connected");
+  if (connected !== null) {
+    host.whatsappLoginConnected = connected;
+  }
+}
+
+function isWhatsAppConnectedInSnapshot(host: OpenClawApp): boolean {
+  const account = resolveWhatsAppPrimaryAccount(host);
+  return readRecordBoolean(account, "connected") === true;
+}
+
+function shouldAutoRelinkWhatsApp(host: OpenClawApp): boolean {
+  const account = resolveWhatsAppPrimaryAccount(host);
+  if (!account) {
+    return false;
+  }
+  const linked = readRecordBoolean(account, "linked") === true;
+  const connected = readRecordBoolean(account, "connected") === true;
+  if (!linked || connected) {
+    return false;
+  }
+  const lastError = readRecordString(account, "lastError");
+  return hasWhatsAppAuthFailureHint(lastError);
+}
+
+function shouldAutoWaitForWhatsAppScan(host: OpenClawApp): boolean {
+  return Boolean(host.whatsappLoginQrDataUrl) && host.whatsappLoginConnected !== true;
+}
+
+async function convergeWhatsAppConnectedState(host: OpenClawApp) {
+  if (host.whatsappLoginConnected !== true) {
+    return;
+  }
+  if (isWhatsAppConnectedInSnapshot(host)) {
+    return;
+  }
+  for (const delayMs of WHATSAPP_CONNECTED_CONVERGENCE_DELAYS_MS) {
+    await waitMs(delayMs);
+    await loadChannels(host, true);
+    syncWhatsAppConnectedFromSnapshot(host);
+    if (isWhatsAppConnectedInSnapshot(host)) {
+      host.whatsappLoginConnected = true;
+      return;
+    }
+  }
 }
 
 function waitMs(ms: number): Promise<void> {
@@ -135,17 +223,40 @@ export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
         "WhatsApp login provider is unavailable. Auto-enable failed. Ensure plugins.enabled, web.enabled, and channels.whatsapp.enabled are true; remove whatsapp from plugins.deny; if plugins.allow is set, include whatsapp.";
     }
   }
+  if (!force && isWhatsAppAlreadyLinked(host.whatsappLoginMessage)) {
+    await loadChannels(host, true);
+    syncWhatsAppConnectedFromSnapshot(host);
+    if (!host.whatsappLoginConnected && shouldAutoRelinkWhatsApp(host)) {
+      await startWhatsAppLogin(host, true);
+    }
+  }
   await loadChannels(host, true);
+  syncWhatsAppConnectedFromSnapshot(host);
+  if (shouldAutoWaitForWhatsAppScan(host)) {
+    await waitWhatsAppLogin(host);
+    const waitReportedConnected = host.whatsappLoginConnected === true;
+    await loadChannels(host, true);
+    syncWhatsAppConnectedFromSnapshot(host);
+    if (waitReportedConnected) {
+      await convergeWhatsAppConnectedState(host);
+    }
+  }
 }
 
 export async function handleWhatsAppWait(host: OpenClawApp) {
   await waitWhatsAppLogin(host);
+  const waitReportedConnected = host.whatsappLoginConnected === true;
   await loadChannels(host, true);
+  syncWhatsAppConnectedFromSnapshot(host);
+  if (waitReportedConnected) {
+    await convergeWhatsAppConnectedState(host);
+  }
 }
 
 export async function handleWhatsAppLogout(host: OpenClawApp) {
   await logoutWhatsApp(host);
   await loadChannels(host, true);
+  syncWhatsAppConnectedFromSnapshot(host);
 }
 
 export async function handleChannelConfigSave(host: OpenClawApp) {

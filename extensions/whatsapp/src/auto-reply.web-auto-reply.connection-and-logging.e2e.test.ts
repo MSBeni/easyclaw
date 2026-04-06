@@ -201,6 +201,55 @@ describe("web auto-reply connection", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
   });
 
+  it("treats status 401 as non-retryable and stops without retrying", async () => {
+    const closeResolvers: Array<(reason?: unknown) => void> = [];
+    const sleep = vi.fn(async () => {});
+    const listenerFactory = vi.fn(async () => {
+      const onClose = new Promise<unknown>((res) => {
+        closeResolvers.push(res);
+      });
+      return { close: vi.fn(), onClose };
+    });
+    const { runtime, controller, run } = startMonitorWebChannel({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+    });
+
+    await Promise.resolve();
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+    closeResolvers.shift()?.({
+      status: "401",
+      isLoggedOut: false,
+      error: { data: { reason: "401", location: "cln" } },
+    });
+
+    const completedQuickly = await Promise.race([
+      run.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 60)),
+    ]);
+
+    if (!completedQuickly) {
+      await vi.waitFor(
+        () => {
+          expect(listenerFactory).toHaveBeenCalledTimes(2);
+        },
+        { timeout: 250, interval: 2 },
+      );
+      controller.abort();
+      closeResolvers[1]?.({ status: 499, isLoggedOut: false, error: "aborted" });
+      await run;
+    }
+
+    expect(completedQuickly).toBe(true);
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("status 401"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("authorization failure"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
+  });
+
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
     try {

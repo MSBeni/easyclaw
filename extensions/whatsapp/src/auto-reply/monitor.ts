@@ -31,10 +31,27 @@ import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebChannelStatus, WebInboundMsg, WebMonitorTuning } from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
 
+function normalizeStatusCode(statusCode: unknown): number | null {
+  if (typeof statusCode === "number" && Number.isFinite(statusCode)) {
+    return statusCode;
+  }
+  if (typeof statusCode === "string") {
+    const trimmed = statusCode.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = Number.parseInt(trimmed, 10);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return null;
+}
+
 function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
-  // WhatsApp 440 = session conflict ("Unknown Stream Errored (conflict)").
-  // This is persistent until the operator resolves the conflicting session.
-  return statusCode === 440;
+  const code = normalizeStatusCode(statusCode);
+  // 401/403 are auth failures that should not spin-retry.
+  // 440 = session conflict ("Unknown Stream Errored (conflict)"), persistent until resolved.
+  return code === 401 || code === 403 || code === 440;
 }
 
 export async function monitorWebChannel(
@@ -356,15 +373,17 @@ export async function monitorWebChannel(
       break;
     }
 
-    const statusCode =
+    const rawStatusCode =
       (typeof reason === "object" && reason && "status" in reason
         ? (reason as { status?: number }).status
         : undefined) ?? "unknown";
+    const normalizedStatusCode = normalizeStatusCode(rawStatusCode);
+    const statusCode = normalizedStatusCode ?? rawStatusCode;
     const loggedOut =
       typeof reason === "object" &&
       reason &&
       "isLoggedOut" in reason &&
-      (reason as { isLoggedOut?: boolean }).isLoggedOut;
+      ((reason as { isLoggedOut?: boolean }).isLoggedOut || normalizedStatusCode === 401);
 
     const errorStr = formatError(reason);
     status.connected = false;
@@ -411,9 +430,16 @@ export async function monitorWebChannel(
         },
         "web reconnect: non-retryable close status; stopping monitor",
       );
-      runtime.error(
-        `WhatsApp Web connection closed (status ${statusCode}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel web")}\`. Stopping web monitoring.`,
-      );
+      const code = normalizeStatusCode(statusCode);
+      if (code === 440) {
+        runtime.error(
+          `WhatsApp Web connection closed (status ${statusCode}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel web")}\`. Stopping web monitoring.`,
+        );
+      } else {
+        runtime.error(
+          `WhatsApp Web connection closed (status ${statusCode}: authorization failure). Relink with \`${formatCliCommand("openclaw channels login --channel web")}\` or use Setup → WhatsApp → Relink. Stopping web monitoring.`,
+        );
+      }
       await closeListener();
       break;
     }

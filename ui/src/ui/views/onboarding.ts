@@ -1235,22 +1235,42 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
         linkLabel: "GCP Console",
       },
       {
-        instruction:
-          "Configure a Chat App in the Google Chat API settings with your gateway webhook URL.",
+        instruction: "Configure a Chat App in Google Cloud and set webhook auth audience fields.",
       },
-      { instruction: "Create a service account key and paste the credentials below." },
+      {
+        instruction:
+          "Create a service account key and paste it below, then click Verify Google Chat auth.",
+      },
     ],
     fields: [
       {
         label: "Service Account JSON",
-        path: ["channels", "googlechat", "credentials"],
+        path: ["channels", "googlechat", "serviceAccount"],
         placeholder: '{"type":"service_account",...}',
         type: "secret",
         help: "Service account key JSON from GCP.",
       },
+      {
+        label: "Audience Type",
+        path: ["channels", "googlechat", "audienceType"],
+        placeholder: "app-url",
+        type: "select",
+        options: [
+          { value: "app-url", label: "App URL (recommended)" },
+          { value: "project-number", label: "Project Number" },
+        ],
+        help: "How inbound Google Chat webhook JWT audience is validated.",
+      },
+      {
+        label: "Audience",
+        path: ["channels", "googlechat", "audience"],
+        placeholder: "https://chat.googleapis.com/ or 123456789012",
+        type: "text",
+        help: "Must match your selected Audience Type.",
+      },
     ],
-    docsLink: "https://docs.openclaw.ai/channels/google-chat",
-    configCheck: ["channels", "googlechat", "credentials"],
+    docsLink: "https://docs.openclaw.ai/channels/googlechat",
+    configCheck: ["channels", "googlechat", "serviceAccount"],
     advancedTarget: { tab: "channels" },
   },
   {
@@ -1280,11 +1300,18 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
         help: "Azure Bot registration App ID.",
       },
       {
-        label: "App Secret",
-        path: ["channels", "msteams", "appSecret"],
+        label: "App Password",
+        path: ["channels", "msteams", "appPassword"],
         placeholder: "",
         type: "secret",
-        help: "Azure Bot registration secret.",
+        help: "Azure Bot registration password/secret.",
+      },
+      {
+        label: "Tenant ID",
+        path: ["channels", "msteams", "tenantId"],
+        placeholder: "common",
+        type: "text",
+        help: "Microsoft Entra tenant ID.",
       },
     ],
     configCheck: ["channels", "msteams", "appId"],
@@ -1759,7 +1786,73 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function isStepConfigured(form: Record<string, unknown> | null, step: OnboardingStep): boolean {
+type WhatsAppOnboardingState = Pick<AppViewState, "channelsSnapshot" | "whatsappLoginConnected">;
+
+const WHATSAPP_AUTH_FAILURE_HINTS = ["401", "unauthorized", "logged out", "connection failure"];
+
+function readRecordBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+  if (!record) {
+    return null;
+  }
+  const value = record[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function readRecordString(record: Record<string, unknown> | null, key: string): string | null {
+  if (!record) {
+    return null;
+  }
+  const value = record[key];
+  return typeof value === "string" ? value.trim() : null;
+}
+
+function resolvePrimaryWhatsAppAccount(
+  state?: WhatsAppOnboardingState,
+): Record<string, unknown> | null {
+  const accounts = state?.channelsSnapshot?.channelAccounts?.whatsapp;
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return null;
+  }
+  return asObject(accounts[0]);
+}
+
+function resolveWhatsAppConnected(state?: WhatsAppOnboardingState): boolean {
+  if (!state) {
+    return false;
+  }
+  if (state.whatsappLoginConnected === true) {
+    return true;
+  }
+  const account = resolvePrimaryWhatsAppAccount(state);
+  return readRecordBoolean(account, "connected") === true;
+}
+
+function resolveWhatsAppLinked(state?: WhatsAppOnboardingState): boolean {
+  const account = resolvePrimaryWhatsAppAccount(state);
+  return readRecordBoolean(account, "linked") === true;
+}
+
+function resolveWhatsAppLastError(state?: WhatsAppOnboardingState): string | null {
+  const account = resolvePrimaryWhatsAppAccount(state);
+  return readRecordString(account, "lastError");
+}
+
+function hasWhatsAppAuthFailureHint(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.toLowerCase();
+  return WHATSAPP_AUTH_FAILURE_HINTS.some((hint) => normalized.includes(hint));
+}
+
+function isStepConfigured(
+  form: Record<string, unknown> | null,
+  step: OnboardingStep,
+  state?: WhatsAppOnboardingState,
+): boolean {
+  if (step.id === "whatsapp") {
+    return resolveWhatsAppConnected(state);
+  }
   if (!step.configCheck) {
     return false;
   }
@@ -1797,7 +1890,7 @@ function renderStepCard(
   form: Record<string, unknown> | null,
   step: OnboardingStep,
 ): unknown {
-  const done = isStepConfigured(form, step);
+  const done = isStepConfigured(form, step, state);
   return html`
     <button
       class="onboarding__card ${done ? "onboarding__card--done" : "onboarding__card--pending"}"
@@ -1838,7 +1931,7 @@ function renderOnboardingOverview(
   state: AppViewState,
   form: Record<string, unknown> | null,
 ): unknown {
-  const configuredCount = ONBOARDING_STEPS.filter((s) => isStepConfigured(form, s)).length;
+  const configuredCount = ONBOARDING_STEPS.filter((s) => isStepConfigured(form, s, state)).length;
   const totalSteps = ONBOARDING_STEPS.length;
   const pct = totalSteps > 0 ? Math.round((configuredCount / totalSteps) * 100) : 0;
 
@@ -1846,7 +1939,7 @@ function renderOnboardingOverview(
 
   // Collect all configured AI providers for the quick-pick strip
   const readyAiSteps = ONBOARDING_STEPS.filter(
-    (s) => s.category === "ai" && isStepConfigured(form, s),
+    (s) => s.category === "ai" && isStepConfigured(form, s, state),
   );
 
   return html`
@@ -1918,11 +2011,11 @@ function renderOnboardingOverview(
         if (steps.length === 0) {
           return nothing;
         }
-        const catConfigured = steps.filter((s) => isStepConfigured(form, s)).length;
+        const catConfigured = steps.filter((s) => isStepConfigured(form, s, state)).length;
         // Show configured first, then pending
         const sortedSteps = [
-          ...steps.filter((s) => isStepConfigured(form, s)),
-          ...steps.filter((s) => !isStepConfigured(form, s)),
+          ...steps.filter((s) => isStepConfigured(form, s, state)),
+          ...steps.filter((s) => !isStepConfigured(form, s, state)),
         ];
         return html`
           <section class="onboarding__section">
@@ -1959,11 +2052,15 @@ function renderOnboardingStepDetail(
   const slackVerifyConnectorId = "channel:slack:verify-credentials";
   const discordVerifyConnectorId = "channel:discord:verify-token";
   const signalVerifyConnectorId = "channel:signal:verify-transport";
+  const googleChatVerifyConnectorId = "channel:googlechat:verify-auth";
+  const matrixVerifyConnectorId = "channel:matrix:verify-credentials";
+  const msteamsVerifyConnectorId = "channel:msteams:verify-credentials";
+  const imessageVerifyConnectorId = "channel:imessage:verify-transport";
   const telegramAccountIdDraftKey = "onboarding.telegram.accountId";
   const telegramAccountTokenDraftKey = "onboarding.telegram.accountBotToken";
   const telegramAccountTargetDraftKey = "onboarding.telegram.accountDefaultTo";
   const telegramAccountStatusKey = "onboarding.telegram.accountStatus";
-  const done = isStepConfigured(form, step);
+  const done = isStepConfigured(form, step, state);
   const configReady = Boolean(state.configSnapshot?.hash);
   const configLoading = state.configLoading || state.configSchemaLoading;
   const saveDisabled = !state.configFormDirty || state.configSaving || configLoading;
@@ -1972,7 +2069,19 @@ function renderOnboardingStepDetail(
   const isSlackStep = step.id === "slack";
   const isDiscordStep = step.id === "discord";
   const isSignalStep = step.id === "signal";
+  const isGoogleChatStep = step.id === "google-chat";
+  const isMatrixStep = step.id === "matrix";
+  const isMSTeamsStep = step.id === "msteams";
+  const isIMessageStep = step.id === "imessage";
   const isWhatsAppStep = step.id === "whatsapp";
+  const whatsappConnected = isWhatsAppStep ? resolveWhatsAppConnected(state) : false;
+  const whatsappLinked = isWhatsAppStep ? resolveWhatsAppLinked(state) : false;
+  const whatsappLastError = isWhatsAppStep ? resolveWhatsAppLastError(state) : null;
+  const whatsappHasAuthFailure =
+    isWhatsAppStep &&
+    !whatsappConnected &&
+    whatsappLinked &&
+    hasWhatsAppAuthFailureHint(whatsappLastError);
   const showInlineSetup = step.fields.length > 0 || isWhatsAppStep;
   const telegramBotToken = isTelegramStep
     ? readConfigValue(form, ["channels", "telegram", "botToken"]).trim()
@@ -2110,6 +2219,14 @@ function renderOnboardingStepDetail(
     isDiscordStep && state.builderSetupRunningConnectorId === discordVerifyConnectorId;
   const signalVerifyRunning =
     isSignalStep && state.builderSetupRunningConnectorId === signalVerifyConnectorId;
+  const googleChatVerifyRunning =
+    isGoogleChatStep && state.builderSetupRunningConnectorId === googleChatVerifyConnectorId;
+  const matrixVerifyRunning =
+    isMatrixStep && state.builderSetupRunningConnectorId === matrixVerifyConnectorId;
+  const msteamsVerifyRunning =
+    isMSTeamsStep && state.builderSetupRunningConnectorId === msteamsVerifyConnectorId;
+  const imessageVerifyRunning =
+    isIMessageStep && state.builderSetupRunningConnectorId === imessageVerifyConnectorId;
   const slackVerifyResult =
     isSlackStep &&
     state.builderSetupResult &&
@@ -2131,6 +2248,34 @@ function renderOnboardingStepDetail(
       state.builderSetupResult.connectorId.startsWith(`${signalVerifyConnectorId}:`))
       ? state.builderSetupResult
       : null;
+  const googleChatVerifyResult =
+    isGoogleChatStep &&
+    state.builderSetupResult &&
+    (state.builderSetupResult.connectorId === googleChatVerifyConnectorId ||
+      state.builderSetupResult.connectorId.startsWith(`${googleChatVerifyConnectorId}:`))
+      ? state.builderSetupResult
+      : null;
+  const matrixVerifyResult =
+    isMatrixStep &&
+    state.builderSetupResult &&
+    (state.builderSetupResult.connectorId === matrixVerifyConnectorId ||
+      state.builderSetupResult.connectorId.startsWith(`${matrixVerifyConnectorId}:`))
+      ? state.builderSetupResult
+      : null;
+  const msteamsVerifyResult =
+    isMSTeamsStep &&
+    state.builderSetupResult &&
+    (state.builderSetupResult.connectorId === msteamsVerifyConnectorId ||
+      state.builderSetupResult.connectorId.startsWith(`${msteamsVerifyConnectorId}:`))
+      ? state.builderSetupResult
+      : null;
+  const imessageVerifyResult =
+    isIMessageStep &&
+    state.builderSetupResult &&
+    (state.builderSetupResult.connectorId === imessageVerifyConnectorId ||
+      state.builderSetupResult.connectorId.startsWith(`${imessageVerifyConnectorId}:`))
+      ? state.builderSetupResult
+      : null;
   const slackSetupError =
     isSlackStep && !slackVerifyRunning && state.builderSetupError && !slackVerifyResult
       ? state.builderSetupError
@@ -2141,6 +2286,25 @@ function renderOnboardingStepDetail(
       : null;
   const signalSetupError =
     isSignalStep && !signalVerifyRunning && state.builderSetupError && !signalVerifyResult
+      ? state.builderSetupError
+      : null;
+  const googleChatSetupError =
+    isGoogleChatStep &&
+    !googleChatVerifyRunning &&
+    state.builderSetupError &&
+    !googleChatVerifyResult
+      ? state.builderSetupError
+      : null;
+  const matrixSetupError =
+    isMatrixStep && !matrixVerifyRunning && state.builderSetupError && !matrixVerifyResult
+      ? state.builderSetupError
+      : null;
+  const msteamsSetupError =
+    isMSTeamsStep && !msteamsVerifyRunning && state.builderSetupError && !msteamsVerifyResult
+      ? state.builderSetupError
+      : null;
+  const imessageSetupError =
+    isIMessageStep && !imessageVerifyRunning && state.builderSetupError && !imessageVerifyResult
       ? state.builderSetupError
       : null;
   const connectorVerifyDisabled =
@@ -2661,6 +2825,114 @@ function renderOnboardingStepDetail(
                         : nothing
                     }
                     ${
+                      isGoogleChatStep
+                        ? html`
+                            <button
+                              class="btn"
+                              ?disabled=${connectorVerifyDisabled || googleChatVerifyRunning}
+                              @click=${async () => {
+                                if (state.configFormDirty) {
+                                  await saveConfig(state as Parameters<typeof saveConfig>[0]);
+                                  if (state.configFormDirty || state.lastError) {
+                                    return;
+                                  }
+                                }
+                                await runBuilderSetupAction(
+                                  state as Parameters<typeof runBuilderSetupAction>[0],
+                                  {
+                                    connectorId: googleChatVerifyConnectorId,
+                                    inputs: {},
+                                  },
+                                );
+                              }}
+                            >
+                              ${googleChatVerifyRunning ? "Verifying…" : "Verify Google Chat auth"}
+                            </button>
+                          `
+                        : nothing
+                    }
+                    ${
+                      isMatrixStep
+                        ? html`
+                            <button
+                              class="btn"
+                              ?disabled=${connectorVerifyDisabled || matrixVerifyRunning}
+                              @click=${async () => {
+                                if (state.configFormDirty) {
+                                  await saveConfig(state as Parameters<typeof saveConfig>[0]);
+                                  if (state.configFormDirty || state.lastError) {
+                                    return;
+                                  }
+                                }
+                                await runBuilderSetupAction(
+                                  state as Parameters<typeof runBuilderSetupAction>[0],
+                                  {
+                                    connectorId: matrixVerifyConnectorId,
+                                    inputs: {},
+                                  },
+                                );
+                              }}
+                            >
+                              ${matrixVerifyRunning ? "Verifying…" : "Verify Matrix credentials"}
+                            </button>
+                          `
+                        : nothing
+                    }
+                    ${
+                      isMSTeamsStep
+                        ? html`
+                            <button
+                              class="btn"
+                              ?disabled=${connectorVerifyDisabled || msteamsVerifyRunning}
+                              @click=${async () => {
+                                if (state.configFormDirty) {
+                                  await saveConfig(state as Parameters<typeof saveConfig>[0]);
+                                  if (state.configFormDirty || state.lastError) {
+                                    return;
+                                  }
+                                }
+                                await runBuilderSetupAction(
+                                  state as Parameters<typeof runBuilderSetupAction>[0],
+                                  {
+                                    connectorId: msteamsVerifyConnectorId,
+                                    inputs: {},
+                                  },
+                                );
+                              }}
+                            >
+                              ${msteamsVerifyRunning ? "Verifying…" : "Verify Teams credentials"}
+                            </button>
+                          `
+                        : nothing
+                    }
+                    ${
+                      isIMessageStep
+                        ? html`
+                            <button
+                              class="btn"
+                              ?disabled=${connectorVerifyDisabled || imessageVerifyRunning}
+                              @click=${async () => {
+                                if (state.configFormDirty) {
+                                  await saveConfig(state as Parameters<typeof saveConfig>[0]);
+                                  if (state.configFormDirty || state.lastError) {
+                                    return;
+                                  }
+                                }
+                                await runBuilderSetupAction(
+                                  state as Parameters<typeof runBuilderSetupAction>[0],
+                                  {
+                                    connectorId: imessageVerifyConnectorId,
+                                    inputs: {},
+                                  },
+                                );
+                              }}
+                            >
+                              ${imessageVerifyRunning ? "Verifying…" : "Verify iMessage transport"}
+                            </button>
+                          `
+                        : nothing
+                    }
+                    ${
                       isWhatsAppStep
                         ? html`
                             <button
@@ -2748,13 +3020,47 @@ function renderOnboardingStepDetail(
                                             ? html`
                                                 <span class="onboarding__dirty"> Verify Signal transport checks your signal-cli endpoint. </span>
                                               `
-                                            : isWhatsAppStep
+                                            : isGoogleChatStep
                                               ? html`
                                                   <span class="onboarding__dirty">
-                                                    Show QR to start pairing, then click Wait for scan after scanning.
+                                                    Verify Google Chat auth runs a live API probe and confirms webhook audience fields.
                                                   </span>
                                                 `
-                                              : nothing
+                                              : isMatrixStep
+                                                ? html`
+                                                    <span class="onboarding__dirty">
+                                                      Verify Matrix credentials checks homeserver auth with a whoami probe.
+                                                    </span>
+                                                  `
+                                                : isMSTeamsStep
+                                                  ? html`
+                                                      <span class="onboarding__dirty">
+                                                        Verify Teams credentials checks Bot Framework auth and Graph token readiness.
+                                                      </span>
+                                                    `
+                                                  : isIMessageStep
+                                                    ? html`
+                                                        <span class="onboarding__dirty">
+                                                          Verify iMessage transport checks local imsg RPC availability.
+                                                        </span>
+                                                      `
+                                                    : isWhatsAppStep
+                                                      ? whatsappConnected
+                                                        ? html`
+                                                            <span class="onboarding__dirty">WhatsApp is linked and connected.</span>
+                                                          `
+                                                        : whatsappLinked
+                                                          ? html`
+                                                              <span class="onboarding__dirty">
+                                                                WhatsApp is linked but not connected. Click Relink for a fresh QR if this persists.
+                                                              </span>
+                                                            `
+                                                          : html`
+                                                              <span class="onboarding__dirty">
+                                                                Show QR to start pairing, then click Wait for scan after scanning.
+                                                              </span>
+                                                            `
+                                                      : nothing
                     }
                   </div>
                   <div class="onboarding__actions-right">
@@ -2937,6 +3243,96 @@ function renderOnboardingStepDetail(
                     : nothing
                 }
                 ${
+                  googleChatSetupError
+                    ? html`
+                        <div class="callout danger" style="margin-top: 12px;">
+                          ${googleChatSetupError}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  googleChatVerifyResult
+                    ? html`
+                        <div
+                          class="callout ${
+                            googleChatVerifyResult.status === "configured" ? "success" : "warn"
+                          }"
+                          style="margin-top: 12px;"
+                        >
+                          ${googleChatVerifyResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  matrixSetupError
+                    ? html`
+                        <div class="callout danger" style="margin-top: 12px;">
+                          ${matrixSetupError}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  matrixVerifyResult
+                    ? html`
+                        <div
+                          class="callout ${matrixVerifyResult.status === "configured" ? "success" : "warn"}"
+                          style="margin-top: 12px;"
+                        >
+                          ${matrixVerifyResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  msteamsSetupError
+                    ? html`
+                        <div class="callout danger" style="margin-top: 12px;">
+                          ${msteamsSetupError}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  msteamsVerifyResult
+                    ? html`
+                        <div
+                          class="callout ${
+                            msteamsVerifyResult.status === "configured" ? "success" : "warn"
+                          }"
+                          style="margin-top: 12px;"
+                        >
+                          ${msteamsVerifyResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  imessageSetupError
+                    ? html`
+                        <div class="callout danger" style="margin-top: 12px;">
+                          ${imessageSetupError}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  imessageVerifyResult
+                    ? html`
+                        <div
+                          class="callout ${
+                            imessageVerifyResult.status === "configured" ? "success" : "warn"
+                          }"
+                          style="margin-top: 12px;"
+                        >
+                          ${imessageVerifyResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
                   isWhatsAppStep && state.whatsappLoginMessage
                     ? html`
                         <div class="callout" style="margin-top: 12px;">
@@ -2946,7 +3342,17 @@ function renderOnboardingStepDetail(
                     : nothing
                 }
                 ${
-                  isWhatsAppStep && state.whatsappLoginConnected === true
+                  whatsappHasAuthFailure
+                    ? html`
+                        <div class="callout warn" style="margin-top: 12px">
+                          WhatsApp is linked but this session looks invalid (${whatsappLastError}).
+                          Click Relink to generate a fresh QR.
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  isWhatsAppStep && whatsappConnected
                     ? html`
                         <div class="callout success" style="margin-top: 12px">
                           WhatsApp is connected. You can move to the next setup step.

@@ -3,11 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   loadConfigSchema: vi.fn(),
+  loadChannels: vi.fn(),
 }));
 
 vi.mock("../ui/src/ui/controllers/config.ts", () => ({
   loadConfig: mocks.loadConfig,
   loadConfigSchema: mocks.loadConfigSchema,
+}));
+
+vi.mock("../ui/src/ui/controllers/channels.ts", () => ({
+  loadChannels: mocks.loadChannels,
 }));
 
 const { refreshActiveTab } = await import("../ui/src/ui/app-settings.ts");
@@ -22,5 +27,7 @@ describe("refreshActiveTab", () => {
 
     expect(mocks.loadConfigSchema).toHaveBeenCalledTimes(1);
     expect(mocks.loadConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.loadChannels).toHaveBeenCalledTimes(1);
+    expect(mocks.loadChannels).toHaveBeenCalledWith(expect.anything(), false);
   });
 });

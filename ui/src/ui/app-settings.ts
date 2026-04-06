@@ -271,11 +271,17 @@ export async function refreshActiveTab(host: SettingsHost) {
     host.tab === "appearance" ||
     host.tab === "automation" ||
     host.tab === "infrastructure" ||
-    host.tab === "aiAgents" ||
-    host.tab === "onboarding"
+    host.tab === "aiAgents"
   ) {
     await loadConfigSchema(host as unknown as OpenClawApp);
     await loadConfig(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "onboarding") {
+    await Promise.all([
+      loadConfigSchema(host as unknown as OpenClawApp),
+      loadConfig(host as unknown as OpenClawApp),
+      loadChannels(host as unknown as OpenClawApp, false),
+    ]);
   }
   if (host.tab === "debug") {
     await loadDebug(host as unknown as OpenClawApp);
