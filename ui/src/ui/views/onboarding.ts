@@ -1097,7 +1097,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     timeEstimate: "1 minute",
     guide: [
       { instruction: "Make sure WhatsApp is installed on your phone with an active account." },
-      { instruction: 'Open the Channels tab, find WhatsApp, and click "Show QR".' },
+      { instruction: 'Click "Show QR" below to start secure pairing.' },
       {
         instruction:
           "On your phone: WhatsApp \u2192 Settings \u2192 Linked Devices \u2192 Link a Device, scan the code.",
@@ -1105,7 +1105,6 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
       { instruction: "Done! The connection is automatic." },
     ],
     fields: [],
-    infoOnly: true,
     docsLink: "https://docs.openclaw.ai/channels/whatsapp",
     advancedTarget: { tab: "channels" },
   },
@@ -1177,15 +1176,15 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     ],
     fields: [
       {
-        label: "Phone Number",
-        path: ["channels", "signal", "phone"],
+        label: "Signal Account",
+        path: ["channels", "signal", "account"],
         placeholder: "+1234567890",
         type: "text",
-        help: "Phone number registered with Signal.",
+        help: "Signal account identifier (E.164 phone number or UUID).",
       },
     ],
     docsLink: "https://docs.openclaw.ai/channels/signal",
-    configCheck: ["channels", "signal", "phone"],
+    configCheck: ["channels", "signal", "account"],
     advancedTarget: { tab: "channels" },
   },
   {
@@ -1957,6 +1956,9 @@ function renderOnboardingStepDetail(
 ): unknown {
   const telegramAutoDetectConnectorId = "channel:telegram:auto-default-target";
   const telegramVerifyConnectorId = "channel:telegram:verify-token";
+  const slackVerifyConnectorId = "channel:slack:verify-credentials";
+  const discordVerifyConnectorId = "channel:discord:verify-token";
+  const signalVerifyConnectorId = "channel:signal:verify-transport";
   const telegramAccountIdDraftKey = "onboarding.telegram.accountId";
   const telegramAccountTokenDraftKey = "onboarding.telegram.accountBotToken";
   const telegramAccountTargetDraftKey = "onboarding.telegram.accountDefaultTo";
@@ -1967,6 +1969,11 @@ function renderOnboardingStepDetail(
   const saveDisabled = !state.configFormDirty || state.configSaving || configLoading;
   const applyDisabled = !state.configFormDirty || state.configApplying || configLoading;
   const isTelegramStep = step.id === "telegram";
+  const isSlackStep = step.id === "slack";
+  const isDiscordStep = step.id === "discord";
+  const isSignalStep = step.id === "signal";
+  const isWhatsAppStep = step.id === "whatsapp";
+  const showInlineSetup = step.fields.length > 0 || isWhatsAppStep;
   const telegramBotToken = isTelegramStep
     ? readConfigValue(form, ["channels", "telegram", "botToken"]).trim()
     : "";
@@ -2097,6 +2104,47 @@ function renderOnboardingStepDetail(
     !telegramVerifyResult
       ? state.builderSetupError
       : null;
+  const slackVerifyRunning =
+    isSlackStep && state.builderSetupRunningConnectorId === slackVerifyConnectorId;
+  const discordVerifyRunning =
+    isDiscordStep && state.builderSetupRunningConnectorId === discordVerifyConnectorId;
+  const signalVerifyRunning =
+    isSignalStep && state.builderSetupRunningConnectorId === signalVerifyConnectorId;
+  const slackVerifyResult =
+    isSlackStep &&
+    state.builderSetupResult &&
+    (state.builderSetupResult.connectorId === slackVerifyConnectorId ||
+      state.builderSetupResult.connectorId.startsWith(`${slackVerifyConnectorId}:`))
+      ? state.builderSetupResult
+      : null;
+  const discordVerifyResult =
+    isDiscordStep &&
+    state.builderSetupResult &&
+    (state.builderSetupResult.connectorId === discordVerifyConnectorId ||
+      state.builderSetupResult.connectorId.startsWith(`${discordVerifyConnectorId}:`))
+      ? state.builderSetupResult
+      : null;
+  const signalVerifyResult =
+    isSignalStep &&
+    state.builderSetupResult &&
+    (state.builderSetupResult.connectorId === signalVerifyConnectorId ||
+      state.builderSetupResult.connectorId.startsWith(`${signalVerifyConnectorId}:`))
+      ? state.builderSetupResult
+      : null;
+  const slackSetupError =
+    isSlackStep && !slackVerifyRunning && state.builderSetupError && !slackVerifyResult
+      ? state.builderSetupError
+      : null;
+  const discordSetupError =
+    isDiscordStep && !discordVerifyRunning && state.builderSetupError && !discordVerifyResult
+      ? state.builderSetupError
+      : null;
+  const signalSetupError =
+    isSignalStep && !signalVerifyRunning && state.builderSetupError && !signalVerifyResult
+      ? state.builderSetupError
+      : null;
+  const connectorVerifyDisabled =
+    !showInlineSetup || configLoading || state.configSaving || state.configApplying;
   const telegramCreateOrUpdateAccountDisabled =
     !isTelegramStep ||
     !telegramAccountId ||
@@ -2200,62 +2248,72 @@ function renderOnboardingStepDetail(
 
         <!-- Fields -->
         ${
-          step.fields.length > 0
+          showInlineSetup
             ? html`
-                <div class="onboarding__fields">
-                  ${step.fields.map((field) => {
-                    const value = readConfigValue(form, field.path);
-                    return html`
-                      <label class="onboarding__field">
-                        <span class="onboarding__field-label">${field.label}</span>
-                        ${
-                          field.type === "select" && field.options
-                            ? html`
-                                <select
-                                  class="onboarding__input"
-                                  .value=${value || ""}
-                                  @change=${(e: Event) => {
-                                    const val = (e.target as HTMLSelectElement).value;
-                                    updateConfigFormValue(
-                                      state as Parameters<typeof updateConfigFormValue>[0],
-                                      field.path,
-                                      val === "true" ? true : val === "false" ? false : val,
-                                    );
-                                  }}
-                                >
-                                  <option value="">\u2014 select \u2014</option>
-                                  ${field.options.map(
-                                    (opt) =>
-                                      html`<option
-                                        value=${opt.value}
-                                        ?selected=${value === opt.value}
-                                      >
-                                        ${opt.label}
-                                      </option>`,
-                                  )}
-                                </select>
-                              `
-                            : html`
-                                <input
-                                  class="onboarding__input"
-                                  type=${field.type === "secret" ? "password" : "text"}
-                                  .value=${value}
-                                  placeholder=${field.placeholder}
-                                  @input=${(e: Event) => {
-                                    updateConfigFormValue(
-                                      state as Parameters<typeof updateConfigFormValue>[0],
-                                      field.path,
-                                      (e.target as HTMLInputElement).value,
-                                    );
-                                  }}
-                                />
-                              `
-                        }
-                        ${field.help ? html`<span class="onboarding__field-help">${field.help}</span>` : nothing}
-                      </label>
-                    `;
-                  })}
-                </div>
+                ${
+                  step.fields.length > 0
+                    ? html`
+                        <div class="onboarding__fields">
+                          ${step.fields.map((field) => {
+                            const value = readConfigValue(form, field.path);
+                            return html`
+                              <label class="onboarding__field">
+                                <span class="onboarding__field-label">${field.label}</span>
+                                ${
+                                  field.type === "select" && field.options
+                                    ? html`
+                                        <select
+                                          class="onboarding__input"
+                                          .value=${value || ""}
+                                          @change=${(e: Event) => {
+                                            const val = (e.target as HTMLSelectElement).value;
+                                            updateConfigFormValue(
+                                              state as Parameters<typeof updateConfigFormValue>[0],
+                                              field.path,
+                                              val === "true" ? true : val === "false" ? false : val,
+                                            );
+                                          }}
+                                        >
+                                          <option value="">\u2014 select \u2014</option>
+                                          ${field.options.map(
+                                            (opt) =>
+                                              html`<option
+                                                value=${opt.value}
+                                                ?selected=${value === opt.value}
+                                              >
+                                                ${opt.label}
+                                              </option>`,
+                                          )}
+                                        </select>
+                                      `
+                                    : html`
+                                        <input
+                                          class="onboarding__input"
+                                          type=${field.type === "secret" ? "password" : "text"}
+                                          .value=${value}
+                                          placeholder=${field.placeholder}
+                                          @input=${(e: Event) => {
+                                            updateConfigFormValue(
+                                              state as Parameters<typeof updateConfigFormValue>[0],
+                                              field.path,
+                                              (e.target as HTMLInputElement).value,
+                                            );
+                                          }}
+                                        />
+                                      `
+                                }
+                                ${
+                                  field.help
+                                    ? html`<span class="onboarding__field-help">${field.help}</span>`
+                                    : nothing
+                                }
+                              </label>
+                            `;
+                          })}
+                        </div>
+                      `
+                    : nothing
+                }
                 ${
                   isTelegramStep
                     ? html`
@@ -2342,20 +2400,26 @@ function renderOnboardingStepDetail(
                 <!-- Actions -->
                 <div class="onboarding__actions">
                   <div class="onboarding__actions-left">
-                    <button
-                      class="btn primary"
-                      ?disabled=${saveDisabled}
-                      @click=${() => saveConfig(state as Parameters<typeof saveConfig>[0])}
-                    >
-                      ${state.configSaving ? "Saving\u2026" : "Save Step"}
-                    </button>
-                    <button
-                      class="btn"
-                      ?disabled=${applyDisabled}
-                      @click=${() => applyConfig(state as Parameters<typeof applyConfig>[0])}
-                    >
-                      ${state.configApplying ? "Applying\u2026" : "Save & Apply"}
-                    </button>
+                    ${
+                      step.fields.length > 0
+                        ? html`
+                            <button
+                              class="btn primary"
+                              ?disabled=${saveDisabled}
+                              @click=${() => saveConfig(state as Parameters<typeof saveConfig>[0])}
+                            >
+                              ${state.configSaving ? "Saving\u2026" : "Save Step"}
+                            </button>
+                            <button
+                              class="btn"
+                              ?disabled=${applyDisabled}
+                              @click=${() => applyConfig(state as Parameters<typeof applyConfig>[0])}
+                            >
+                              ${state.configApplying ? "Applying\u2026" : "Save & Apply"}
+                            </button>
+                          `
+                        : nothing
+                    }
                     ${
                       isTelegramStep
                         ? html`
@@ -2516,6 +2580,121 @@ function renderOnboardingStepDetail(
                         : nothing
                     }
                     ${
+                      isSlackStep
+                        ? html`
+                            <button
+                              class="btn"
+                              ?disabled=${connectorVerifyDisabled || slackVerifyRunning}
+                              @click=${async () => {
+                                if (state.configFormDirty) {
+                                  await saveConfig(state as Parameters<typeof saveConfig>[0]);
+                                  if (state.configFormDirty || state.lastError) {
+                                    return;
+                                  }
+                                }
+                                await runBuilderSetupAction(
+                                  state as Parameters<typeof runBuilderSetupAction>[0],
+                                  {
+                                    connectorId: slackVerifyConnectorId,
+                                    inputs: {},
+                                  },
+                                );
+                              }}
+                            >
+                              ${slackVerifyRunning ? "Verifying…" : "Verify Slack credentials"}
+                            </button>
+                          `
+                        : nothing
+                    }
+                    ${
+                      isDiscordStep
+                        ? html`
+                            <button
+                              class="btn"
+                              ?disabled=${connectorVerifyDisabled || discordVerifyRunning}
+                              @click=${async () => {
+                                if (state.configFormDirty) {
+                                  await saveConfig(state as Parameters<typeof saveConfig>[0]);
+                                  if (state.configFormDirty || state.lastError) {
+                                    return;
+                                  }
+                                }
+                                await runBuilderSetupAction(
+                                  state as Parameters<typeof runBuilderSetupAction>[0],
+                                  {
+                                    connectorId: discordVerifyConnectorId,
+                                    inputs: {},
+                                  },
+                                );
+                              }}
+                            >
+                              ${discordVerifyRunning ? "Verifying…" : "Verify Discord token"}
+                            </button>
+                          `
+                        : nothing
+                    }
+                    ${
+                      isSignalStep
+                        ? html`
+                            <button
+                              class="btn"
+                              ?disabled=${connectorVerifyDisabled || signalVerifyRunning}
+                              @click=${async () => {
+                                if (state.configFormDirty) {
+                                  await saveConfig(state as Parameters<typeof saveConfig>[0]);
+                                  if (state.configFormDirty || state.lastError) {
+                                    return;
+                                  }
+                                }
+                                await runBuilderSetupAction(
+                                  state as Parameters<typeof runBuilderSetupAction>[0],
+                                  {
+                                    connectorId: signalVerifyConnectorId,
+                                    inputs: {},
+                                  },
+                                );
+                              }}
+                            >
+                              ${signalVerifyRunning ? "Verifying…" : "Verify Signal transport"}
+                            </button>
+                          `
+                        : nothing
+                    }
+                    ${
+                      isWhatsAppStep
+                        ? html`
+                            <button
+                              class="btn primary"
+                              ?disabled=${state.whatsappBusy || !state.connected}
+                              @click=${() => void state.handleWhatsAppStart(false)}
+                            >
+                              ${state.whatsappBusy ? "Working…" : "Show QR"}
+                            </button>
+                            <button
+                              class="btn"
+                              ?disabled=${state.whatsappBusy || !state.connected}
+                              @click=${() => void state.handleWhatsAppStart(true)}
+                            >
+                              Relink
+                            </button>
+                            <button
+                              class="btn"
+                              ?disabled=${state.whatsappBusy || !state.connected}
+                              @click=${() => void state.handleWhatsAppWait()}
+                            >
+                              Wait for scan
+                            </button>
+                            <button
+                              class="btn danger"
+                              ?disabled=${state.whatsappBusy || !state.connected}
+                              @click=${() => void state.handleWhatsAppLogout()}
+                            >
+                              Logout
+                            </button>
+                          `
+                        : nothing
+                    }
+                    ${
                       configLoading
                         ? html`
                             <span class="onboarding__dirty">Loading current config\u2026</span>
@@ -2555,7 +2734,27 @@ function renderOnboardingStepDetail(
                                             Default Target.
                                           </span>
                                         `
-                                      : nothing
+                                      : isSlackStep
+                                        ? html`
+                                            <span class="onboarding__dirty">
+                                              Verify Slack credentials checks bot + app tokens against Slack APIs.
+                                            </span>
+                                          `
+                                        : isDiscordStep
+                                          ? html`
+                                              <span class="onboarding__dirty"> Verify Discord token runs a live bot identity check. </span>
+                                            `
+                                          : isSignalStep
+                                            ? html`
+                                                <span class="onboarding__dirty"> Verify Signal transport checks your signal-cli endpoint. </span>
+                                              `
+                                            : isWhatsAppStep
+                                              ? html`
+                                                  <span class="onboarding__dirty">
+                                                    Show QR to start pairing, then click Wait for scan after scanning.
+                                                  </span>
+                                                `
+                                              : nothing
                     }
                   </div>
                   <div class="onboarding__actions-right">
@@ -2670,6 +2869,96 @@ function renderOnboardingStepDetail(
                           style="margin-top: 12px;"
                         >
                           ${telegramAutoDetectResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  slackSetupError
+                    ? html`
+                        <div class="callout danger" style="margin-top: 12px;">
+                          ${slackSetupError}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  slackVerifyResult
+                    ? html`
+                        <div
+                          class="callout ${slackVerifyResult.status === "configured" ? "success" : "warn"}"
+                          style="margin-top: 12px;"
+                        >
+                          ${slackVerifyResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  discordSetupError
+                    ? html`
+                        <div class="callout danger" style="margin-top: 12px;">
+                          ${discordSetupError}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  discordVerifyResult
+                    ? html`
+                        <div
+                          class="callout ${discordVerifyResult.status === "configured" ? "success" : "warn"}"
+                          style="margin-top: 12px;"
+                        >
+                          ${discordVerifyResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  signalSetupError
+                    ? html`
+                        <div class="callout danger" style="margin-top: 12px;">
+                          ${signalSetupError}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  signalVerifyResult
+                    ? html`
+                        <div
+                          class="callout ${signalVerifyResult.status === "configured" ? "success" : "warn"}"
+                          style="margin-top: 12px;"
+                        >
+                          ${signalVerifyResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  isWhatsAppStep && state.whatsappLoginMessage
+                    ? html`
+                        <div class="callout" style="margin-top: 12px;">
+                          ${state.whatsappLoginMessage}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  isWhatsAppStep && state.whatsappLoginConnected === true
+                    ? html`
+                        <div class="callout success" style="margin-top: 12px">
+                          WhatsApp is connected. You can move to the next setup step.
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  isWhatsAppStep && state.whatsappLoginQrDataUrl
+                    ? html`
+                        <div class="qr-wrap" style="margin-top: 12px;">
+                          <img src=${state.whatsappLoginQrDataUrl} alt="WhatsApp QR" />
                         </div>
                       `
                     : nothing

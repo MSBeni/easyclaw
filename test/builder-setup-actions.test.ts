@@ -184,6 +184,19 @@ describe("resolveQuickSetupForFocus", () => {
     expect(signalCard?.assist?.connectorId).toBe("channel:signal:verify-transport");
   });
 
+  it("guides WhatsApp pairing in-place from quick setup", () => {
+    const whatsapp = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
+      (value) => value.id === "channel:whatsapp",
+    );
+    expect(whatsapp).toBeTruthy();
+
+    const card = resolveQuickSetupForFocus(buildFocus(whatsapp!));
+    const instructions = card?.steps?.map((step) => step.instruction).join(" ");
+
+    expect(instructions).toContain("Start QR Scan");
+    expect(instructions).not.toContain("Open the Channels tab");
+  });
+
   it("maps Signal quick-setup account field to channels.signal.account", () => {
     const signal = listOpenClawConnectorDefinitions({ workspaceDir: process.cwd() }).find(
       (value) => value.id === "channel:signal",

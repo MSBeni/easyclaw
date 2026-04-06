@@ -1221,6 +1221,78 @@ function renderAssistSetup(
   `;
 }
 
+function renderWhatsAppInlineSetup(state: AppViewState): unknown {
+  return html`
+    <div class="quick-setup__assist">
+      <div class="quick-setup__assist-header">
+        <div>
+          <div class="quick-setup__assist-title">Pair WhatsApp</div>
+          <div class="quick-setup__assist-description">
+            Start QR pairing directly here, then wait for scan confirmation.
+          </div>
+        </div>
+      </div>
+
+      <div class="quick-setup__actions">
+        <div class="quick-setup__actions-left">
+          <button
+            class="btn btn--sm primary"
+            ?disabled=${state.whatsappBusy || !state.connected}
+            @click=${() => void state.handleWhatsAppStart(false)}
+          >
+            ${state.whatsappBusy ? "Working..." : "Show QR"}
+          </button>
+          <button
+            class="btn btn--sm"
+            ?disabled=${state.whatsappBusy || !state.connected}
+            @click=${() => void state.handleWhatsAppStart(true)}
+          >
+            Relink
+          </button>
+          <button
+            class="btn btn--sm"
+            ?disabled=${state.whatsappBusy || !state.connected}
+            @click=${() => void state.handleWhatsAppWait()}
+          >
+            Wait for scan
+          </button>
+          <button
+            class="btn btn--sm danger"
+            ?disabled=${state.whatsappBusy || !state.connected}
+            @click=${() => void state.handleWhatsAppLogout()}
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+
+      ${
+        state.whatsappLoginMessage
+          ? html`<div class="callout" style="margin-top:12px;">${state.whatsappLoginMessage}</div>`
+          : nothing
+      }
+      ${
+        state.whatsappLoginConnected === true
+          ? html`
+              <div class="callout success" style="margin-top: 12px">
+                WhatsApp is connected. Return to Builder and continue setup.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        state.whatsappLoginQrDataUrl
+          ? html`
+              <div class="qr-wrap" style="margin-top:12px;">
+                <img src=${state.whatsappLoginQrDataUrl} alt="WhatsApp QR" />
+              </div>
+            `
+          : nothing
+      }
+    </div>
+  `;
+}
+
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
@@ -1293,7 +1365,13 @@ export function renderQuickSetup(state: AppViewState): unknown {
         </div>
       </div>
 
-      ${def.assist ? renderAssistSetup(state, def, configForm) : nothing}
+      ${
+        focus.connectorId === "channel:whatsapp"
+          ? renderWhatsAppInlineSetup(state)
+          : def.assist
+            ? renderAssistSetup(state, def, configForm)
+            : nothing
+      }
 
       ${
         def.steps && def.steps.length > 0
