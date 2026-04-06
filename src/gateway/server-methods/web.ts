@@ -11,10 +11,20 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
-const resolveWebLoginProvider = () =>
-  listChannelPlugins().find((plugin) =>
-    (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
-  ) ?? null;
+const resolveWebLoginProvider = () => {
+  const plugins = listChannelPlugins();
+  return (
+    plugins.find((plugin) =>
+      (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
+    ) ??
+    plugins.find(
+      (plugin) =>
+        typeof plugin.gateway?.loginWithQrStart === "function" &&
+        typeof plugin.gateway?.loginWithQrWait === "function",
+    ) ??
+    null
+  );
+};
 
 function resolveAccountId(params: unknown): string | undefined {
   return typeof (params as { accountId?: unknown }).accountId === "string"
@@ -26,7 +36,10 @@ function respondProviderUnavailable(respond: RespondFn) {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "web login provider is not available"),
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "web login provider is not available (enable channels.whatsapp.enabled and apply config; if plugins.allow is set, include whatsapp).",
+    ),
   );
 }
 

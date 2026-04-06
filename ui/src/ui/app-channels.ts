@@ -5,12 +5,95 @@ import {
   startWhatsAppLogin,
   waitWhatsAppLogin,
 } from "./controllers/channels.ts";
-import { loadConfig, saveConfig } from "./controllers/config.ts";
+import {
+  applyConfig,
+  loadConfig,
+  saveConfig,
+  updateConfigFormValue,
+} from "./controllers/config.ts";
 import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
+const WEB_LOGIN_PROVIDER_UNAVAILABLE = "web login provider is not available";
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function readConfigValue(
+  form: Record<string, unknown> | null,
+  path: Array<string | number>,
+): unknown {
+  if (!form) {
+    return undefined;
+  }
+  let cursor: unknown = form;
+  for (const segment of path) {
+    if (cursor == null || typeof cursor !== "object" || Array.isArray(cursor)) {
+      return undefined;
+    }
+    cursor = (cursor as Record<string, unknown>)[String(segment)];
+  }
+  return cursor;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+}
+
+function isWhatsAppProviderUnavailable(message: string | null | undefined): boolean {
+  return message?.toLowerCase().includes(WEB_LOGIN_PROVIDER_UNAVAILABLE) ?? false;
+}
+
+async function ensureWhatsAppProviderConfigured(host: OpenClawApp): Promise<boolean> {
+  await loadConfig(host);
+  const form = asRecord(host.configForm);
+  if (!form) {
+    return false;
+  }
+
+  let changed = false;
+  const whatsappEnabled = readConfigValue(form, ["channels", "whatsapp", "enabled"]) === true;
+  if (!whatsappEnabled) {
+    updateConfigFormValue(host, ["channels", "whatsapp", "enabled"], true);
+    changed = true;
+  }
+
+  const allow = readStringArray(readConfigValue(form, ["plugins", "allow"]));
+  if (allow.length > 0 && !allow.some((entry) => entry.toLowerCase() === "whatsapp")) {
+    updateConfigFormValue(host, ["plugins", "allow", allow.length], "whatsapp");
+    changed = true;
+  }
+
+  if (!changed) {
+    return true;
+  }
+
+  await applyConfig(host);
+  if (host.lastError) {
+    return false;
+  }
+  await loadConfig(host);
+  return true;
+}
+
 export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
   await startWhatsAppLogin(host, force);
+  if (isWhatsAppProviderUnavailable(host.whatsappLoginMessage)) {
+    const configured = await ensureWhatsAppProviderConfigured(host);
+    if (configured) {
+      await startWhatsAppLogin(host, force);
+    } else if (isWhatsAppProviderUnavailable(host.whatsappLoginMessage)) {
+      host.whatsappLoginMessage =
+        "WhatsApp login provider is unavailable. Auto-enable failed. Set channels.whatsapp.enabled=true and, if plugins.allow is set, add whatsapp. Then retry.";
+    }
+  }
   await loadChannels(host, true);
 }
 
