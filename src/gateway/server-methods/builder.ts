@@ -1,4 +1,6 @@
 import { resolveDiscordAccount } from "../../../extensions/discord/src/accounts.js";
+import { fetchDiscord } from "../../../extensions/discord/src/api.js";
+import { listGuilds } from "../../../extensions/discord/src/guilds.js";
 import { probeDiscord } from "../../../extensions/discord/src/probe.js";
 import { normalizeDiscordToken } from "../../../extensions/discord/src/token.js";
 import { resolveGoogleChatAccount } from "../../../extensions/googlechat/src/accounts.js";
@@ -193,6 +195,94 @@ function setTelegramDefaultTargetInConfig(params: {
     ...params.cfg,
     channels: nextChannels,
   } as ReturnType<typeof loadConfig>;
+}
+
+function setChannelDefaultTargetInConfig(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  channel: string;
+  target: string;
+  accountId?: string;
+}): ReturnType<typeof loadConfig> {
+  const channels = asRecord(params.cfg.channels);
+  const nextChannels = channels ? { ...channels } : {};
+  const channelConfig = asRecord(nextChannels[params.channel]);
+  const nextChannelConfig = channelConfig ? { ...channelConfig } : {};
+  if (params.accountId) {
+    const accounts = asRecord(nextChannelConfig.accounts);
+    const nextAccounts = accounts ? { ...accounts } : {};
+    const account = asRecord(nextAccounts[params.accountId]);
+    const nextAccount = account ? { ...account } : {};
+    nextAccount.defaultTo = params.target;
+    nextAccounts[params.accountId] = nextAccount;
+    nextChannelConfig.accounts = nextAccounts;
+  } else {
+    nextChannelConfig.defaultTo = params.target;
+  }
+  nextChannels[params.channel] = nextChannelConfig;
+  return {
+    ...params.cfg,
+    channels: nextChannels,
+  } as ReturnType<typeof loadConfig>;
+}
+
+function setSignalHttpUrlInConfig(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  httpUrl: string;
+  accountId?: string;
+}): ReturnType<typeof loadConfig> {
+  const channels = asRecord(params.cfg.channels);
+  const nextChannels = channels ? { ...channels } : {};
+  const signalConfig = asRecord(nextChannels.signal);
+  const nextSignalConfig = signalConfig ? { ...signalConfig } : {};
+  if (params.accountId) {
+    const accounts = asRecord(nextSignalConfig.accounts);
+    const nextAccounts = accounts ? { ...accounts } : {};
+    const account = asRecord(nextAccounts[params.accountId]);
+    const nextAccount = account ? { ...account } : {};
+    nextAccount.httpUrl = params.httpUrl;
+    nextAccounts[params.accountId] = nextAccount;
+    nextSignalConfig.accounts = nextAccounts;
+  } else {
+    nextSignalConfig.httpUrl = params.httpUrl;
+  }
+  nextChannels.signal = nextSignalConfig;
+  return {
+    ...params.cfg,
+    channels: nextChannels,
+  } as ReturnType<typeof loadConfig>;
+}
+
+function parseSlackTargetHint(raw: string): { id?: string; name?: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const mention = trimmed.match(/^<#([A-Z0-9]+)(?:\|([^>]+))?>$/i);
+  if (mention?.[1]) {
+    return {
+      id: mention[1].toUpperCase(),
+      ...(mention[2]?.trim() ? { name: mention[2].trim() } : {}),
+    };
+  }
+  const withoutPrefix = trimmed.replace(/^(slack:|channel:)/i, "").trim();
+  if (/^[CDG][A-Z0-9]+$/i.test(withoutPrefix)) {
+    return { id: withoutPrefix.toUpperCase() };
+  }
+  const withoutHash = withoutPrefix.replace(/^#/, "").trim();
+  return withoutHash ? { name: withoutHash } : {};
+}
+
+function parseDiscordIdHint(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const mention = trimmed.match(/^<#(\d+)>$/);
+  if (mention?.[1]) {
+    return mention[1];
+  }
+  const prefixed = trimmed.replace(/^(discord:|channel:|guild:|server:)/i, "").trim();
+  return /^\d+$/.test(prefixed) ? prefixed : undefined;
 }
 
 function buildGmailSetupInputs(account: string, inputs: Record<string, unknown>) {
@@ -948,6 +1038,222 @@ export const builderHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        case "channel:slack:auto-default-target": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, [
+            "slack.accountId",
+            "accountId",
+            "account",
+          ]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const account = resolveSlackAccount({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const resolvedAccountId = accountId || account.accountId || "default";
+          const botToken =
+            normalizeSetupSecret(
+              firstStringInput(parsed.inputs, ["slack.botToken", "botToken", "token"]),
+            ) || normalizeSetupSecret(account.botToken?.trim() ?? "");
+          if (!botToken) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Slack bot token is missing for account "${resolvedAccountId}". Save Bot Token, then run Auto-detect Slack target.`,
+                updatedRefs: [],
+                summary: {
+                  command: "conversations.list",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Slack target",
+                  detail: "After saving Bot Token, run auto-detect again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const requestedTarget = firstStringInput(parsed.inputs, [
+            "slack.target",
+            "slack.defaultTo",
+            "defaultTo",
+            "target",
+            "channel",
+          ]);
+          const targetHint = parseSlackTargetHint(requestedTarget);
+          const client = createSlackWebClient(botToken, { timeout: 5000 });
+          const conversationResponse = asRecord(
+            await client.apiCall("conversations.list", {
+              types: "public_channel,private_channel,im,mpim",
+              exclude_archived: true,
+              limit: 200,
+            }),
+          );
+          if (conversationResponse?.ok === false) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Slack channel discovery failed: ${stringInput(conversationResponse, "error") || "Slack API rejected conversations.list"}`,
+                updatedRefs: [],
+                summary: {
+                  command: "conversations.list",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Slack target",
+                  detail: "Fix Slack permissions/tokens, then rerun auto-detect.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const discoveredConversations = Array.isArray(conversationResponse?.channels)
+            ? conversationResponse.channels
+                .map((entry) => asRecord(entry))
+                .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+                .map((entry) => {
+                  const id = stringInput(entry, "id").toUpperCase();
+                  if (!id) {
+                    return null;
+                  }
+                  return {
+                    id,
+                    name: stringInput(entry, "name"),
+                    archived: entry.is_archived === true,
+                    member: entry.is_member === true,
+                  };
+                })
+                .filter(
+                  (
+                    entry,
+                  ): entry is { id: string; name: string; archived: boolean; member: boolean } =>
+                    Boolean(entry),
+                )
+            : [];
+          if (discoveredConversations.length === 0) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message:
+                  "Slack auto-detect did not find any visible conversations for this bot. Invite the app to at least one channel, then rerun auto-detect.",
+                updatedRefs: [],
+                summary: {
+                  command: "conversations.list",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Slack target",
+                  detail: "After inviting the bot to a channel, run auto-detect again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const byHint = targetHint.id
+            ? discoveredConversations.find((conversation) => conversation.id === targetHint.id)
+            : targetHint.name
+              ? discoveredConversations.find(
+                  (conversation) =>
+                    conversation.name.toLowerCase() === targetHint.name?.toLowerCase(),
+                )
+              : undefined;
+          if (requestedTarget && !byHint) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Slack could not find a conversation matching "${requestedTarget}".`,
+                updatedRefs: [],
+                summary: {
+                  command: "conversations.list",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Slack target",
+                  detail:
+                    "Use a channel ID (channel:C...) or exact channel name, then rerun auto-detect.",
+                  inputs: accountId
+                    ? { accountId, target: requestedTarget }
+                    : { target: requestedTarget },
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const selected =
+            byHint ??
+            discoveredConversations.toSorted((left, right) => {
+              const leftRank = (left.member ? 0 : 1) + (left.id.startsWith("C") ? 0 : 1);
+              const rightRank = (right.member ? 0 : 1) + (right.id.startsWith("C") ? 0 : 1);
+              if (leftRank !== rightRank) {
+                return leftRank - rightRank;
+              }
+              return left.name.localeCompare(right.name);
+            })[0];
+          if (!selected) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: "Slack auto-detect could not choose a default target.",
+                updatedRefs: [],
+                summary: {
+                  command: "conversations.list",
+                  accountId: resolvedAccountId,
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const nextConfig = setChannelDefaultTargetInConfig({
+            cfg,
+            channel: "slack",
+            target: `channel:${selected.id}`,
+            ...(accountId ? { accountId } : {}),
+          });
+          await writeConfigFile(nextConfig);
+          const updatedRef = accountId
+            ? `channels.slack.accounts.${accountId}.defaultTo`
+            : "channels.slack.defaultTo";
+          const destinationLabel = selected.name ? `#${selected.name}` : selected.id;
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `Slack default target set to ${destinationLabel} (channel:${selected.id}) for account ${resolvedAccountId}.`,
+              updatedRefs: [updatedRef],
+              summary: {
+                command: "conversations.list",
+                accountId: resolvedAccountId,
+                defaultTo: `channel:${selected.id}`,
+                conversationName: selected.name || null,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
         case "channel:slack:verify-credentials": {
           const cfg = loadConfig();
           const requestedAccountId = firstStringInput(parsed.inputs, [
@@ -1084,6 +1390,213 @@ export const builderHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        case "channel:discord:auto-default-target": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, [
+            "discord.accountId",
+            "accountId",
+            "account",
+          ]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const account = resolveDiscordAccount({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const resolvedAccountId = accountId || account.accountId || "default";
+          const token =
+            normalizeDiscordToken(
+              firstStringInput(parsed.inputs, ["discord.token", "token", "botToken"]),
+              "agents.builder.setup.run.inputs.discord.token",
+            ) || normalizeDiscordToken(account.token, "channels.discord.token");
+          if (!token) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Discord bot token is missing for account "${resolvedAccountId}". Save Token, then run Auto-detect Discord target.`,
+                updatedRefs: [],
+                summary: {
+                  command: "GET /users/@me/guilds",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Discord target",
+                  detail: "After saving Token, run auto-detect again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const requestedGuild = firstStringInput(parsed.inputs, [
+            "discord.guild",
+            "discord.guildId",
+            "guild",
+            "guildId",
+          ]);
+          const requestedChannel = firstStringInput(parsed.inputs, [
+            "discord.channel",
+            "discord.channelId",
+            "channel",
+            "channelId",
+            "target",
+            "defaultTo",
+          ]);
+          const guildIdHint = parseDiscordIdHint(requestedGuild);
+          const channelIdHint = parseDiscordIdHint(requestedChannel);
+          const guildNameHint = requestedGuild.trim().toLowerCase();
+          const channelNameHint = requestedChannel
+            .replace(/^(channel:|discord:)/i, "")
+            .replace(/^#/, "")
+            .trim()
+            .toLowerCase();
+          const guilds = await listGuilds(token, fetch);
+          if (guilds.length === 0) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message:
+                  "Discord auto-detect did not find any guilds for this bot. Invite the bot to at least one server, then rerun auto-detect.",
+                updatedRefs: [],
+                summary: {
+                  command: "GET /users/@me/guilds",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Discord target",
+                  detail: "After inviting the bot to a server, run auto-detect again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const candidateGuilds = guildIdHint
+            ? guilds.filter((guild) => guild.id === guildIdHint)
+            : guildNameHint
+              ? guilds.filter((guild) => guild.name.trim().toLowerCase() === guildNameHint)
+              : guilds;
+          if ((guildIdHint || guildNameHint) && candidateGuilds.length === 0) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Discord auto-detect could not find a guild matching "${requestedGuild}".`,
+                updatedRefs: [],
+                summary: {
+                  command: "GET /users/@me/guilds",
+                  accountId: resolvedAccountId,
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          let selectedGuild: { id: string; name: string } | undefined;
+          let selectedChannel: { id: string; name: string } | undefined;
+          for (const guild of candidateGuilds) {
+            const rawChannels = await fetchDiscord<
+              Array<{ id?: string; name?: string; type?: number }>
+            >(`/guilds/${guild.id}/channels`, token);
+            const textChannels = rawChannels
+              .map((channel) => ({
+                id: typeof channel.id === "string" ? channel.id.trim() : "",
+                name: typeof channel.name === "string" ? channel.name.trim() : "",
+                type: channel.type,
+              }))
+              .filter((channel) => {
+                if (!channel.id) {
+                  return false;
+                }
+                if (typeof channel.type !== "number") {
+                  return false;
+                }
+                return channel.type === 0 || channel.type === 5;
+              });
+            if (textChannels.length === 0) {
+              continue;
+            }
+            const byHint = channelIdHint
+              ? textChannels.find((channel) => channel.id === channelIdHint)
+              : channelNameHint
+                ? textChannels.find((channel) => channel.name.toLowerCase() === channelNameHint)
+                : undefined;
+            const picked = byHint ?? textChannels[0];
+            if (!picked) {
+              continue;
+            }
+            selectedGuild = guild;
+            selectedChannel = picked;
+            if (byHint || !requestedChannel) {
+              break;
+            }
+          }
+          if (!selectedGuild || !selectedChannel || (requestedChannel && !selectedChannel)) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: requestedChannel
+                  ? `Discord auto-detect could not find a text channel matching "${requestedChannel}".`
+                  : "Discord auto-detect could not find any text channels where this bot can post.",
+                updatedRefs: [],
+                summary: {
+                  command: "GET /users/@me/guilds + GET /guilds/{guildId}/channels",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Discord target",
+                  detail:
+                    "Provide a specific guild/channel hint or invite the bot to a text channel, then rerun auto-detect.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const target = `channel:${selectedChannel.id}`;
+          const nextConfig = setChannelDefaultTargetInConfig({
+            cfg,
+            channel: "discord",
+            target,
+            ...(accountId ? { accountId } : {}),
+          });
+          await writeConfigFile(nextConfig);
+          const updatedRef = accountId
+            ? `channels.discord.accounts.${accountId}.defaultTo`
+            : "channels.discord.defaultTo";
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `Discord default target set to #${selectedChannel.name || selectedChannel.id} in ${selectedGuild.name} (${target}) for account ${resolvedAccountId}.`,
+              updatedRefs: [updatedRef],
+              summary: {
+                command: "GET /users/@me/guilds + GET /guilds/{guildId}/channels",
+                accountId: resolvedAccountId,
+                guildId: selectedGuild.id,
+                guildName: selectedGuild.name,
+                channelId: selectedChannel.id,
+                channelName: selectedChannel.name || null,
+                defaultTo: target,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
         case "channel:discord:verify-token": {
           const cfg = loadConfig();
           const requestedAccountId = firstStringInput(parsed.inputs, [
@@ -1164,6 +1677,112 @@ export const builderHandlers: GatewayRequestHandlers = {
               summary: {
                 command: "GET /users/@me",
                 accountId: resolvedAccountId,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
+        case "channel:signal:auto-detect-http-url": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, [
+            "signal.accountId",
+            "accountId",
+            "account",
+          ]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const account = resolveSignalAccount({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          const resolvedAccountId = accountId || account.accountId || "default";
+          const requestedHttpUrl = normalizeSetupSecret(
+            firstStringInput(parsed.inputs, ["signal.httpUrl", "httpUrl", "baseUrl"]),
+          );
+          const requestedHost = firstStringInput(parsed.inputs, ["signal.httpHost", "httpHost"]);
+          const requestedPortRaw = firstStringInput(parsed.inputs, ["signal.httpPort", "httpPort"]);
+          const requestedPort = Number.parseInt(requestedPortRaw, 10);
+          const hostCandidate = requestedHost
+            ? `http://${requestedHost.trim()}:${Number.isFinite(requestedPort) ? requestedPort : 8080}`
+            : "";
+          const candidates = dedupeStrings(
+            [
+              requestedHttpUrl,
+              hostCandidate,
+              account.baseUrl,
+              "http://127.0.0.1:8080",
+              "http://localhost:8080",
+            ]
+              .map((value) => value.trim())
+              .filter((value) => value.length > 0),
+          );
+          const attempts: Array<{
+            url: string;
+            ok: boolean;
+            error?: string | null;
+            version?: string | null;
+          }> = [];
+          let selected: { url: string; version?: string | null } | null = null;
+          for (const url of candidates) {
+            const probe = await probeSignal(url, 3000);
+            attempts.push({
+              url,
+              ok: probe.ok,
+              error: probe.error,
+              version: probe.version,
+            });
+            if (probe.ok) {
+              selected = { url, version: probe.version };
+              break;
+            }
+          }
+          if (!selected) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message:
+                  "Signal auto-detect could not reach signal-cli on common local endpoints. Start signal-cli HTTP mode (or provide signal.httpUrl), then retry.",
+                updatedRefs: [],
+                summary: {
+                  command: "signal-cli version",
+                  accountId: resolvedAccountId,
+                  attemptedUrls: attempts.map((attempt) => attempt.url),
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Signal URL",
+                  detail:
+                    "After signal-cli HTTP is running (or you set signal.httpUrl), run auto-detect again.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const nextConfig = setSignalHttpUrlInConfig({
+            cfg,
+            httpUrl: selected.url,
+            ...(accountId ? { accountId } : {}),
+          });
+          await writeConfigFile(nextConfig);
+          const updatedRef = accountId
+            ? `channels.signal.accounts.${accountId}.httpUrl`
+            : "channels.signal.httpUrl";
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `Signal transport URL set to ${selected.url}${selected.version ? ` (signal-cli ${selected.version})` : ""} for account ${resolvedAccountId}.`,
+              updatedRefs: [updatedRef],
+              summary: {
+                command: "signal-cli version",
+                accountId: resolvedAccountId,
+                httpUrl: selected.url,
+                version: selected.version ?? null,
               },
             },
             undefined,
@@ -1490,11 +2109,17 @@ export const builderHandlers: GatewayRequestHandlers = {
           const tenantId = normalizeSetupSecret(
             firstStringInput(parsed.inputs, ["msteams.tenantId", "tenantId"]),
           );
+          const persistedMSTeamsConfig = asRecord(cfg.channels?.msteams) ?? {};
           const msteamsConfig = {
-            ...asRecord(cfg.channels?.msteams),
+            ...persistedMSTeamsConfig,
             ...(appId ? { appId } : {}),
             ...(appPassword ? { appPassword } : {}),
             ...(tenantId ? { tenantId } : {}),
+          } as {
+            enabled?: boolean;
+            appId?: string;
+            appPassword?: string;
+            tenantId?: string;
           };
           if (msteamsConfig.enabled === false) {
             respond(
@@ -2323,8 +2948,11 @@ export const builderHandlers: GatewayRequestHandlers = {
         return;
       }
       if (
+        parsed.connectorId === "channel:slack:auto-default-target" ||
         parsed.connectorId === "channel:slack:verify-credentials" ||
+        parsed.connectorId === "channel:discord:auto-default-target" ||
         parsed.connectorId === "channel:discord:verify-token" ||
+        parsed.connectorId === "channel:signal:auto-detect-http-url" ||
         parsed.connectorId === "channel:signal:verify-transport" ||
         parsed.connectorId === "channel:googlechat:verify-auth" ||
         parsed.connectorId === "channel:matrix:verify-credentials" ||
@@ -2332,19 +2960,25 @@ export const builderHandlers: GatewayRequestHandlers = {
         parsed.connectorId === "channel:imessage:verify-transport"
       ) {
         const label =
-          parsed.connectorId === "channel:slack:verify-credentials"
-            ? "Verify Slack credentials"
-            : parsed.connectorId === "channel:discord:verify-token"
-              ? "Verify Discord token"
-              : parsed.connectorId === "channel:signal:verify-transport"
-                ? "Verify Signal transport"
-                : parsed.connectorId === "channel:googlechat:verify-auth"
-                  ? "Verify Google Chat auth"
-                  : parsed.connectorId === "channel:matrix:verify-credentials"
-                    ? "Verify Matrix credentials"
-                    : parsed.connectorId === "channel:msteams:verify-credentials"
-                      ? "Verify Teams credentials"
-                      : "Verify iMessage transport";
+          parsed.connectorId === "channel:slack:auto-default-target"
+            ? "Auto-detect Slack target"
+            : parsed.connectorId === "channel:slack:verify-credentials"
+              ? "Verify Slack credentials"
+              : parsed.connectorId === "channel:discord:auto-default-target"
+                ? "Auto-detect Discord target"
+                : parsed.connectorId === "channel:discord:verify-token"
+                  ? "Verify Discord token"
+                  : parsed.connectorId === "channel:signal:auto-detect-http-url"
+                    ? "Auto-detect Signal URL"
+                    : parsed.connectorId === "channel:signal:verify-transport"
+                      ? "Verify Signal transport"
+                      : parsed.connectorId === "channel:googlechat:verify-auth"
+                        ? "Verify Google Chat auth"
+                        : parsed.connectorId === "channel:matrix:verify-credentials"
+                          ? "Verify Matrix credentials"
+                          : parsed.connectorId === "channel:msteams:verify-credentials"
+                            ? "Verify Teams credentials"
+                            : "Verify iMessage transport";
         respond(
           true,
           {

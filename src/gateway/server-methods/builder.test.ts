@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   createSlackWebClient: vi.fn(),
   slackApiCall: vi.fn(),
   resolveDiscordAccount: vi.fn(),
+  fetchDiscord: vi.fn(),
+  listGuilds: vi.fn(),
   probeDiscord: vi.fn(),
   resolveGoogleChatAccount: vi.fn(),
   probeGoogleChat: vi.fn(),
@@ -87,6 +89,14 @@ vi.mock("../../../extensions/slack/src/client.js", () => ({
 
 vi.mock("../../../extensions/discord/src/accounts.js", () => ({
   resolveDiscordAccount: mocks.resolveDiscordAccount,
+}));
+
+vi.mock("../../../extensions/discord/src/api.js", () => ({
+  fetchDiscord: mocks.fetchDiscord,
+}));
+
+vi.mock("../../../extensions/discord/src/guilds.js", () => ({
+  listGuilds: mocks.listGuilds,
 }));
 
 vi.mock("../../../extensions/discord/src/probe.js", () => ({
@@ -225,6 +235,19 @@ describe("builder gateway handlers", () => {
       elapsedMs: 11,
       bot: { id: "12345", username: "openclaw-bot" },
     });
+    mocks.listGuilds.mockResolvedValue([
+      {
+        id: "9876543210",
+        name: "OpenClaw Lab",
+      },
+    ]);
+    mocks.fetchDiscord.mockResolvedValue([
+      {
+        id: "1234567890",
+        name: "general",
+        type: 0,
+      },
+    ]);
     mocks.resolveGoogleChatAccount.mockReturnValue({
       accountId: "default",
       enabled: true,
@@ -904,6 +927,73 @@ describe("builder gateway handlers", () => {
     );
   });
 
+  it("auto-detects Slack default target and writes channels.slack.defaultTo", async () => {
+    mocks.slackApiCall.mockResolvedValue({
+      ok: true,
+      channels: [{ id: "C024BE91L", name: "ops", is_member: true, is_archived: false }],
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:slack:auto-default-target",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.slackApiCall).toHaveBeenCalledWith(
+      "conversations.list",
+      expect.objectContaining({
+        types: "public_channel,private_channel,im,mpim",
+        exclude_archived: true,
+      }),
+    );
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          slack: expect.objectContaining({
+            defaultTo: "channel:C024BE91L",
+          }),
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:slack:auto-default-target",
+        status: "configured",
+        message: expect.stringContaining("Slack default target set to"),
+        updatedRefs: ["channels.slack.defaultTo"],
+      }),
+    );
+  });
+
+  it("returns retry guidance when Slack auto-detect finds no visible conversations", async () => {
+    mocks.slackApiCall.mockResolvedValue({
+      ok: true,
+      channels: [],
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:slack:auto-default-target",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:slack:auto-default-target",
+        status: "needs_setup",
+        message: expect.stringContaining("did not find any visible conversations"),
+        resume: expect.objectContaining({
+          connectorId: "channel:slack:auto-default-target",
+          label: "Auto-detect Slack target",
+        }),
+      }),
+    );
+  });
+
   it("verifies Slack bot and app credentials with live API checks", async () => {
     const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
       connectorId: "channel:slack:verify-credentials",
@@ -953,6 +1043,59 @@ describe("builder gateway handlers", () => {
     );
   });
 
+  it("auto-detects Discord default target and writes channels.discord.defaultTo", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:discord:auto-default-target",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.listGuilds).toHaveBeenCalledWith("discord-token", fetch);
+    expect(mocks.fetchDiscord).toHaveBeenCalledWith("/guilds/9876543210/channels", "discord-token");
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          discord: expect.objectContaining({
+            defaultTo: "channel:1234567890",
+          }),
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:discord:auto-default-target",
+        status: "configured",
+        message: expect.stringContaining("Discord default target set to"),
+      }),
+    );
+  });
+
+  it("returns retry guidance when Discord auto-detect sees no guild membership", async () => {
+    mocks.listGuilds.mockResolvedValue([]);
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:discord:auto-default-target",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:discord:auto-default-target",
+        status: "needs_setup",
+        message: expect.stringContaining("did not find any guilds"),
+        resume: expect.objectContaining({
+          connectorId: "channel:discord:auto-default-target",
+          label: "Auto-detect Discord target",
+        }),
+      }),
+    );
+  });
+
   it("verifies Discord token against the bot identity endpoint", async () => {
     const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
       connectorId: "channel:discord:verify-token",
@@ -971,6 +1114,85 @@ describe("builder gateway handlers", () => {
         connectorId: "channel:discord:verify-token",
         status: "configured",
         message: expect.stringContaining("@openclaw-bot"),
+      }),
+    );
+  });
+
+  it("auto-detects Signal HTTP transport URL and writes channels.signal.httpUrl", async () => {
+    mocks.probeSignal.mockImplementation(async (baseUrl: string) => {
+      if (baseUrl === "http://localhost:8080") {
+        return {
+          ok: true,
+          status: 200,
+          elapsedMs: 8,
+          version: "0.13.0",
+          error: null,
+        };
+      }
+      return {
+        ok: false,
+        status: 503,
+        elapsedMs: 6,
+        version: null,
+        error: "unreachable",
+      };
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:signal:auto-detect-http-url",
+      inputs: {
+        httpUrl: "http://localhost:8080",
+      },
+    });
+    await invoke();
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          signal: expect.objectContaining({
+            httpUrl: "http://localhost:8080",
+          }),
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:signal:auto-detect-http-url",
+        status: "configured",
+        message: expect.stringContaining("Signal transport URL set to"),
+        updatedRefs: ["channels.signal.httpUrl"],
+      }),
+    );
+  });
+
+  it("returns retry guidance when Signal auto-detect cannot reach transport", async () => {
+    mocks.probeSignal.mockResolvedValue({
+      ok: false,
+      status: 503,
+      elapsedMs: 6,
+      version: null,
+      error: "unreachable",
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:signal:auto-detect-http-url",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:signal:auto-detect-http-url",
+        status: "needs_setup",
+        message: expect.stringContaining("could not reach signal-cli"),
+        resume: expect.objectContaining({
+          connectorId: "channel:signal:auto-detect-http-url",
+          label: "Auto-detect Signal URL",
+        }),
       }),
     );
   });
@@ -1112,7 +1334,7 @@ describe("builder gateway handlers", () => {
           tenantId: "teams-tenant",
         },
       },
-    });
+    } as unknown as ReturnType<typeof mocks.loadConfig>);
 
     const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
       connectorId: "channel:msteams:verify-credentials",
@@ -1149,7 +1371,7 @@ describe("builder gateway handlers", () => {
           tenantId: "teams-tenant",
         },
       },
-    });
+    } as unknown as ReturnType<typeof mocks.loadConfig>);
     mocks.probeMSTeams.mockResolvedValue({
       ok: false,
       error: "missing credentials",
@@ -1251,7 +1473,7 @@ describe("builder gateway handlers", () => {
           model: "openai/gpt-4o",
         },
       },
-    });
+    } as unknown as ReturnType<typeof mocks.loadConfig>);
     const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
       connectorId: "platform:core-model",
       inputs: {},

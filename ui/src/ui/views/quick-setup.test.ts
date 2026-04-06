@@ -14,6 +14,45 @@ function buildFocus(params: { connectorId: string; ref: string }): BuilderSetupF
 }
 
 describe("quick setup connector assist parity", () => {
+  it("maps Slack to a dedicated auto-default-target assist action", () => {
+    const setup = resolveQuickSetupForFocus(
+      buildFocus({
+        connectorId: "channel:slack",
+        ref: "channels.slack",
+      }),
+    );
+
+    expect(setup?.assist?.connectorId).toBe("channel:slack:auto-default-target");
+    expect(setup?.assist?.runLabel).toBe("Auto-detect target");
+    expect(setup?.docsHint).toBe("https://docs.openclaw.ai/channels/slack");
+  });
+
+  it("maps Discord to a dedicated auto-default-target assist action", () => {
+    const setup = resolveQuickSetupForFocus(
+      buildFocus({
+        connectorId: "channel:discord",
+        ref: "channels.discord",
+      }),
+    );
+
+    expect(setup?.assist?.connectorId).toBe("channel:discord:auto-default-target");
+    expect(setup?.assist?.runLabel).toBe("Auto-detect target");
+    expect(setup?.docsHint).toBe("https://docs.openclaw.ai/channels/discord");
+  });
+
+  it("maps Signal to a dedicated auto-detect-http-url assist action", () => {
+    const setup = resolveQuickSetupForFocus(
+      buildFocus({
+        connectorId: "channel:signal",
+        ref: "channels.signal",
+      }),
+    );
+
+    expect(setup?.assist?.connectorId).toBe("channel:signal:auto-detect-http-url");
+    expect(setup?.assist?.runLabel).toBe("Auto-detect Signal URL");
+    expect(setup?.docsHint).toBe("https://docs.openclaw.ai/channels/signal");
+  });
+
   it("maps Google Chat to a dedicated verify-auth assist action", () => {
     const setup = resolveQuickSetupForFocus(
       buildFocus({
