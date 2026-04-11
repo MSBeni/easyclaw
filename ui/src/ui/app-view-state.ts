@@ -169,7 +169,10 @@ export type AppViewState = {
   builderBrief: string;
   builderTemplateId: string;
   builderModelId: string;
+  builderAgentName: string;
+  builderWorkspaceDocEdits: Record<string, string>;
   builderSetupFocus: {
+    actionId?: string | null;
     connectorId: string | null;
     connectorLabel?: string | null;
     connectorKind?: string | null;
@@ -182,6 +185,36 @@ export type AppViewState = {
     connectorRequiresAuth?: boolean;
     connectorInstallRequired?: boolean;
     connectorInstallStrategy?: "none" | "bundled" | "npm" | "local" | "external" | null;
+    actionKind?: "install" | "connect" | "configure" | "enable" | "policy" | "verify" | "question";
+    actionSource?:
+      | "setup-task"
+      | "verification"
+      | "requirement-gap"
+      | "planner-question"
+      | "runtime-auth"
+      | null;
+    requiredFields?: Array<{
+      key: string;
+      label: string;
+      kind: string;
+      required: boolean;
+      inputKey?: string;
+      configPath?: string;
+      inputType?: "text" | "secret" | "select";
+      placeholder?: string;
+      help?: string;
+      options?: Array<{ value: string; label: string }>;
+    }>;
+    uiSchema?: {
+      variant: "guided-setup" | "inline-question" | "expert-config";
+      section?: string;
+      fieldKeys: string[];
+    } | null;
+    completionSignal?: {
+      kind: "integration-status" | "verification" | "builder-check";
+      target: string;
+      detail: string;
+    } | null;
     title: string;
     detail: string;
     refs: string[];

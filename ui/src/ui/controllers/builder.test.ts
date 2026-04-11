@@ -26,6 +26,8 @@ function createState(): {
     builderBrief: "",
     builderTemplateId: "",
     builderModelId: "",
+    builderAgentName: "",
+    builderWorkspaceDocEdits: {},
     builderSetupInputs: {},
     builderSetupRunningConnectorId: null,
     builderSetupError: null,
@@ -129,6 +131,25 @@ describe("builder controller", () => {
     });
   });
 
+  it("includes builder agent name override in plan requests", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Create a daily digest";
+    state.builderAgentName = "Podcast Ideas Bot";
+    request.mockResolvedValue({
+      draft: {
+        templateId: "daily-briefing",
+      },
+      plan: { status: "ready" },
+    });
+
+    await loadBuilderPlan(state);
+
+    expect(request).toHaveBeenCalledWith("agents.builder.plan", {
+      brief: "Create a daily digest",
+      agentName: "Podcast Ideas Bot",
+    });
+  });
+
   it("applies the builder plan and refreshes agents and cron state", async () => {
     const { state, request } = createState();
     state.builderBrief = "Create a daily digest";
@@ -207,6 +228,71 @@ describe("builder controller", () => {
     expect(state.builderConfirmApply).toBe(false);
   });
 
+  it("includes edited managed workspace docs when applying a builder plan", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Create a daily digest";
+    state.builderWorkspaceDocEdits = {
+      "primary:AGENTS.md": "## Reviewed Instructions\n\n- Deliver only the final summary.",
+    };
+    request
+      .mockResolvedValueOnce({
+        draft: {
+          templateId: "daily-briefing",
+        },
+        result: {
+          status: "applied",
+          agent: {
+            agentId: "daily-briefing",
+            name: "Morning Brief",
+            workspaceDir: "/tmp/workspace",
+            agentDir: "/tmp/agent",
+          },
+          workspace: { metadataPath: "/tmp/agent/easyclaw-blueprint.json", files: [] },
+          bindings: {
+            added: [],
+            removed: [],
+            updated: [],
+            skipped: [],
+            conflicts: [],
+            ignored: [],
+          },
+          automation: { jobs: [] },
+          warnings: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "per-sender",
+        agents: [{ id: "daily-briefing", name: "Morning Brief" }],
+      })
+      .mockResolvedValueOnce({
+        jobs: [],
+        total: 0,
+        limit: 25,
+        offset: 0,
+        hasMore: false,
+        nextOffset: null,
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        count: 0,
+      });
+
+    await applyBuilderPlan(state);
+
+    expect(request).toHaveBeenCalledWith("agents.builder.apply", {
+      brief: "Create a daily digest",
+      workspaceDocEdits: [
+        {
+          nodeId: "primary",
+          fileName: "AGENTS.md",
+          content: "## Reviewed Instructions\n\n- Deliver only the final summary.",
+        },
+      ],
+    });
+  });
+
   it("runs live verification and updates the current builder plan", async () => {
     const { state, request } = createState();
     state.builderBrief = "Create a daily digest";
@@ -247,6 +333,64 @@ describe("builder controller", () => {
     );
   });
 
+  it("replaces stale duplicate Slack blockers with the latest verification-backed setup action", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Create a research agent and send the result to Slack every morning.";
+    state.builderPlan = {
+      draft: {
+        templateId: "research-agent",
+        buildSpec: {
+          setupActions: [
+            { id: "channel:slack:enable" },
+            { id: "channel:slack:auto-default-target" },
+          ],
+        },
+      } as never,
+      workspacePreviews: [],
+      plan: { status: "needs_setup" } as never,
+      graphPlans: [],
+    };
+    request.mockResolvedValue({
+      draft: {
+        templateId: "research-agent",
+        buildSpec: {
+          setupActions: [
+            {
+              id: "channel:slack:auto-default-target",
+              connectorId: "channel:slack",
+              title: "Verify Slack delivery target",
+            },
+          ],
+        },
+        planning: {
+          integrations: [],
+          verifications: [],
+        },
+      },
+      plan: { status: "needs_setup" },
+      verification: {
+        fingerprint: "verify-slack-123",
+        checkedAt: "2026-04-09T22:19:00.528Z",
+        passedCount: 1,
+        failedCount: 1,
+        blockedCount: 0,
+        unresolvedCount: 0,
+        results: [],
+      },
+    });
+
+    await verifyBuilderPlan(state);
+
+    expect(state.builderPlan?.draft.buildSpec.setupActions.map((action) => action.id)).toEqual([
+      "channel:slack:auto-default-target",
+    ]);
+    expect(state.builderVerifyResult).toEqual(
+      expect.objectContaining({
+        verification: expect.objectContaining({ fingerprint: "verify-slack-123" }),
+      }),
+    );
+  });
+
   it("updates local quick-setup input state", () => {
     const { state } = createState();
     updateBuilderSetupInput(state, "gmail.account", "automation@example.com");
@@ -255,7 +399,7 @@ describe("builder controller", () => {
     expect(state.builderSetupError).toBe(null);
   });
 
-  it("runs a builder setup action and refreshes config and plan", async () => {
+  it("runs a builder setup action and refreshes config and live verification", async () => {
     const { state, request } = createState();
     state.builderBrief = "Create a daily Telegram briefing from my Gmail every morning at 9am.";
     request
@@ -280,7 +424,18 @@ describe("builder controller", () => {
         draft: {
           templateId: "daily-briefing",
         },
+        workspacePreviews: [],
         plan: { status: "needs_setup" },
+        graphPlans: [],
+        verification: {
+          fingerprint: "verify-123",
+          checkedAt: "2026-04-08T12:00:00.000Z",
+          passedCount: 0,
+          failedCount: 0,
+          blockedCount: 1,
+          unresolvedCount: 0,
+          results: [],
+        },
       });
 
     await runBuilderSetupAction(state, {
@@ -295,6 +450,7 @@ describe("builder controller", () => {
       [
         "agents.builder.setup.run",
         {
+          actionId: "platform:gmail-hook",
           connectorId: "platform:gmail-hook",
           inputs: {
             account: "automation@example.com",
@@ -304,7 +460,7 @@ describe("builder controller", () => {
       ],
       ["config.get", {}],
       [
-        "agents.builder.plan",
+        "agents.builder.verify",
         {
           brief: "Create a daily Telegram briefing from my Gmail every morning at 9am.",
         },
@@ -317,6 +473,11 @@ describe("builder controller", () => {
       }),
     );
     expect(state.builderSetupRunningConnectorId).toBe(null);
+    expect(state.builderVerifyResult).toEqual(
+      expect.objectContaining({
+        verification: expect.objectContaining({ fingerprint: "verify-123" }),
+      }),
+    );
   });
 
   it("keeps an auth handoff result without refreshing config or plan", async () => {
@@ -350,6 +511,7 @@ describe("builder controller", () => {
       [
         "agents.builder.setup.run",
         {
+          actionId: "platform:gmail-hook",
           connectorId: "platform:gmail-hook",
           inputs: {
             account: "automation@example.com",
@@ -392,6 +554,7 @@ describe("builder controller", () => {
       [
         "agents.builder.setup.run",
         {
+          actionId: "platform:gmail-hook",
           connectorId: "platform:gmail-hook",
           inputs: {
             account: "automation@example.com",
@@ -402,6 +565,78 @@ describe("builder controller", () => {
     expect(state.builderSetupResult).toEqual(
       expect.objectContaining({
         status: "needs_credentials",
+      }),
+    );
+  });
+
+  it("refreshes config and verification after action-native partial setup progress", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Use web research in this workflow.";
+    request
+      .mockResolvedValueOnce({
+        connectorId: "tools:web",
+        actionId: "tools:web:configure",
+        status: "needs_auth",
+        message: "Provider saved, but credentials are still missing.",
+        updatedRefs: ["tools.web.search.provider"],
+      })
+      .mockResolvedValueOnce({
+        hash: "config-hash",
+        valid: true,
+        config: { tools: { web: { search: { provider: "brave" } } } },
+        raw: '{\n  "tools": {}\n}',
+        issues: [],
+      })
+      .mockResolvedValueOnce({
+        draft: {
+          templateId: "research-agent",
+        },
+        workspacePreviews: [],
+        plan: { status: "needs_setup" },
+        graphPlans: [],
+        verification: {
+          fingerprint: "verify-web-123",
+          checkedAt: "2026-04-08T13:00:00.000Z",
+          passedCount: 0,
+          failedCount: 0,
+          blockedCount: 1,
+          unresolvedCount: 0,
+          results: [],
+        },
+      });
+
+    await runBuilderSetupAction(state, {
+      actionId: "tools:web:configure",
+      connectorId: "tools:web",
+      inputs: {
+        provider: "brave",
+      },
+    });
+
+    expect(request.mock.calls).toEqual([
+      [
+        "agents.builder.setup.run",
+        {
+          actionId: "tools:web:configure",
+          connectorId: "tools:web",
+          inputs: {
+            provider: "brave",
+          },
+        },
+      ],
+      ["config.get", {}],
+      [
+        "agents.builder.verify",
+        {
+          brief: "Use web research in this workflow.",
+        },
+      ],
+    ]);
+    expect(state.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "tools:web:configure",
+        connectorId: "tools:web",
+        status: "needs_auth",
       }),
     );
   });
@@ -424,11 +659,13 @@ describe("builder controller", () => {
     expect(state.builderSetupError).toBe(null);
     expect(state.builderSetupResult).toEqual(
       expect.objectContaining({
+        actionId: "platform:gmail-hook",
         connectorId: "platform:gmail-hook",
         status: "needs_auth",
         authSteps: expect.arrayContaining([
           expect.objectContaining({
-            connectorId: "platform:gmail-hook:gog-auth",
+            actionId: "platform:gmail-hook:gog-auth",
+            connectorId: "platform:gmail-hook",
             label: "Grant Gmail access in gog",
             command:
               "gog login automation@example.com --client openclaw-gmail-hook --services gmail --gmail-scope full --force-consent",
@@ -457,10 +694,12 @@ describe("builder controller", () => {
     expect(state.builderSetupError).toBe(null);
     expect(state.builderSetupResult).toEqual(
       expect.objectContaining({
+        actionId: "platform:gmail-hook",
         connectorId: "platform:gmail-hook",
         status: "needs_credentials",
         credentialImport: expect.objectContaining({
-          connectorId: "platform:gmail-hook:gog-credentials",
+          actionId: "platform:gmail-hook:gog-credentials",
+          connectorId: "platform:gmail-hook",
           consoleUrl: "https://console.cloud.google.com/apis/credentials?project=project-123",
         }),
       }),

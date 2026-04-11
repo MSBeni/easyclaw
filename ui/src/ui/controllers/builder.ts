@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { saveBuilderSetupSession } from "../storage.ts";
 import { loadAgents, type AgentsState } from "./agents.ts";
 import { loadConfig, type ConfigState } from "./config.ts";
 import { loadCronStatus, reloadCronJobs, type CronState } from "./cron.ts";
@@ -24,6 +25,155 @@ export type BuilderDraftSummary = {
     required: boolean;
   }>;
   ready: boolean;
+  buildSpec: {
+    version: number;
+    status: string;
+    contract: {
+      id: string;
+      version: string;
+      kind: string;
+      deterministicValidationRequired: boolean;
+      plannerModelPolicy: string;
+    };
+    planner: {
+      mode: "model-backed" | "fallback-deterministic";
+      attempts: number;
+      repairCount: number;
+      usedModelRef?: string;
+      usedModelSource?: string;
+      fallbackReason?: string;
+    };
+    context: {
+      capabilityContractCount: number;
+      connectorCount: number;
+      templateExemplarCount: number;
+      readyIntegrationCount: number;
+      unresolvedIntegrationCount: number;
+    };
+    goal: {
+      primaryGoal: string;
+      executionMode: string;
+      confidence: string;
+    };
+    template: {
+      templateId: string;
+      displayName: string;
+      confidence: string;
+      reasons: string[];
+    };
+    schedule: {
+      cron?: string;
+      description?: string;
+      timezone?: string;
+      timezoneLabel?: string;
+      assumed?: boolean;
+    };
+    graph: {
+      mode: "single-agent" | "multi-agent" | "swarm";
+      entryNodeId: string;
+      nodes: Array<{
+        id: string;
+        roleId: string;
+        label: string;
+        entry: boolean;
+        templateId?: string;
+        goal?: string;
+        contractIds: string[];
+        connectorIds: string[];
+        upstreamNodeIds?: string[];
+        responsibilities: string[];
+      }>;
+      edges: Array<{
+        id: string;
+        fromNodeId: string;
+        toNodeId: string;
+        kind: string;
+        label: string;
+      }>;
+    };
+    integrations: Array<{
+      connectorId: string;
+      label: string;
+      status: string;
+      kind: string;
+      sourceKind: string;
+      issues: string[];
+    }>;
+    setupActions: Array<{
+      id?: string;
+      connectorId: string;
+      connectorLabel?: string;
+      title: string;
+      detail: string;
+      status: "completed" | "pending";
+      kind?: "install" | "connect" | "configure" | "enable" | "policy" | "verify" | "question";
+      source?:
+        | "setup-task"
+        | "verification"
+        | "requirement-gap"
+        | "planner-question"
+        | "runtime-auth";
+      blocking?: boolean;
+      refs: string[];
+      requiredFields?: Array<{
+        key: string;
+        label: string;
+        kind:
+          | "account"
+          | "destination"
+          | "sender"
+          | "filter"
+          | "session"
+          | "auth"
+          | "approval"
+          | "schedule"
+          | "model"
+          | "provider"
+          | "plugin"
+          | "generic";
+        required: boolean;
+        inputKey?: string;
+        configPath?: string;
+        inputType?: "text" | "secret" | "select";
+        placeholder?: string;
+        help?: string;
+        options?: Array<{
+          value: string;
+          label: string;
+        }>;
+      }>;
+      workflowRoles?: string[];
+      uiSchema?: {
+        variant: "guided-setup" | "inline-question" | "expert-config";
+        section?: string;
+        fieldKeys: string[];
+      };
+      guidedLauncher?: {
+        available: boolean;
+        target: "builder-quick-setup" | "config-tab";
+        connectorId?: string;
+      };
+      fallbackTarget?: {
+        refs: string[];
+        label?: string;
+      };
+      completionSignal?: {
+        kind: "integration-status" | "verification" | "builder-check";
+        target: string;
+        detail: string;
+      };
+    }>;
+    workspaceArtifacts: Array<{
+      fileName: string;
+      purpose: string;
+      status: "planned" | "suggested" | "generated";
+      previewSummary: string;
+      managedSection?: string;
+    }>;
+    assumptions: string[];
+    questions: string[];
+    notes: string[];
+  };
   requirements: {
     confidence: "low" | "medium" | "high";
     workflow: {
@@ -188,7 +338,7 @@ export type BuilderDraftSummary = {
       }>;
     };
     graph: {
-      mode: "single-agent" | "multi-agent";
+      mode: "single-agent" | "multi-agent" | "swarm";
       entryNodeId: string;
       nodes: Array<{
         id: string;
@@ -225,6 +375,15 @@ export type BuilderDraftSummary = {
 
 export type BuilderPlanResult = {
   draft: BuilderDraftSummary;
+  workspacePreviews: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    files: Array<{
+      name: string;
+      content: string;
+    }>;
+  }>;
   plan: Record<string, unknown>;
   graphPlans: Array<{
     nodeId: string;
@@ -262,6 +421,7 @@ export type BuilderApplyResult = {
 
 export type BuilderVerifyResult = {
   draft: BuilderDraftSummary;
+  workspacePreviews: BuilderPlanResult["workspacePreviews"];
   plan: Record<string, unknown>;
   graphPlans: BuilderPlanResult["graphPlans"];
   verification: {
@@ -276,6 +436,7 @@ export type BuilderVerifyResult = {
 };
 
 export type BuilderSetupRunResult = {
+  actionId?: string;
   connectorId: string;
   status: "configured" | "needs_auth" | "needs_credentials" | "needs_setup" | "started";
   message: string;
@@ -295,6 +456,7 @@ export type BuilderSetupRunResult = {
   };
   authSteps?: Array<{
     id: string;
+    actionId?: string;
     label: string;
     detail: string;
     command: string;
@@ -302,17 +464,20 @@ export type BuilderSetupRunResult = {
     inputs: Record<string, string>;
   }>;
   credentialImport?: {
+    actionId?: string;
     connectorId: string;
     label: string;
     detail: string;
     consoleUrl: string;
     autoDetect?: {
+      actionId?: string;
       connectorId: string;
       label: string;
       detail: string;
     };
   };
   resume?: {
+    actionId?: string;
     connectorId: string;
     label: string;
     detail: string;
@@ -326,6 +491,8 @@ export type BuilderState = {
   builderBrief: string;
   builderTemplateId: string;
   builderModelId: string;
+  builderAgentName: string;
+  builderWorkspaceDocEdits: Record<string, string>;
   builderSetupInputs: Record<string, string>;
   builderSetupRunningConnectorId: string | null;
   builderSetupError: string | null;
@@ -370,6 +537,7 @@ function buildGmailCredentialConsoleUrl(project: string | undefined): string {
 
 function buildGmailSetupResume(inputs: Record<string, string>): BuilderSetupRunResult["resume"] {
   return {
+    actionId: "platform:gmail-hook",
     connectorId: "platform:gmail-hook",
     label: "Retry Gmail setup",
     detail: "Run Gmail auto-setup again after the setup steps are complete.",
@@ -381,6 +549,147 @@ function buildGmailSetupResume(inputs: Record<string, string>): BuilderSetupRunR
       pushEndpoint: inputs.pushEndpoint ?? "",
     },
   };
+}
+
+function deriveBuilderSetupConnectorId(actionId: string | undefined, connectorId?: string): string {
+  const normalizedConnectorId = connectorId?.trim() ?? "";
+  if (normalizedConnectorId && normalizedConnectorId.split(":").filter(Boolean).length <= 2) {
+    return normalizedConnectorId;
+  }
+  const normalizedActionId = actionId?.trim() ?? "";
+  if (!normalizedActionId) {
+    return "";
+  }
+  const segments = normalizedActionId.split(":").filter(Boolean);
+  if (segments.length >= 2) {
+    return `${segments[0]}:${segments[1]}`;
+  }
+  return normalizedActionId;
+}
+
+function normalizeBuilderSetupActionRef(params: { actionId?: string; connectorId?: string }): {
+  actionId: string;
+  connectorId: string;
+} {
+  const actionId = params.actionId?.trim() || params.connectorId?.trim() || "";
+  const connectorId = deriveBuilderSetupConnectorId(actionId, params.connectorId);
+  return {
+    actionId,
+    connectorId,
+  };
+}
+
+function normalizeBuilderSetupResult(
+  result: BuilderSetupRunResult,
+  params: { actionId: string; connectorId: string },
+): BuilderSetupRunResult {
+  const normalizeNestedRef = (value: { actionId?: string; connectorId: string }) => {
+    const actionRef = normalizeBuilderSetupActionRef({
+      actionId: value.actionId ?? value.connectorId,
+      connectorId: value.connectorId,
+    });
+    return {
+      ...value,
+      actionId: actionRef.actionId,
+      connectorId: actionRef.connectorId,
+    };
+  };
+
+  return {
+    ...result,
+    actionId: result.actionId?.trim() || params.actionId,
+    connectorId: deriveBuilderSetupConnectorId(
+      result.actionId,
+      result.connectorId || params.connectorId,
+    ),
+    authSteps: result.authSteps?.map((step) => normalizeNestedRef(step)),
+    credentialImport: result.credentialImport
+      ? {
+          ...normalizeNestedRef(result.credentialImport),
+          autoDetect: result.credentialImport.autoDetect
+            ? normalizeNestedRef(result.credentialImport.autoDetect)
+            : undefined,
+        }
+      : undefined,
+    resume: result.resume ? normalizeNestedRef(result.resume) : undefined,
+  };
+}
+
+function persistBuilderSetupSessionState(state: {
+  builderSetupInputs: Record<string, string>;
+  builderSetupResult: BuilderSetupRunResult | null;
+  builderSetupFocus?: unknown;
+}) {
+  const focus = state.builderSetupFocus;
+  saveBuilderSetupSession({
+    focus:
+      focus && typeof focus === "object" && !Array.isArray(focus)
+        ? (focus as Record<string, unknown>)
+        : null,
+    inputs: state.builderSetupInputs,
+    result: state.builderSetupResult,
+  });
+}
+
+function buildWorkspaceDocEditsPayload(state: BuilderState): Array<{
+  nodeId: string;
+  fileName: string;
+  content: string;
+}> {
+  return Object.entries(state.builderWorkspaceDocEdits)
+    .map(([key, content]) => {
+      const separatorIndex = key.indexOf(":");
+      if (separatorIndex <= 0) {
+        return null;
+      }
+      const nodeId = key.slice(0, separatorIndex).trim();
+      const fileName = key.slice(separatorIndex + 1).trim();
+      const trimmedContent = content.trim();
+      if (!nodeId || !fileName || !trimmedContent) {
+        return null;
+      }
+      return {
+        nodeId,
+        fileName,
+        content,
+      };
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        nodeId: string;
+        fileName: string;
+        content: string;
+      } => Boolean(entry),
+    );
+}
+
+export function updateBuilderWorkspaceDocEdit(
+  state: BuilderState,
+  params: {
+    nodeId: string;
+    fileName: string;
+    content: string;
+  },
+) {
+  const key = `${params.nodeId}:${params.fileName}`;
+  state.builderWorkspaceDocEdits = {
+    ...state.builderWorkspaceDocEdits,
+    [key]: params.content,
+  };
+}
+
+export function resetBuilderWorkspaceDocEdit(
+  state: BuilderState,
+  params: {
+    nodeId: string;
+    fileName: string;
+  },
+) {
+  const key = `${params.nodeId}:${params.fileName}`;
+  const { [key]: _ignored, ...rest } = state.builderWorkspaceDocEdits;
+  state.builderWorkspaceDocEdits = rest;
 }
 
 function buildGmailSetupFallback(
@@ -494,39 +803,64 @@ export function updateBuilderSetupInput(state: BuilderState, key: string, value:
     [key]: value,
   };
   state.builderSetupError = null;
+  persistBuilderSetupSessionState(
+    state as BuilderState & {
+      builderSetupFocus?: unknown;
+    },
+  );
 }
 
 export async function runBuilderSetupAction(
   state: BuilderState,
-  params: { connectorId: string; inputs: Record<string, string> },
+  params: { actionId?: string; connectorId?: string; inputs: Record<string, string> },
 ) {
-  if (!state.client || !state.connected || !params.connectorId.trim()) {
+  const actionRef = normalizeBuilderSetupActionRef(params);
+  if (!state.client || !state.connected || !actionRef.actionId) {
     return;
   }
-  state.builderSetupRunningConnectorId = params.connectorId;
+  state.builderSetupRunningConnectorId = actionRef.actionId;
   state.builderSetupError = null;
   state.builderSetupResult = null;
+  persistBuilderSetupSessionState(
+    state as BuilderState & {
+      builderSetupFocus?: unknown;
+    },
+  );
   try {
     const result = await state.client.request<BuilderSetupRunResult>("agents.builder.setup.run", {
-      connectorId: params.connectorId,
+      actionId: actionRef.actionId,
+      connectorId: actionRef.connectorId,
       inputs: params.inputs,
     });
-    state.builderSetupResult = result ?? null;
-    if (result?.status === "configured") {
+    const normalizedResult = result ? normalizeBuilderSetupResult(result, actionRef) : null;
+    state.builderSetupResult = normalizedResult;
+    persistBuilderSetupSessionState(
+      state as BuilderState & {
+        builderSetupFocus?: unknown;
+      },
+    );
+    const shouldRefresh =
+      normalizedResult?.status === "configured" || (normalizedResult?.updatedRefs.length ?? 0) > 0;
+    if (shouldRefresh) {
       const refreshState = state as BuilderSetupState;
       await loadConfig(refreshState);
       if (state.builderBrief.trim()) {
-        await loadBuilderPlan(state);
+        await verifyBuilderPlan(state);
       }
     }
   } catch (error) {
     const formatted = formatBuilderSetupError(error);
-    const gmailFallback = params.connectorId.startsWith("platform:gmail-hook")
+    const gmailFallback = actionRef.connectorId.startsWith("platform:gmail-hook")
       ? buildGmailSetupFallback(params.inputs, formatted)
       : null;
     if (gmailFallback) {
-      state.builderSetupResult = gmailFallback;
+      state.builderSetupResult = normalizeBuilderSetupResult(gmailFallback, actionRef);
       state.builderSetupError = null;
+      persistBuilderSetupSessionState(
+        state as BuilderState & {
+          builderSetupFocus?: unknown;
+        },
+      );
       return;
     }
     state.builderSetupError = formatted;
@@ -549,6 +883,7 @@ export async function loadBuilderPlan(state: BuilderState) {
       brief: state.builderBrief,
       ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
       ...(state.builderModelId ? { modelId: state.builderModelId } : {}),
+      ...(state.builderAgentName ? { agentName: state.builderAgentName } : {}),
     });
     state.builderPlan = result ?? null;
   } catch (error) {
@@ -566,10 +901,13 @@ export async function applyBuilderPlan(state: BuilderState) {
   state.builderApplyError = null;
   state.builderApplyResult = null;
   try {
+    const workspaceDocEdits = buildWorkspaceDocEditsPayload(state);
     const result = await state.client.request<BuilderApplyResult>("agents.builder.apply", {
       brief: state.builderBrief,
       ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
       ...(state.builderModelId ? { modelId: state.builderModelId } : {}),
+      ...(state.builderAgentName ? { agentName: state.builderAgentName } : {}),
+      ...(workspaceDocEdits.length > 0 ? { workspaceDocEdits } : {}),
     });
     state.builderApplyResult = result ?? null;
     state.builderConfirmApply = false;
@@ -598,11 +936,13 @@ export async function verifyBuilderPlan(state: BuilderState) {
       brief: state.builderBrief,
       ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
       ...(state.builderModelId ? { modelId: state.builderModelId } : {}),
+      ...(state.builderAgentName ? { agentName: state.builderAgentName } : {}),
     });
     state.builderVerifyResult = result ?? null;
     if (result) {
       state.builderPlan = {
         draft: result.draft,
+        workspacePreviews: result.workspacePreviews,
         plan: result.plan,
         graphPlans: result.graphPlans,
       };

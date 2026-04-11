@@ -92,6 +92,7 @@ import {
   titleForTab,
   type Tab,
 } from "./navigation.ts";
+import { clearBuilderSetupSession, saveBuilderDraft } from "./storage.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -284,7 +285,8 @@ type AiAgentsSectionKey = (typeof AI_AGENTS_SECTION_KEYS)[number];
 
 function renderBuilderSetupNotice(state: AppViewState, tab: Tab) {
   const focus = state.builderSetupFocus;
-  if (!focus || focus.targetTab !== tab) {
+  const allowBuilderFallback = tab === "builder" && focus?.targetTab === "onboarding";
+  if (!focus || (focus.targetTab !== tab && !allowBuilderFallback)) {
     return nothing;
   }
   // Try the guided quick-setup first; fall back to the plain banner
@@ -304,10 +306,18 @@ function renderBuilderSetupNotice(state: AppViewState, tab: Tab) {
         </div>
       </div>
       <div class="builder-setup-banner__actions">
-        <button class="builder-config-link" @click=${() => state.setTab("builder")}>
-          Return to Builder
+        <button type="button" class="builder-config-link" @click=${() => {
+          state.builderSetupFocus = null;
+          clearBuilderSetupSession();
+          state.setTab("builder");
+        }}>
+          ${state.tab === "builder" ? "Close setup" : "Return to Builder"}
         </button>
-        <button class="btn btn--sm" @click=${() => (state.builderSetupFocus = null)}>
+        <button type="button" class="btn btn--sm" @click=${() => {
+          state.builderSetupFocus = null;
+          clearBuilderSetupSession();
+          state.setTab(state.tab);
+        }}>
           Dismiss
         </button>
       </div>
@@ -709,7 +719,11 @@ export function renderApp(state: AppViewState) {
             : nothing
         }
 
-        ${state.tab === "onboarding" ? renderOnboarding(state) : nothing}
+        ${
+          state.tab === "onboarding"
+            ? html`${renderBuilderSetupNotice(state, "onboarding")}${renderOnboarding(state)}`
+            : nothing
+        }
 
         ${
           state.tab === "channels"
@@ -1310,53 +1324,93 @@ export function renderApp(state: AppViewState) {
 
         ${
           state.tab === "builder"
-            ? lazyRender(lazyBuilder, (m) =>
-                m.renderBuilder({
-                  state,
-                  onSetBrief: (brief) => {
-                    state.builderBrief = brief;
-                    state.builderPlan = null;
-                    state.builderApplyResult = null;
-                    state.builderApplyError = null;
-                    state.builderVerifyResult = null;
-                    state.builderVerifyError = null;
-                    state.builderConfirmApply = false;
-                  },
-                  onSetTemplate: (templateId) => {
-                    state.builderTemplateId = templateId;
-                    state.builderPlan = null;
-                    state.builderApplyResult = null;
-                    state.builderApplyError = null;
-                    state.builderVerifyResult = null;
-                    state.builderVerifyError = null;
-                    state.builderConfirmApply = false;
-                  },
-                  onSetModel: (modelId) => {
-                    state.builderModelId = modelId;
-                    state.builderPlan = null;
-                    state.builderApplyResult = null;
-                    state.builderApplyError = null;
-                    state.builderVerifyResult = null;
-                    state.builderVerifyError = null;
-                    state.builderConfirmApply = false;
-                  },
-                  onPlan: () => {
-                    m.triggerBuilderPlan(state);
-                  },
-                  onVerify: () => {
-                    m.triggerBuilderVerify(state);
-                  },
-                  onConfirmApply: () => {
-                    state.builderConfirmApply = true;
-                  },
-                  onCancelApply: () => {
-                    state.builderConfirmApply = false;
-                  },
-                  onApply: () => {
-                    m.triggerBuilderApply(state);
-                  },
-                }),
-              )
+            ? html`
+                ${renderBuilderSetupNotice(state, "builder")}
+                ${lazyRender(lazyBuilder, (m) =>
+                  m.renderBuilder({
+                    state,
+                    onSetBrief: (brief) => {
+                      state.builderBrief = brief;
+                      state.builderWorkspaceDocEdits = {};
+                      saveBuilderDraft({
+                        brief: state.builderBrief,
+                        templateId: state.builderTemplateId,
+                        modelId: state.builderModelId,
+                        agentName: state.builderAgentName,
+                      });
+                      state.builderPlan = null;
+                      state.builderApplyResult = null;
+                      state.builderApplyError = null;
+                      state.builderVerifyResult = null;
+                      state.builderVerifyError = null;
+                      state.builderConfirmApply = false;
+                    },
+                    onSetTemplate: (templateId) => {
+                      state.builderTemplateId = templateId;
+                      state.builderWorkspaceDocEdits = {};
+                      saveBuilderDraft({
+                        brief: state.builderBrief,
+                        templateId: state.builderTemplateId,
+                        modelId: state.builderModelId,
+                        agentName: state.builderAgentName,
+                      });
+                      state.builderPlan = null;
+                      state.builderApplyResult = null;
+                      state.builderApplyError = null;
+                      state.builderVerifyResult = null;
+                      state.builderVerifyError = null;
+                      state.builderConfirmApply = false;
+                    },
+                    onSetModel: (modelId) => {
+                      state.builderModelId = modelId;
+                      state.builderWorkspaceDocEdits = {};
+                      saveBuilderDraft({
+                        brief: state.builderBrief,
+                        templateId: state.builderTemplateId,
+                        modelId: state.builderModelId,
+                        agentName: state.builderAgentName,
+                      });
+                      state.builderPlan = null;
+                      state.builderApplyResult = null;
+                      state.builderApplyError = null;
+                      state.builderVerifyResult = null;
+                      state.builderVerifyError = null;
+                      state.builderConfirmApply = false;
+                    },
+                    onSetAgentName: (agentName) => {
+                      state.builderAgentName = agentName;
+                      state.builderWorkspaceDocEdits = {};
+                      saveBuilderDraft({
+                        brief: state.builderBrief,
+                        templateId: state.builderTemplateId,
+                        modelId: state.builderModelId,
+                        agentName: state.builderAgentName,
+                      });
+                      state.builderPlan = null;
+                      state.builderApplyResult = null;
+                      state.builderApplyError = null;
+                      state.builderVerifyResult = null;
+                      state.builderVerifyError = null;
+                      state.builderConfirmApply = false;
+                    },
+                    onPlan: () => {
+                      m.triggerBuilderPlan(state);
+                    },
+                    onVerify: () => {
+                      m.triggerBuilderVerify(state);
+                    },
+                    onConfirmApply: () => {
+                      state.builderConfirmApply = true;
+                    },
+                    onCancelApply: () => {
+                      state.builderConfirmApply = false;
+                    },
+                    onApply: () => {
+                      m.triggerBuilderApply(state);
+                    },
+                  }),
+                )}
+              `
             : nothing
         }
 

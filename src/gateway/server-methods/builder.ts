@@ -22,12 +22,18 @@ import {
   fetchTelegramLatestDeliveryTarget,
 } from "../../../extensions/telegram/src/api-fetch.js";
 import { normalizeTelegramBotToken } from "../../../extensions/telegram/src/token.js";
+import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
+import { readWebSelfId } from "../../../extensions/whatsapp/src/auth-store.js";
 import {
   applyAgentBlueprintBuilderPlan,
   compileAgentBlueprintBuilderPlan,
+  type AgentBlueprintBuilderManagedDocEdit,
   verifyAgentBlueprintBuilderPlan,
 } from "../../agents/blueprints/builder.js";
 import { inspectConnectorSetupState } from "../../agents/capabilities/planner.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import { getChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import { runGmailSetup } from "../../hooks/gmail-ops.js";
@@ -44,7 +50,12 @@ import {
 } from "../../hooks/gmail-setup-utils.js";
 import { OPENCLAW_GOG_CLIENT } from "../../hooks/gmail.js";
 import { launchMacApp, launchMacPath, launchTerminalCommand } from "../../infra/terminal-launch.js";
+import { clearPluginDiscoveryCache } from "../../plugins/discovery.js";
+import { enablePluginInConfig } from "../../plugins/enable.js";
+import { installPluginFromNpmSpec } from "../../plugins/install.js";
+import { buildNpmResolutionInstallFields, recordPluginInstall } from "../../plugins/installs.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -68,6 +79,8 @@ function parseBuilderParams(raw: unknown): {
   brief: string;
   templateId?: string;
   modelId?: string;
+  agentName?: string;
+  workspaceDocEdits?: AgentBlueprintBuilderManagedDocEdit[];
 } {
   if (!raw || typeof raw !== "object") {
     return { brief: "" };
@@ -76,27 +89,130 @@ function parseBuilderParams(raw: unknown): {
   const brief = typeof record.brief === "string" ? record.brief.trim() : "";
   const templateId = typeof record.templateId === "string" ? record.templateId.trim() : "";
   const modelId = typeof record.modelId === "string" ? record.modelId.trim() : "";
+  const agentName = typeof record.agentName === "string" ? record.agentName.trim() : "";
+  const workspaceDocEdits = Array.isArray(record.workspaceDocEdits)
+    ? record.workspaceDocEdits
+        .map((entry) => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+            return null;
+          }
+          const docRecord = entry as Record<string, unknown>;
+          const nodeId = typeof docRecord.nodeId === "string" ? docRecord.nodeId.trim() : "";
+          const fileName = typeof docRecord.fileName === "string" ? docRecord.fileName.trim() : "";
+          const content = typeof docRecord.content === "string" ? docRecord.content : "";
+          if (!nodeId || !fileName || !content.trim()) {
+            return null;
+          }
+          return {
+            nodeId,
+            fileName,
+            content,
+          } satisfies AgentBlueprintBuilderManagedDocEdit;
+        })
+        .filter((entry): entry is AgentBlueprintBuilderManagedDocEdit => Boolean(entry))
+    : [];
   return {
     brief,
     ...(templateId ? { templateId } : {}),
     ...(modelId ? { modelId } : {}),
+    ...(agentName ? { agentName } : {}),
+    ...(workspaceDocEdits.length > 0 ? { workspaceDocEdits } : {}),
   };
 }
 
+function normalizeBuilderModelId(
+  modelId: string | undefined,
+  cfg: ReturnType<typeof loadConfig>,
+): string {
+  const trimmed = modelId?.trim() ?? "";
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.includes("/")) {
+    return trimmed;
+  }
+
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  const aliasMatch = aliasIndex.byAlias.get(trimmed.toLowerCase());
+  if (aliasMatch) {
+    return `${aliasMatch.ref.provider}/${aliasMatch.ref.model}`;
+  }
+
+  const providers = cfg.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return trimmed;
+  }
+  const matches = new Set<string>();
+  for (const [providerId, providerRaw] of Object.entries(providers)) {
+    const provider = providerId.trim();
+    if (!provider || !providerRaw || typeof providerRaw !== "object") {
+      continue;
+    }
+    const models = (providerRaw as { models?: unknown }).models;
+    if (!Array.isArray(models)) {
+      continue;
+    }
+    for (const modelRaw of models) {
+      if (!modelRaw || typeof modelRaw !== "object") {
+        continue;
+      }
+      const discoveredId =
+        typeof (modelRaw as { id?: unknown }).id === "string"
+          ? ((modelRaw as { id?: string }).id ?? "").trim()
+          : "";
+      if (!discoveredId) {
+        continue;
+      }
+      if (discoveredId === trimmed) {
+        matches.add(`${provider}/${discoveredId}`);
+      }
+    }
+  }
+  if (matches.size === 1) {
+    return Array.from(matches)[0] ?? trimmed;
+  }
+  return trimmed;
+}
+
 function parseBuilderSetupParams(raw: unknown): {
+  actionId: string;
   connectorId: string;
   inputs: Record<string, unknown>;
 } {
   if (!raw || typeof raw !== "object") {
-    return { connectorId: "", inputs: {} };
+    return { actionId: "", connectorId: "", inputs: {} };
   }
   const record = raw as Record<string, unknown>;
+  const actionId = typeof record.actionId === "string" ? record.actionId.trim() : "";
   const connectorId = typeof record.connectorId === "string" ? record.connectorId.trim() : "";
   const inputs =
     record.inputs && typeof record.inputs === "object" && !Array.isArray(record.inputs)
       ? (record.inputs as Record<string, unknown>)
       : {};
-  return { connectorId, inputs };
+  return { actionId, connectorId, inputs };
+}
+
+function deriveBuilderSetupConnectorId(actionId: string, connectorId: string): string {
+  const normalizedConnectorId = connectorId.trim();
+  if (normalizedConnectorId && normalizedConnectorId.split(":").filter(Boolean).length <= 2) {
+    return normalizedConnectorId;
+  }
+  const trimmed = actionId.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const segments = trimmed.split(":").filter(Boolean);
+  if (segments.length >= 2) {
+    return `${segments[0]}:${segments[1]}`;
+  }
+  return trimmed;
+}
+
+function buildPluginInstallActionId(connectorId: string): string {
+  return `${connectorId}:install`;
 }
 
 function stringInput(record: Record<string, unknown>, key: string): string {
@@ -127,6 +243,128 @@ function normalizeSetupTelegramToken(value: string): string {
     return "";
   }
   return normalized;
+}
+
+type WebSearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+
+const WEB_SEARCH_PROVIDER_ORDER: WebSearchProvider[] = [
+  "brave",
+  "gemini",
+  "grok",
+  "kimi",
+  "perplexity",
+];
+
+function normalizeWebSearchProvider(value: string): WebSearchProvider | "" {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "brave" ||
+    normalized === "gemini" ||
+    normalized === "grok" ||
+    normalized === "kimi" ||
+    normalized === "perplexity"
+  ) {
+    return normalized;
+  }
+  return "";
+}
+
+function hasConfiguredSecret(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return false;
+  }
+  const source = stringInput(record, "source");
+  const id = stringInput(record, "id");
+  return source.length > 0 && id.length > 0;
+}
+
+function envVarsForWebSearchProvider(provider: WebSearchProvider): string[] {
+  switch (provider) {
+    case "brave":
+      return ["BRAVE_API_KEY"];
+    case "gemini":
+      return ["GEMINI_API_KEY"];
+    case "grok":
+      return ["XAI_API_KEY"];
+    case "kimi":
+      return ["KIMI_API_KEY", "MOONSHOT_API_KEY"];
+    case "perplexity":
+      return ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"];
+  }
+}
+
+function hasProviderEnvCredential(provider: WebSearchProvider): boolean {
+  return envVarsForWebSearchProvider(provider).some((name) => {
+    const value = process.env[name];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+function hasWebSearchProviderCredential(
+  cfg: ReturnType<typeof loadConfig>,
+  provider: WebSearchProvider,
+): boolean {
+  const search = asRecord(asRecord(asRecord(cfg.tools)?.web)?.search);
+  if (!search) {
+    return hasProviderEnvCredential(provider);
+  }
+  const configuredSecret =
+    provider === "brave"
+      ? hasConfiguredSecret(search.apiKey)
+      : hasConfiguredSecret(asRecord(search[provider])?.apiKey);
+  return configuredSecret || hasProviderEnvCredential(provider);
+}
+
+function resolveConfiguredWebSearchProvider(
+  cfg: ReturnType<typeof loadConfig>,
+): WebSearchProvider | null {
+  const search = asRecord(asRecord(asRecord(cfg.tools)?.web)?.search);
+  const configured = normalizeWebSearchProvider(stringInput(search ?? {}, "provider"));
+  if (configured) {
+    return configured;
+  }
+  for (const provider of WEB_SEARCH_PROVIDER_ORDER) {
+    if (hasWebSearchProviderCredential(cfg, provider)) {
+      return provider;
+    }
+  }
+  return null;
+}
+
+function setWebSearchConfigInConfig(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  provider: WebSearchProvider;
+  apiKey?: string;
+}): ReturnType<typeof loadConfig> {
+  const tools = asRecord(params.cfg.tools);
+  const nextTools = tools ? { ...tools } : {};
+  const web = asRecord(nextTools.web);
+  const nextWeb = web ? { ...web } : {};
+  const search = asRecord(nextWeb.search);
+  const nextSearch = search ? { ...search } : {};
+  nextSearch.enabled = true;
+  nextSearch.provider = params.provider;
+  if (params.apiKey) {
+    if (params.provider === "brave") {
+      nextSearch.apiKey = params.apiKey;
+    } else {
+      const scoped = asRecord(nextSearch[params.provider]);
+      nextSearch[params.provider] = {
+        ...scoped,
+        apiKey: params.apiKey,
+      };
+    }
+  }
+  nextWeb.search = nextSearch;
+  nextTools.web = nextWeb;
+  return {
+    ...params.cfg,
+    tools: nextTools,
+  } as ReturnType<typeof loadConfig>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -225,6 +463,72 @@ function setChannelDefaultTargetInConfig(params: {
   } as ReturnType<typeof loadConfig>;
 }
 
+function resolveChannelDefaultTargetFromConfig(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  channel: string;
+  accountId?: string;
+}): string | null {
+  const channels = asRecord(params.cfg.channels);
+  const channelConfig = asRecord(channels?.[params.channel]);
+  const rootTarget = stringInput(channelConfig ?? {}, "defaultTo");
+  if (params.accountId) {
+    const accounts = asRecord(channelConfig?.accounts);
+    const accountConfig = asRecord(accounts?.[params.accountId]);
+    const accountTarget = stringInput(accountConfig ?? {}, "defaultTo");
+    return accountTarget || rootTarget || null;
+  }
+  const defaultAccountConfig = asRecord(asRecord(channelConfig?.accounts)?.default);
+  const defaultAccountTarget = stringInput(defaultAccountConfig ?? {}, "defaultTo");
+  return defaultAccountTarget || rootTarget || null;
+}
+
+function detectWhatsAppLinkedSelfTarget(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  accountId?: string;
+}): {
+  accountId: string;
+  target: string;
+  e164: string | null;
+  jid: string | null;
+} | null {
+  const account = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+  });
+  const { e164, jid } = readWebSelfId(account.authDir);
+  const target = (e164 ?? jid ?? "").trim();
+  if (!target) {
+    return null;
+  }
+  return {
+    accountId: account.accountId || "default",
+    target,
+    e164,
+    jid,
+  };
+}
+
+function withInferredWhatsAppDefaultTarget(
+  cfg: ReturnType<typeof loadConfig>,
+): ReturnType<typeof loadConfig> {
+  const existingTarget = resolveChannelDefaultTargetFromConfig({
+    cfg,
+    channel: "whatsapp",
+  });
+  if (existingTarget) {
+    return cfg;
+  }
+  const detected = detectWhatsAppLinkedSelfTarget({ cfg });
+  if (!detected) {
+    return cfg;
+  }
+  return setChannelDefaultTargetInConfig({
+    cfg,
+    channel: "whatsapp",
+    target: detected.target,
+  });
+}
+
 function setSignalHttpUrlInConfig(params: {
   cfg: ReturnType<typeof loadConfig>;
   httpUrl: string;
@@ -270,6 +574,56 @@ function parseSlackTargetHint(raw: string): { id?: string; name?: string } {
   }
   const withoutHash = withoutPrefix.replace(/^#/, "").trim();
   return withoutHash ? { name: withoutHash } : {};
+}
+
+const SLACK_DISCOVERY_FALLBACK_SCOPES = ["channels:read", "groups:read", "im:read", "mpim:read"];
+
+function normalizeSlackApiErrorMessage(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replace(/^An API error occurred:\s*/i, "").trim() || trimmed;
+}
+
+function extractSlackApiErrorDetails(error: unknown): { error: string; neededScopes: string[] } {
+  const errorRecord = asRecord(error);
+  const nestedRecord =
+    asRecord(errorRecord?.data) ??
+    asRecord(errorRecord?.body) ??
+    asRecord(errorRecord?.data?.response_metadata) ??
+    errorRecord;
+  const directMessage =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : stringInput(errorRecord ?? {}, "message");
+  const code =
+    normalizeSlackApiErrorMessage(stringInput(nestedRecord ?? {}, "error")) ||
+    normalizeSlackApiErrorMessage(stringInput(errorRecord ?? {}, "code")) ||
+    normalizeSlackApiErrorMessage(directMessage);
+  const neededRaw = stringInput(nestedRecord ?? {}, "needed");
+  const neededScopes = (neededRaw || "")
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+  return {
+    error: code || "unknown error",
+    neededScopes,
+  };
+}
+
+function formatSlackDiscoveryFailure(error: unknown): string {
+  const details = extractSlackApiErrorDetails(error);
+  if (details.error !== "missing_scope") {
+    return `Slack channel discovery failed: ${details.error}`;
+  }
+  const scopes =
+    details.neededScopes.length > 0 ? details.neededScopes : SLACK_DISCOVERY_FALLBACK_SCOPES;
+  return `Slack channel discovery failed: missing_scope. Add Slack bot scopes ${scopes.join(
+    ", ",
+  )}, reinstall the app to the workspace, then rerun auto-detect.`;
 }
 
 function parseDiscordIdHint(raw: string): string | undefined {
@@ -504,6 +858,124 @@ function buildGenericSetupRunPayload(params: {
   };
 }
 
+async function installChannelPluginForBuilder(params: { connectorId: string; actionId: string }) {
+  const cfg = loadConfig();
+  const inspection = inspectConnectorSetupState({
+    connectorId: params.connectorId,
+    cfg,
+    workspaceDir: process.cwd(),
+  });
+  if (!inspection) {
+    throw new Error(`Unknown connector: ${params.connectorId}`);
+  }
+  if (inspection.connector.source.kind !== "channel_catalog") {
+    return buildGenericSetupRunPayload({
+      connectorId: params.connectorId,
+      inspection,
+    });
+  }
+
+  const entry = getChannelPluginCatalogEntry(inspection.connector.source.id, {
+    workspaceDir: process.cwd(),
+  });
+  if (!entry) {
+    return {
+      connectorId: params.connectorId,
+      actionId: params.actionId,
+      status: "needs_setup" as const,
+      message: `OpenClaw could not find a plugin catalog entry for ${inspection.connector.label}.`,
+      updatedRefs: [],
+      resume: {
+        connectorId: params.connectorId,
+        actionId: params.actionId,
+        label: `Install ${inspection.connector.label}`,
+        detail: "Refresh the plugin catalog or install the plugin manually, then retry.",
+        inputs: {},
+      },
+    };
+  }
+
+  const result = await installPluginFromNpmSpec({
+    spec: entry.install.npmSpec,
+    logger: {
+      info: () => {},
+      warn: () => {},
+    },
+  });
+  if (!result.ok) {
+    return {
+      connectorId: params.connectorId,
+      actionId: params.actionId,
+      status: "needs_setup" as const,
+      message: `Plugin install failed for ${inspection.connector.label}: ${result.error}`,
+      updatedRefs: [],
+      resume: {
+        connectorId: params.connectorId,
+        actionId: params.actionId,
+        label: `Install ${inspection.connector.label}`,
+        detail: `Retry the npm install for ${entry.install.npmSpec} after fixing the install error.`,
+        inputs: {},
+      },
+      summary: {
+        command: `npm install ${entry.install.npmSpec}`,
+      },
+    };
+  }
+
+  let nextConfig = enablePluginInConfig(cfg, result.pluginId).config;
+  nextConfig = recordPluginInstall(nextConfig, {
+    pluginId: result.pluginId,
+    source: "npm",
+    spec: entry.install.npmSpec,
+    installPath: result.targetDir,
+    version: result.version,
+    ...buildNpmResolutionInstallFields(result.npmResolution),
+  });
+  await writeConfigFile(nextConfig);
+  clearPluginDiscoveryCache();
+
+  const nextInspection = inspectConnectorSetupState({
+    connectorId: params.connectorId,
+    cfg: nextConfig,
+    workspaceDir: process.cwd(),
+  });
+  if (!nextInspection) {
+    return {
+      connectorId: params.connectorId,
+      actionId: params.actionId,
+      status: "configured" as const,
+      message: `${inspection.connector.label} plugin installed.`,
+      updatedRefs: ["plugins.enabled", `plugins.installs.${result.pluginId}`],
+      summary: {
+        command: `npm install ${entry.install.npmSpec}`,
+      },
+    };
+  }
+
+  const followUp = buildGenericSetupRunPayload({
+    connectorId: params.connectorId,
+    inspection: nextInspection,
+  });
+  return {
+    ...followUp,
+    actionId: params.actionId,
+    message:
+      followUp.status === "configured"
+        ? `${inspection.connector.label} plugin installed and enabled.`
+        : `${inspection.connector.label} plugin installed. ${followUp.message}`,
+    updatedRefs: dedupeStrings([
+      "plugins.enabled",
+      `plugins.installs.${result.pluginId}`,
+      ...followUp.updatedRefs,
+    ]),
+    summary: {
+      command: `npm install ${entry.install.npmSpec}`,
+      pluginId: result.pluginId,
+      version: result.version,
+    },
+  };
+}
+
 async function buildGmailBlockedPayload(
   account: string,
   message: string,
@@ -671,11 +1143,15 @@ export const builderHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const cfg = withInferredWhatsAppDefaultTarget(loadConfig());
+      const modelId = normalizeBuilderModelId(parsed.modelId, cfg);
       const result = await compileAgentBlueprintBuilderPlan({
         brief: parsed.brief,
         ...(parsed.templateId ? { templateId: parsed.templateId } : {}),
-        ...(parsed.modelId ? { modelId: parsed.modelId } : {}),
-        cfg: loadConfig(),
+        ...(modelId ? { modelId } : {}),
+        ...(parsed.agentName ? { agentName: parsed.agentName } : {}),
+        ...(parsed.workspaceDocEdits ? { workspaceDocEdits: parsed.workspaceDocEdits } : {}),
+        cfg,
       });
       respond(true, result, undefined);
     } catch (error) {
@@ -687,7 +1163,7 @@ export const builderHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "agents.builder.apply": async ({ params, respond }) => {
+  "agents.builder.apply": async ({ params, respond, context }) => {
     const parsed = parseBuilderParams(params);
     if (!parsed.brief) {
       respond(
@@ -698,12 +1174,16 @@ export const builderHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const cfg = loadConfig();
+      const cfg = withInferredWhatsAppDefaultTarget(loadConfig());
+      const modelId = normalizeBuilderModelId(parsed.modelId, cfg);
       const result = await applyAgentBlueprintBuilderPlan({
         brief: parsed.brief,
         ...(parsed.templateId ? { templateId: parsed.templateId } : {}),
-        ...(parsed.modelId ? { modelId: parsed.modelId } : {}),
+        ...(modelId ? { modelId } : {}),
+        ...(parsed.agentName ? { agentName: parsed.agentName } : {}),
+        ...(parsed.workspaceDocEdits ? { workspaceDocEdits: parsed.workspaceDocEdits } : {}),
         cfg,
+        cron: context.cron,
       });
       respond(true, result, undefined);
     } catch (error) {
@@ -726,11 +1206,14 @@ export const builderHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const cfg = loadConfig();
+      const cfg = withInferredWhatsAppDefaultTarget(loadConfig());
+      const modelId = normalizeBuilderModelId(parsed.modelId, cfg);
       const result = await verifyAgentBlueprintBuilderPlan({
         brief: parsed.brief,
         ...(parsed.templateId ? { templateId: parsed.templateId } : {}),
-        ...(parsed.modelId ? { modelId: parsed.modelId } : {}),
+        ...(modelId ? { modelId } : {}),
+        ...(parsed.agentName ? { agentName: parsed.agentName } : {}),
+        ...(parsed.workspaceDocEdits ? { workspaceDocEdits: parsed.workspaceDocEdits } : {}),
         cfg,
       });
       respond(true, result, undefined);
@@ -745,19 +1228,21 @@ export const builderHandlers: GatewayRequestHandlers = {
 
   "agents.builder.setup.run": async ({ params, respond }) => {
     const parsed = parseBuilderSetupParams(params);
-    if (!parsed.connectorId) {
+    const actionId = parsed.actionId || parsed.connectorId;
+    const connectorId = deriveBuilderSetupConnectorId(actionId, parsed.connectorId);
+    if (!actionId || !connectorId) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "agents.builder.setup.run requires a `connectorId` param.",
+          "agents.builder.setup.run requires an `actionId` or `connectorId` param.",
         ),
       );
       return;
     }
     try {
-      switch (parsed.connectorId) {
+      switch (actionId) {
         case "platform:gmail-hook": {
           const account = stringInput(parsed.inputs, "account");
           if (!account) {
@@ -797,7 +1282,119 @@ export const builderHandlers: GatewayRequestHandlers = {
             parsed.inputs.pushEndpoint = validation.normalized;
           }
           const summary = await runGmailSetup(gmailSetupArgsFromInputs(account, parsed.inputs));
-          respond(true, gmailConfiguredPayload(parsed.connectorId, summary), undefined);
+          respond(true, gmailConfiguredPayload(connectorId, summary), undefined);
+          return;
+        }
+        case "tools:web":
+        case "tools:web:configure": {
+          const cfg = loadConfig();
+          const providerInput = normalizeWebSearchProvider(
+            firstStringInput(parsed.inputs, [
+              "provider",
+              "web.provider",
+              "tools.web.search.provider",
+            ]),
+          );
+          const configuredProvider = resolveConfiguredWebSearchProvider(cfg);
+          const provider = providerInput || configuredProvider;
+          const apiKey = normalizeSetupSecret(
+            firstStringInput(parsed.inputs, ["apiKey", "web.apiKey", "tools.web.search.apiKey"]),
+          );
+
+          if (!provider) {
+            respond(
+              true,
+              {
+                connectorId,
+                actionId,
+                status: "needs_setup",
+                message:
+                  "Select a web search provider first (brave, gemini, grok, kimi, or perplexity), then run setup again.",
+                updatedRefs: [],
+                resume: {
+                  connectorId,
+                  actionId,
+                  label: "Configure web search",
+                  detail:
+                    "Pick a provider and optionally paste an API key. You can also keep credentials in environment variables.",
+                  inputs: {
+                    provider: configuredProvider ?? "brave",
+                  },
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+
+          const nextConfig = setWebSearchConfigInConfig({
+            cfg,
+            provider,
+            ...(apiKey ? { apiKey } : {}),
+          });
+          await writeConfigFile(nextConfig);
+
+          const inspection = inspectConnectorSetupState({
+            connectorId,
+            cfg: nextConfig,
+            workspaceDir: process.cwd(),
+          });
+          if (!inspection) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `agents.builder.setup.run received unknown connectorId: ${connectorId}.`,
+              ),
+            );
+            return;
+          }
+
+          const hasCredential = hasWebSearchProviderCredential(nextConfig, provider);
+          const keyRef =
+            provider === "brave"
+              ? "tools.web.search.apiKey"
+              : `tools.web.search.${provider}.apiKey`;
+          respond(
+            true,
+            inspection.setupTask.status === "completed"
+              ? {
+                  connectorId,
+                  actionId,
+                  status: "configured",
+                  message: hasCredential
+                    ? `Web search is configured with provider "${provider}".`
+                    : `Web search provider "${provider}" saved. Add credentials via ${keyRef} or environment variables to complete readiness.`,
+                  updatedRefs: dedupeStrings([
+                    "tools.web.search.provider",
+                    ...(apiKey ? [keyRef] : []),
+                  ]),
+                }
+              : {
+                  connectorId,
+                  actionId,
+                  status: "needs_auth",
+                  message:
+                    inspection.integration.issues[0] ??
+                    `Web search provider "${provider}" still needs credentials.`,
+                  updatedRefs: dedupeStrings([
+                    "tools.web.search.provider",
+                    ...(apiKey ? [keyRef] : []),
+                  ]),
+                  resume: {
+                    connectorId,
+                    actionId,
+                    label: "Re-check web search setup",
+                    detail:
+                      "After setting credentials, run setup again so EasyClaw can verify web tools readiness.",
+                    inputs: {
+                      provider,
+                    },
+                  },
+                },
+            undefined,
+          );
           return;
         }
         case "channel:telegram:verify-token": {
@@ -1038,6 +1635,145 @@ export const builderHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        case "channel:whatsapp:auto-default-target": {
+          const cfg = loadConfig();
+          const requestedAccountId = firstStringInput(parsed.inputs, ["accountId", "account"]);
+          const accountId = requestedAccountId ? normalizeAccountId(requestedAccountId) : "";
+          const requestedTargetRaw = firstStringInput(parsed.inputs, [
+            "whatsapp.target",
+            "whatsapp.defaultTo",
+            "target",
+            "defaultTo",
+            "to",
+          ]);
+          if (requestedTargetRaw) {
+            const normalizedTarget = normalizeWhatsAppTarget(requestedTargetRaw);
+            if (!normalizedTarget) {
+              respond(
+                true,
+                {
+                  connectorId: parsed.connectorId,
+                  status: "needs_setup",
+                  message:
+                    'Invalid WhatsApp destination. Use E.164 like "+15551234567" or a group JID like "120363025391234567@g.us".',
+                  updatedRefs: [],
+                  summary: {
+                    command: "normalizeWhatsAppTarget",
+                    accountId: accountId || "default",
+                    input: requestedTargetRaw,
+                  },
+                },
+                undefined,
+              );
+              return;
+            }
+            const nextConfig = setChannelDefaultTargetInConfig({
+              cfg,
+              channel: "whatsapp",
+              target: normalizedTarget,
+              ...(accountId ? { accountId } : {}),
+            });
+            await writeConfigFile(nextConfig);
+            const updatedRef = accountId
+              ? `channels.whatsapp.accounts.${accountId}.defaultTo`
+              : "channels.whatsapp.defaultTo";
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "configured",
+                message: `WhatsApp default target set to ${normalizedTarget}.`,
+                updatedRefs: [updatedRef],
+                summary: {
+                  command: "normalizeWhatsAppTarget",
+                  accountId: accountId || "default",
+                  defaultTo: normalizedTarget,
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const existingTarget = resolveChannelDefaultTargetFromConfig({
+            cfg,
+            channel: "whatsapp",
+            ...(accountId ? { accountId } : {}),
+          });
+          if (existingTarget) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "configured",
+                message: `WhatsApp default target is already set to ${existingTarget}.`,
+                updatedRefs: [],
+                summary: {
+                  command: "readWebSelfId",
+                  accountId: accountId || "default",
+                  defaultTo: existingTarget,
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const detected = detectWhatsAppLinkedSelfTarget({
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+          if (!detected) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message:
+                  "WhatsApp auto-detect could not find a linked account identity yet. Link WhatsApp first (Show QR + Wait for scan), then run auto-detect again.",
+                updatedRefs: [],
+                summary: {
+                  command: "readWebSelfId",
+                  accountId: accountId || "default",
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect WhatsApp target",
+                  detail: "After WhatsApp is linked, run auto-detect again to set defaultTo.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          const nextConfig = setChannelDefaultTargetInConfig({
+            cfg,
+            channel: "whatsapp",
+            target: detected.target,
+            ...(accountId ? { accountId } : {}),
+          });
+          await writeConfigFile(nextConfig);
+          const updatedRef = accountId
+            ? `channels.whatsapp.accounts.${accountId}.defaultTo`
+            : "channels.whatsapp.defaultTo";
+          respond(
+            true,
+            {
+              connectorId: parsed.connectorId,
+              status: "configured",
+              message: `WhatsApp default target set to ${detected.target}.`,
+              updatedRefs: [updatedRef],
+              summary: {
+                command: "readWebSelfId",
+                accountId: detected.accountId,
+                defaultTo: detected.target,
+                selfE164: detected.e164,
+                selfJid: detected.jid,
+              },
+            },
+            undefined,
+          );
+          return;
+        }
         case "channel:slack:auto-default-target": {
           const cfg = loadConfig();
           const requestedAccountId = firstStringInput(parsed.inputs, [
@@ -1087,20 +1823,46 @@ export const builderHandlers: GatewayRequestHandlers = {
           ]);
           const targetHint = parseSlackTargetHint(requestedTarget);
           const client = createSlackWebClient(botToken, { timeout: 5000 });
-          const conversationResponse = asRecord(
-            await client.apiCall("conversations.list", {
-              types: "public_channel,private_channel,im,mpim",
-              exclude_archived: true,
-              limit: 200,
-            }),
-          );
+          let conversationResponse: Record<string, unknown> | null = null;
+          try {
+            conversationResponse = asRecord(
+              await client.apiCall("conversations.list", {
+                types: "public_channel,private_channel,im,mpim",
+                exclude_archived: true,
+                limit: 200,
+              }),
+            );
+          } catch (error) {
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: formatSlackDiscoveryFailure(error),
+                updatedRefs: [],
+                summary: {
+                  command: "conversations.list",
+                  accountId: resolvedAccountId,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Slack target",
+                  detail:
+                    "Update the Slack app scopes or reinstall it to the workspace, then rerun auto-detect.",
+                  inputs: accountId ? { accountId } : {},
+                },
+              },
+              undefined,
+            );
+            return;
+          }
           if (conversationResponse?.ok === false) {
             respond(
               true,
               {
                 connectorId: parsed.connectorId,
                 status: "needs_setup",
-                message: `Slack channel discovery failed: ${stringInput(conversationResponse, "error") || "Slack API rejected conversations.list"}`,
+                message: formatSlackDiscoveryFailure(conversationResponse),
                 updatedRefs: [],
                 summary: {
                   command: "conversations.list",
@@ -1198,6 +1960,35 @@ export const builderHandlers: GatewayRequestHandlers = {
             );
             return;
           }
+          if (byHint && !byHint.member) {
+            const destinationLabel = byHint.name ? `#${byHint.name}` : byHint.id;
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Slack found ${destinationLabel}, but the bot is not a member. Invite the app to that conversation, then rerun auto-detect.`,
+                updatedRefs: [],
+                summary: {
+                  command: "conversations.list",
+                  accountId: resolvedAccountId,
+                  defaultTo: `channel:${byHint.id}`,
+                  conversationName: byHint.name || null,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Slack target",
+                  detail:
+                    "After inviting the bot to that Slack conversation, run auto-detect again.",
+                  inputs: accountId
+                    ? { accountId, target: requestedTarget }
+                    : { target: requestedTarget },
+                },
+              },
+              undefined,
+            );
+            return;
+          }
           const selected =
             byHint ??
             discoveredConversations.toSorted((left, right) => {
@@ -1219,6 +2010,33 @@ export const builderHandlers: GatewayRequestHandlers = {
                 summary: {
                   command: "conversations.list",
                   accountId: resolvedAccountId,
+                },
+              },
+              undefined,
+            );
+            return;
+          }
+          if (!selected.member) {
+            const destinationLabel = selected.name ? `#${selected.name}` : selected.id;
+            respond(
+              true,
+              {
+                connectorId: parsed.connectorId,
+                status: "needs_setup",
+                message: `Slack can see ${destinationLabel}, but the bot is not joined to any deliverable conversation yet. Invite the app to a channel or DM, then rerun auto-detect.`,
+                updatedRefs: [],
+                summary: {
+                  command: "conversations.list",
+                  accountId: resolvedAccountId,
+                  defaultTo: `channel:${selected.id}`,
+                  conversationName: selected.name || null,
+                },
+                resume: {
+                  connectorId: parsed.connectorId,
+                  label: "Auto-detect Slack target",
+                  detail:
+                    "After inviting the bot to a Slack conversation it can post into, run auto-detect again.",
+                  inputs: accountId ? { accountId } : {},
                 },
               },
               undefined,
@@ -2873,9 +3691,20 @@ export const builderHandlers: GatewayRequestHandlers = {
           return;
         }
         default: {
+          if (actionId === buildPluginInstallActionId(connectorId)) {
+            respond(
+              true,
+              await installChannelPluginForBuilder({
+                connectorId,
+                actionId,
+              }),
+              undefined,
+            );
+            return;
+          }
           const cfg = loadConfig();
           const inspection = inspectConnectorSetupState({
-            connectorId: parsed.connectorId,
+            connectorId,
             cfg,
             workspaceDir: process.cwd(),
           });
@@ -2885,27 +3714,27 @@ export const builderHandlers: GatewayRequestHandlers = {
               undefined,
               errorShape(
                 ErrorCodes.INVALID_REQUEST,
-                `agents.builder.setup.run received unknown connectorId: ${parsed.connectorId}.`,
+                `agents.builder.setup.run received unknown connectorId: ${connectorId}.`,
               ),
             );
             return;
           }
           respond(
             true,
-            buildGenericSetupRunPayload({
-              connectorId: parsed.connectorId,
-              inspection,
-            }),
+            {
+              ...buildGenericSetupRunPayload({
+                connectorId,
+                inspection,
+              }),
+              actionId,
+            },
             undefined,
           );
           return;
         }
       }
     } catch (error) {
-      if (
-        parsed.connectorId === "platform:gmail-hook" ||
-        parsed.connectorId.startsWith("platform:gmail-hook:")
-      ) {
+      if (connectorId === "platform:gmail-hook" || actionId.startsWith("platform:gmail-hook:")) {
         const account = stringInput(parsed.inputs, "account");
         const authPayload = await buildGmailBlockedPayload(
           account,
@@ -2913,19 +3742,50 @@ export const builderHandlers: GatewayRequestHandlers = {
           parsed.inputs,
         );
         if (authPayload) {
-          respond(true, authPayload, undefined);
+          respond(
+            true,
+            {
+              ...authPayload,
+              actionId,
+              connectorId,
+            },
+            undefined,
+          );
           return;
         }
       }
-      if (
-        parsed.connectorId === "channel:telegram:auto-default-target" ||
-        parsed.connectorId === "channel:telegram:verify-token"
-      ) {
-        const isVerify = parsed.connectorId === "channel:telegram:verify-token";
+      if (connectorId === "tools:web") {
         respond(
           true,
           {
-            connectorId: parsed.connectorId,
+            connectorId,
+            actionId,
+            status: "needs_setup",
+            message: `Web search setup is blocked: ${String(error instanceof Error ? error.message : error)}`,
+            updatedRefs: [],
+            resume: {
+              connectorId,
+              actionId,
+              label: "Configure web search",
+              detail:
+                "Set a web search provider and credentials, then run this setup action again.",
+              inputs: {},
+            },
+          },
+          undefined,
+        );
+        return;
+      }
+      if (
+        actionId === "channel:telegram:auto-default-target" ||
+        actionId === "channel:telegram:verify-token"
+      ) {
+        const isVerify = actionId === "channel:telegram:verify-token";
+        respond(
+          true,
+          {
+            connectorId,
+            actionId,
             status: "needs_setup",
             message: isVerify
               ? `Telegram token verification is blocked: ${String(error instanceof Error ? error.message : error)}`
@@ -2935,7 +3795,8 @@ export const builderHandlers: GatewayRequestHandlers = {
               command: isVerify ? "getMe" : "getUpdates",
             },
             resume: {
-              connectorId: parsed.connectorId,
+              connectorId,
+              actionId,
               label: isVerify ? "Verify Bot Token" : "Retry target auto-detect",
               detail: isVerify
                 ? "Make sure the Telegram bot token is configured, then retry verification."
@@ -2948,46 +3809,51 @@ export const builderHandlers: GatewayRequestHandlers = {
         return;
       }
       if (
-        parsed.connectorId === "channel:slack:auto-default-target" ||
-        parsed.connectorId === "channel:slack:verify-credentials" ||
-        parsed.connectorId === "channel:discord:auto-default-target" ||
-        parsed.connectorId === "channel:discord:verify-token" ||
-        parsed.connectorId === "channel:signal:auto-detect-http-url" ||
-        parsed.connectorId === "channel:signal:verify-transport" ||
-        parsed.connectorId === "channel:googlechat:verify-auth" ||
-        parsed.connectorId === "channel:matrix:verify-credentials" ||
-        parsed.connectorId === "channel:msteams:verify-credentials" ||
-        parsed.connectorId === "channel:imessage:verify-transport"
+        actionId === "channel:slack:auto-default-target" ||
+        actionId === "channel:whatsapp:auto-default-target" ||
+        actionId === "channel:slack:verify-credentials" ||
+        actionId === "channel:discord:auto-default-target" ||
+        actionId === "channel:discord:verify-token" ||
+        actionId === "channel:signal:auto-detect-http-url" ||
+        actionId === "channel:signal:verify-transport" ||
+        actionId === "channel:googlechat:verify-auth" ||
+        actionId === "channel:matrix:verify-credentials" ||
+        actionId === "channel:msteams:verify-credentials" ||
+        actionId === "channel:imessage:verify-transport"
       ) {
         const label =
-          parsed.connectorId === "channel:slack:auto-default-target"
+          actionId === "channel:slack:auto-default-target"
             ? "Auto-detect Slack target"
-            : parsed.connectorId === "channel:slack:verify-credentials"
-              ? "Verify Slack credentials"
-              : parsed.connectorId === "channel:discord:auto-default-target"
-                ? "Auto-detect Discord target"
-                : parsed.connectorId === "channel:discord:verify-token"
-                  ? "Verify Discord token"
-                  : parsed.connectorId === "channel:signal:auto-detect-http-url"
-                    ? "Auto-detect Signal URL"
-                    : parsed.connectorId === "channel:signal:verify-transport"
-                      ? "Verify Signal transport"
-                      : parsed.connectorId === "channel:googlechat:verify-auth"
-                        ? "Verify Google Chat auth"
-                        : parsed.connectorId === "channel:matrix:verify-credentials"
-                          ? "Verify Matrix credentials"
-                          : parsed.connectorId === "channel:msteams:verify-credentials"
-                            ? "Verify Teams credentials"
-                            : "Verify iMessage transport";
+            : actionId === "channel:whatsapp:auto-default-target"
+              ? "Auto-detect WhatsApp target"
+              : actionId === "channel:slack:verify-credentials"
+                ? "Verify Slack credentials"
+                : actionId === "channel:discord:auto-default-target"
+                  ? "Auto-detect Discord target"
+                  : actionId === "channel:discord:verify-token"
+                    ? "Verify Discord token"
+                    : actionId === "channel:signal:auto-detect-http-url"
+                      ? "Auto-detect Signal URL"
+                      : actionId === "channel:signal:verify-transport"
+                        ? "Verify Signal transport"
+                        : actionId === "channel:googlechat:verify-auth"
+                          ? "Verify Google Chat auth"
+                          : actionId === "channel:matrix:verify-credentials"
+                            ? "Verify Matrix credentials"
+                            : actionId === "channel:msteams:verify-credentials"
+                              ? "Verify Teams credentials"
+                              : "Verify iMessage transport";
         respond(
           true,
           {
-            connectorId: parsed.connectorId,
+            connectorId,
+            actionId,
             status: "needs_setup",
             message: `${label} is blocked: ${String(error instanceof Error ? error.message : error)}`,
             updatedRefs: [],
             resume: {
-              connectorId: parsed.connectorId,
+              connectorId,
+              actionId,
               label,
               detail: "Fix the channel setup inputs and run verification again.",
               inputs: {},

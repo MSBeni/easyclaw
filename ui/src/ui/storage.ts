@@ -1,10 +1,13 @@
 const KEY = "openclaw.control.settings.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
+const BUILDER_DRAFT_SESSION_KEY = "openclaw.control.builder-draft.v1";
+const BUILDER_SETUP_SESSION_KEY = "openclaw.control.builder-setup.v1";
 
 type PersistedUiSettings = Omit<UiSettings, "token"> & { token?: never };
 
 import { isSupportedLocale } from "../i18n/index.ts";
+import type { BuilderSetupRunResult } from "./controllers/builder.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
@@ -23,6 +26,19 @@ export type UiSettings = {
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   locale?: string;
+};
+
+export type BuilderDraftSettings = {
+  brief: string;
+  templateId: string;
+  modelId: string;
+  agentName: string;
+};
+
+export type BuilderSetupSessionState = {
+  focus: Record<string, unknown> | null;
+  inputs: Record<string, string>;
+  result: BuilderSetupRunResult | null;
 };
 
 function isViteDevPage(): boolean {
@@ -115,6 +131,148 @@ function persistSessionToken(gatewayUrl: string, token: string) {
       return;
     }
     storage.removeItem(key);
+  } catch {
+    // best-effort
+  }
+}
+
+function normalizeBuilderDraftField(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, entry]) =>
+      typeof entry === "string" ? [[key, entry] as const] : [],
+    ),
+  );
+}
+
+function normalizeBuilderSetupResult(value: unknown): BuilderSetupSessionState["result"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as BuilderSetupRunResult;
+}
+
+export function loadBuilderDraft(): BuilderDraftSettings {
+  const defaults: BuilderDraftSettings = {
+    brief: "",
+    templateId: "",
+    modelId: "",
+    agentName: "",
+  };
+  try {
+    const storage = getSessionStorage();
+    if (!storage) {
+      return defaults;
+    }
+    const raw = storage.getItem(BUILDER_DRAFT_SESSION_KEY);
+    if (!raw) {
+      return defaults;
+    }
+    const parsed = JSON.parse(raw) as Partial<BuilderDraftSettings>;
+    return {
+      brief: normalizeBuilderDraftField(parsed.brief),
+      templateId: normalizeBuilderDraftField(parsed.templateId),
+      modelId: normalizeBuilderDraftField(parsed.modelId),
+      agentName: normalizeBuilderDraftField(parsed.agentName),
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+export function saveBuilderDraft(next: BuilderDraftSettings) {
+  try {
+    const storage = getSessionStorage();
+    if (!storage) {
+      return;
+    }
+    storage.setItem(
+      BUILDER_DRAFT_SESSION_KEY,
+      JSON.stringify({
+        brief: next.brief,
+        templateId: next.templateId,
+        modelId: next.modelId,
+        agentName: next.agentName,
+      }),
+    );
+  } catch {
+    // best-effort
+  }
+}
+
+export function loadBuilderSetupSession(): BuilderSetupSessionState {
+  try {
+    const storage = getSessionStorage();
+    if (!storage) {
+      return {
+        focus: null,
+        inputs: {},
+        result: null,
+      };
+    }
+    const raw = storage.getItem(BUILDER_SETUP_SESSION_KEY);
+    if (!raw) {
+      return {
+        focus: null,
+        inputs: {},
+        result: null,
+      };
+    }
+    const parsed = JSON.parse(raw) as Partial<BuilderSetupSessionState>;
+    return {
+      focus:
+        parsed.focus && typeof parsed.focus === "object" && !Array.isArray(parsed.focus)
+          ? parsed.focus
+          : null,
+      inputs: normalizeStringRecord(parsed.inputs),
+      result: normalizeBuilderSetupResult(parsed.result),
+    };
+  } catch {
+    return {
+      focus: null,
+      inputs: {},
+      result: null,
+    };
+  }
+}
+
+export function saveBuilderSetupSession(next: BuilderSetupSessionState) {
+  try {
+    const storage = getSessionStorage();
+    if (!storage) {
+      return;
+    }
+    const shouldClear = !next.focus && Object.keys(next.inputs).length === 0 && next.result == null;
+    if (shouldClear) {
+      storage.removeItem(BUILDER_SETUP_SESSION_KEY);
+      return;
+    }
+    storage.setItem(
+      BUILDER_SETUP_SESSION_KEY,
+      JSON.stringify({
+        focus: next.focus,
+        inputs: next.inputs,
+        result: next.result,
+      }),
+    );
+  } catch {
+    // best-effort
+  }
+}
+
+export function clearBuilderSetupSession() {
+  try {
+    const storage = getSessionStorage();
+    if (!storage) {
+      return;
+    }
+    storage.removeItem(BUILDER_SETUP_SESSION_KEY);
   } catch {
     // best-effort
   }

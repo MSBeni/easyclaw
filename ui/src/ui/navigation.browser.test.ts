@@ -64,6 +64,87 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/channels");
   });
 
+  it("keeps builder web setup focus visible after navigating to onboarding", async () => {
+    const app = mountApp("/builder");
+    await app.updateComplete;
+
+    app.builderSetupFocus = {
+      connectorId: "tools:web",
+      title: "Open web tools setup",
+      detail: "Configure web search, then return to Builder.",
+      refs: ["tools.web.search"],
+      targetTab: "onboarding",
+    };
+    app.setTab("onboarding");
+
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(app.tab).toBe("onboarding");
+    expect(window.location.pathname).toBe("/onboarding");
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("builderSetupConnectorId")).toBe("tools:web");
+    expect(params.get("builderSetupTargetTab")).toBe("onboarding");
+    expect(params.getAll("builderSetupRef")).toContain("tools.web.search");
+    expect(app.textContent).toContain("Configure Web Tools");
+    expect(app.textContent).toContain("Configure and verify web search");
+  });
+
+  it("opens builder quick setup inline before jumping to the setup tab", async () => {
+    const app = mountApp("/builder");
+    await app.updateComplete;
+
+    app.builderSetupFocus = {
+      connectorId: "tools:web",
+      title: "Open web tools setup",
+      detail: "Configure web search, then return to Builder.",
+      refs: ["tools.web.search"],
+      targetTab: "onboarding",
+    };
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(app.tab).toBe("builder");
+    expect(window.location.pathname).toBe("/builder");
+    expect(app.textContent).toContain("Configure Web Tools");
+
+    const button = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find((entry) =>
+      entry.textContent?.includes("Open Setup Tab"),
+    );
+    expect(button).toBeTruthy();
+    button?.click();
+
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(app.tab).toBe("onboarding");
+    expect(window.location.pathname).toBe("/onboarding");
+    expect(new URLSearchParams(window.location.search).get("builderSetupConnectorId")).toBe(
+      "tools:web",
+    );
+    expect(app.textContent).toContain("Configure and verify web search");
+  });
+
+  it("restores builder web setup focus from the onboarding URL", async () => {
+    const app = mountApp(
+      "/onboarding?builderSetupConnectorId=tools%3Aweb&builderSetupTitle=Open+web+tools+setup&builderSetupDetail=Configure+web+search&builderSetupTargetTab=onboarding&builderSetupRef=tools.web.search",
+    );
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(app.tab).toBe("onboarding");
+    expect(app.builderSetupFocus).toEqual(
+      expect.objectContaining({
+        connectorId: "tools:web",
+        targetTab: "onboarding",
+        refs: ["tools.web.search"],
+      }),
+    );
+    expect(app.textContent).toContain("Configure Web Tools");
+    expect(app.textContent).toContain("Configure and verify web search");
+  });
+
   it("renders the refreshed top navigation shell", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;

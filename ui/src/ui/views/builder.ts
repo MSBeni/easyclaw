@@ -3,11 +3,14 @@ import type { AppViewState } from "../app-view-state.ts";
 import {
   applyBuilderPlan,
   loadBuilderPlan,
+  resetBuilderWorkspaceDocEdit,
   type BuilderState,
+  updateBuilderWorkspaceDocEdit,
   verifyBuilderPlan,
 } from "../controllers/builder.ts";
-import type { Tab } from "../navigation.ts";
-import { buildModelOptions } from "./agents-utils.ts";
+import { normalizePath, pathForTab, type Tab } from "../navigation.ts";
+import { saveBuilderDraft, saveBuilderSetupSession } from "../storage.ts";
+import { resolveBuilderModelOverrideOptions } from "./agents-utils.ts";
 
 const BUILDER_TEMPLATE_OPTIONS = [
   { value: "", label: "Auto select" },
@@ -215,6 +218,129 @@ function resolveConfigTarget(refs: string[]): ConfigTarget | null {
   return null;
 }
 
+function normalizeModelProvider(modelRefRaw: string | null | undefined): string | null {
+  const modelRef = modelRefRaw?.trim();
+  if (!modelRef) {
+    return null;
+  }
+  const slashIndex = modelRef.indexOf("/");
+  if (slashIndex <= 0) {
+    return null;
+  }
+  const provider = modelRef.slice(0, slashIndex).trim().toLowerCase();
+  return provider || null;
+}
+
+const GUIDED_BUILDER_SETUP_CONNECTOR_IDS = new Set([
+  "channel:whatsapp",
+  "platform:exec-approvals",
+  "platform:gmail-hook",
+  "platform:core-model",
+  "tools:web",
+]);
+
+export function shouldOpenBuilderQuickSetup(connectorId: string | null): boolean {
+  if (!connectorId) {
+    return false;
+  }
+  if (GUIDED_BUILDER_SETUP_CONNECTOR_IDS.has(connectorId)) {
+    return true;
+  }
+  // Prefer guided onboarding for all messaging channels so setup stays in one flow.
+  return connectorId.startsWith("channel:");
+}
+
+function setOptionalBuilderSetupParam(
+  searchParams: URLSearchParams,
+  key: string,
+  value: string | null | undefined,
+) {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed) {
+    searchParams.set(key, trimmed);
+    return;
+  }
+  searchParams.delete(key);
+}
+
+export function buildBuilderSetupUrl(
+  currentUrl: string,
+  basePath: string,
+  focus: NonNullable<AppViewState["builderSetupFocus"]>,
+): string {
+  const url = new URL(currentUrl);
+  url.pathname = normalizePath(pathForTab(focus.targetTab, basePath));
+  url.searchParams.delete("session");
+  for (const key of [
+    "builderSetupActionId",
+    "builderSetupConnectorId",
+    "builderSetupLabel",
+    "builderSetupKind",
+    "builderSetupSourceKind",
+    "builderSetupDocsPath",
+    "builderSetupSelectionLabel",
+    "builderSetupDetailLabel",
+    "builderSetupOnboarding",
+    "builderSetupRequiresConfig",
+    "builderSetupRequiresAuth",
+    "builderSetupInstallRequired",
+    "builderSetupInstallStrategy",
+    "builderSetupTitle",
+    "builderSetupDetail",
+    "builderSetupTargetTab",
+    "builderSetupRef",
+  ]) {
+    url.searchParams.delete(key);
+  }
+  setOptionalBuilderSetupParam(url.searchParams, "builderSetupActionId", focus.actionId);
+  setOptionalBuilderSetupParam(url.searchParams, "builderSetupConnectorId", focus.connectorId);
+  setOptionalBuilderSetupParam(url.searchParams, "builderSetupLabel", focus.connectorLabel);
+  setOptionalBuilderSetupParam(url.searchParams, "builderSetupKind", focus.connectorKind);
+  setOptionalBuilderSetupParam(
+    url.searchParams,
+    "builderSetupSourceKind",
+    focus.connectorSourceKind,
+  );
+  setOptionalBuilderSetupParam(url.searchParams, "builderSetupDocsPath", focus.connectorDocsPath);
+  setOptionalBuilderSetupParam(
+    url.searchParams,
+    "builderSetupSelectionLabel",
+    focus.connectorSelectionLabel,
+  );
+  setOptionalBuilderSetupParam(
+    url.searchParams,
+    "builderSetupDetailLabel",
+    focus.connectorDetailLabel,
+  );
+  if (typeof focus.connectorOnboarding === "boolean") {
+    url.searchParams.set("builderSetupOnboarding", String(focus.connectorOnboarding));
+  }
+  if (typeof focus.connectorRequiresConfig === "boolean") {
+    url.searchParams.set("builderSetupRequiresConfig", String(focus.connectorRequiresConfig));
+  }
+  if (typeof focus.connectorRequiresAuth === "boolean") {
+    url.searchParams.set("builderSetupRequiresAuth", String(focus.connectorRequiresAuth));
+  }
+  if (typeof focus.connectorInstallRequired === "boolean") {
+    url.searchParams.set("builderSetupInstallRequired", String(focus.connectorInstallRequired));
+  }
+  setOptionalBuilderSetupParam(
+    url.searchParams,
+    "builderSetupInstallStrategy",
+    focus.connectorInstallStrategy,
+  );
+  setOptionalBuilderSetupParam(url.searchParams, "builderSetupTitle", focus.title);
+  setOptionalBuilderSetupParam(url.searchParams, "builderSetupDetail", focus.detail);
+  url.searchParams.set("builderSetupTargetTab", focus.targetTab);
+  for (const ref of focus.refs) {
+    const trimmed = ref.trim();
+    if (trimmed) {
+      url.searchParams.append("builderSetupRef", trimmed);
+    }
+  }
+  return url.toString();
+}
+
 function titleCaseWords(value: string): string {
   return value
     .split(/[\s._:-]+/)
@@ -265,6 +391,7 @@ function navigateToConfig(
   state: AppViewState,
   refs: string[],
   params?: {
+    actionId?: string;
     connectorId?: string;
     connectorLabel?: string;
     connectorKind?: string;
@@ -277,26 +404,112 @@ function navigateToConfig(
     connectorRequiresAuth?: boolean;
     connectorInstallRequired?: boolean;
     connectorInstallStrategy?: "none" | "bundled" | "npm" | "local" | "external";
+    actionKind?: "install" | "connect" | "configure" | "enable" | "policy" | "verify" | "question";
+    actionSource?:
+      | "setup-task"
+      | "verification"
+      | "requirement-gap"
+      | "planner-question"
+      | "runtime-auth";
+    requiredFields?: NonNullable<
+      NonNullable<
+        AppViewState["builderPlan"]
+      >["draft"]["buildSpec"]["setupActions"][number]["requiredFields"]
+    >;
+    uiSchema?: NonNullable<
+      NonNullable<
+        AppViewState["builderPlan"]
+      >["draft"]["buildSpec"]["setupActions"][number]["uiSchema"]
+    >;
+    completionSignal?: NonNullable<
+      NonNullable<
+        AppViewState["builderPlan"]
+      >["draft"]["buildSpec"]["setupActions"][number]["completionSignal"]
+    >;
     title?: string;
     detail?: string;
   },
 ) {
-  const target = resolveConfigTarget(refs);
-  if (!target) {
-    return;
-  }
+  const connectorId = params?.connectorId?.trim() || null;
   const actionTitle = setupActionLabel({
-    connectorId: params?.connectorId,
+    connectorId: connectorId ?? undefined,
     connectorLabel: params?.connectorLabel,
     refs,
     title: params?.title,
   });
+  const focusDetail =
+    params?.detail?.trim() ||
+    "Finish the requested setup here, save or apply your changes, then return to Builder and rebuild or verify.";
+
+  const scrollToTop = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  };
+
+  // Guided Builder setup should open the dedicated Setup tab so the user sees
+  // the focused assist card rather than landing in a generic config surface.
+  if (shouldOpenBuilderQuickSetup(connectorId)) {
+    const focus = {
+      actionId: params?.actionId?.trim() || null,
+      connectorId,
+      connectorLabel: params?.connectorLabel?.trim() || null,
+      connectorKind: params?.connectorKind?.trim() || null,
+      connectorSourceKind: params?.connectorSourceKind?.trim() || null,
+      connectorDocsPath: params?.connectorDocsPath?.trim() || null,
+      connectorSelectionLabel: params?.connectorSelectionLabel?.trim() || null,
+      connectorDetailLabel: params?.connectorDetailLabel?.trim() || null,
+      connectorOnboarding: params?.connectorOnboarding,
+      connectorRequiresConfig: params?.connectorRequiresConfig,
+      connectorRequiresAuth: params?.connectorRequiresAuth,
+      connectorInstallRequired: params?.connectorInstallRequired,
+      connectorInstallStrategy: params?.connectorInstallStrategy ?? null,
+      actionKind: params?.actionKind,
+      actionSource: params?.actionSource ?? null,
+      requiredFields: params?.requiredFields,
+      uiSchema: params?.uiSchema ?? null,
+      completionSignal: params?.completionSignal ?? null,
+      title: actionTitle,
+      detail: focusDetail,
+      refs,
+      targetTab: "onboarding",
+    };
+    state.builderSetupFocus = focus;
+    state.builderSetupError = null;
+    state.builderSetupResult = null;
+    saveBuilderDraft({
+      brief: state.builderBrief,
+      templateId: state.builderTemplateId,
+      modelId: state.builderModelId,
+      agentName: state.builderAgentName,
+    });
+    saveBuilderSetupSession({
+      focus,
+      inputs: state.builderSetupInputs,
+      result: null,
+    });
+    // Stay in Builder for the primary setup flow so a stale runtime or auth
+    // redirect cannot strand the user on a half-rendered page. The focused
+    // quick-setup card renders inline here, and users can still jump to the
+    // Setup tab from inside that card if they want the full onboarding view.
+    scrollToTop();
+    return;
+  }
+
+  const target = resolveConfigTarget(refs);
+  if (!target) {
+    return;
+  }
   // Set the section state before navigating so it's ready when the tab renders
   if (target.sectionKey && target.section) {
     (state as Record<string, unknown>)[target.sectionKey] = target.section;
   }
   state.builderSetupFocus = {
-    connectorId: params?.connectorId?.trim() || null,
+    actionId: params?.actionId?.trim() || null,
+    connectorId,
     connectorLabel: params?.connectorLabel?.trim() || null,
     connectorKind: params?.connectorKind?.trim() || null,
     connectorSourceKind: params?.connectorSourceKind?.trim() || null,
@@ -308,14 +521,23 @@ function navigateToConfig(
     connectorRequiresAuth: params?.connectorRequiresAuth,
     connectorInstallRequired: params?.connectorInstallRequired,
     connectorInstallStrategy: params?.connectorInstallStrategy ?? null,
+    actionKind: params?.actionKind,
+    actionSource: params?.actionSource ?? null,
+    requiredFields: params?.requiredFields,
+    uiSchema: params?.uiSchema ?? null,
+    completionSignal: params?.completionSignal ?? null,
     title: actionTitle,
-    detail:
-      params?.detail?.trim() ||
-      "Finish the requested setup here, save or apply your changes, then return to Builder and rebuild or verify.",
+    detail: focusDetail,
     refs,
     targetTab: target.tab,
   };
+  saveBuilderSetupSession({
+    focus: state.builderSetupFocus,
+    inputs: state.builderSetupInputs,
+    result: state.builderSetupResult,
+  });
   state.setTab(target.tab);
+  scrollToTop();
 }
 
 export type BuilderProps = {
@@ -323,6 +545,7 @@ export type BuilderProps = {
   onSetBrief: (brief: string) => void;
   onSetTemplate: (templateId: string) => void;
   onSetModel: (modelId: string) => void;
+  onSetAgentName: (agentName: string) => void;
   onPlan: () => void;
   onVerify: () => void;
   onConfirmApply: () => void;
@@ -345,17 +568,46 @@ export function triggerBuilderVerify(state: BuilderState) {
 export function renderBuilder(props: BuilderProps) {
   const { state } = props;
   const planResult = state.builderPlan;
+  const workspacePreviews = planResult?.workspacePreviews ?? [];
   const draft = planResult?.draft ?? null;
   const plan = asObject(planResult?.plan);
   const issues = readObjectArray(plan, "issues");
   const blueprintStatus = readString(plan, "status", "ready");
+  const blockingSetupActions =
+    draft?.buildSpec.setupActions.filter(
+      (action) => (action.blocking ?? false) && action.status !== "completed",
+    ).length ?? 0;
   const canQuickApply =
-    draft?.plannerStatus === "ready" && blueprintStatus === "ready" && !state.builderApplyResult;
+    draft?.plannerStatus === "ready" &&
+    blueprintStatus === "ready" &&
+    blockingSetupActions === 0 &&
+    !state.builderApplyResult;
   const integrationByConnectorId = new Map(
     (draft?.planning.integrations ?? []).map(
       (integration) => [integration.connectorId, integration] as const,
     ),
   );
+  const modelOverrideOptions = resolveBuilderModelOverrideOptions(
+    state.configForm,
+    state.builderModelId || undefined,
+    state.cronModelSuggestions,
+    state.chatModelCatalog,
+  );
+  const configuredModelOverrideOptions = modelOverrideOptions.filter((option) => option.configured);
+  const unconfiguredModelOverrideOptions = modelOverrideOptions.filter(
+    (option) => !option.configured,
+  );
+  const selectedModelOption = state.builderModelId
+    ? (modelOverrideOptions.find((option) => option.value === state.builderModelId) ?? null)
+    : null;
+  const selectedModelNeedsSetup = Boolean(
+    state.builderModelId && selectedModelOption && !selectedModelOption.configured,
+  );
+  const selectedModelProvider =
+    selectedModelOption?.provider ?? normalizeModelProvider(state.builderModelId);
+  const selectedModelProviderLabel = selectedModelProvider
+    ? titleCaseWords(selectedModelProvider)
+    : "Selected model provider";
 
   return html`
     <div class="builder-layout">
@@ -391,25 +643,85 @@ export function renderBuilder(props: BuilderProps) {
         </label>
 
         <label class="field" style="max-width:360px; margin-top:12px;">
+          <span>Agent Name (optional)</span>
+          <input
+            type="text"
+            .value=${state.builderAgentName}
+            placeholder="Use inferred name"
+            @input=${(event: Event) =>
+              props.onSetAgentName((event.target as HTMLInputElement).value)}
+          />
+          <span class="card-sub" style="margin-top:6px;">
+            Sets the coordinator agent name created by Apply Plan.
+          </span>
+        </label>
+
+        <label class="field" style="max-width:360px; margin-top:12px;">
           <span>Model Override (optional)</span>
           <select
             .value=${state.builderModelId}
             @change=${(event: Event) => props.onSetModel((event.target as HTMLSelectElement).value)}
           >
             <option value="">Use system default</option>
-            ${buildModelOptions(
-              state.configForm,
-              state.builderModelId || undefined,
-              state.cronModelSuggestions,
-            )}
+            ${
+              configuredModelOverrideOptions.length > 0
+                ? html`
+                    <optgroup label="Configured (ready)">
+                      ${configuredModelOverrideOptions.map(
+                        (option) =>
+                          html`<option value=${option.value}>
+                            ${option.label} [Configured]
+                          </option>`,
+                      )}
+                    </optgroup>
+                  `
+                : nothing
+            }
+            ${
+              unconfiguredModelOverrideOptions.length > 0
+                ? html`
+                    <optgroup label="Not configured (needs setup)">
+                      ${unconfiguredModelOverrideOptions.map(
+                        (option) =>
+                          html`<option value=${option.value}>
+                            ${option.label} [Not configured]
+                          </option>`,
+                      )}
+                    </optgroup>
+                  `
+                : nothing
+            }
           </select>
           <span class="card-sub" style="margin-top:6px;">
             Sets the primary model for the created agent and its scheduled runs.
           </span>
+          ${
+            selectedModelNeedsSetup
+              ? html`
+                  <div class="callout warn" style="margin-top:8px;">
+                    ${selectedModelProviderLabel} credentials are not configured for this model yet.
+                    <button
+                      type="button"
+                      class="builder-config-link"
+                      @click=${() =>
+                        navigateToConfig(state, ["models"], {
+                          connectorId: "platform:core-model",
+                          connectorLabel: "OpenClaw Core Model Runtime",
+                          title: "Model provider setup",
+                          detail: `Configure ${selectedModelProviderLabel} credentials, then rebuild the plan.`,
+                        })}
+                    >
+                      Open model setup &rarr;
+                    </button>
+                  </div>
+                `
+              : nothing
+          }
         </label>
 
         <div class="builder-actions" style="margin-top:16px;">
           <button
+            type="button"
             class="btn primary"
             ?disabled=${!state.builderBrief.trim() || state.builderPlanLoading}
             @click=${props.onPlan}
@@ -427,6 +739,7 @@ export function renderBuilder(props: BuilderProps) {
               ? html`
                   <div class="builder-actions__secondary">
                     <button
+                      type="button"
                       class="btn btn--sm"
                       ?disabled=${state.builderVerifying}
                       @click=${props.onVerify}
@@ -440,6 +753,7 @@ export function renderBuilder(props: BuilderProps) {
                       }
                     </button>
                     <button
+                      type="button"
                       class="btn btn--sm"
                       ?disabled=${state.builderPlanLoading}
                       @click=${props.onPlan}
@@ -447,6 +761,7 @@ export function renderBuilder(props: BuilderProps) {
                       Rebuild
                     </button>
                     <button
+                      type="button"
                       class="btn btn--sm primary"
                       ?disabled=${!canQuickApply}
                       @click=${props.onConfirmApply}
@@ -462,7 +777,7 @@ export function renderBuilder(props: BuilderProps) {
           planResult && !state.builderApplyResult
             ? html`
                 <div class="card-sub" style="margin-top: 8px">
-                  Build Plan only previews changes. Click Apply Plan to create/update the agent and cron jobs.
+                  This is a preview. Click Apply Plan to create or update the agent and its scheduled tasks.
                 </div>
               `
             : nothing
@@ -564,6 +879,16 @@ export function renderBuilder(props: BuilderProps) {
 
               <section class="card">
                 <div class="builder-header">
+                  <div class="card-title section-title">Planner Spec</div>
+                </div>
+                <div class="builder-grid builder-grid--2col">
+                  ${builderBuildSpecCard(draft.buildSpec)}
+                  ${builderWorkspacePreviewList(state, workspacePreviews)}
+                </div>
+              </section>
+
+              <section class="card">
+                <div class="builder-header">
                   <div class="card-title section-title">Integrations &amp; Setup</div>
                 </div>
                 <div class="builder-grid builder-grid--2col">
@@ -575,27 +900,31 @@ export function renderBuilder(props: BuilderProps) {
                   )}
                 </div>
                 <div class="builder-grid builder-grid--2col" style="margin-top:4px;">
-                  ${builderSetupTaskList(
+                  ${builderSetupActionList(
                     state,
-                    draft.planning.setupTasks.map((task) => ({
-                      ...task,
-                      connectorKind: integrationByConnectorId.get(task.connectorId)?.kind,
-                      connectorSourceKind: integrationByConnectorId.get(task.connectorId)
+                    draft.buildSpec.setupActions.map((action) => ({
+                      ...action,
+                      connectorLabel:
+                        action.connectorLabel ??
+                        integrationByConnectorId.get(action.connectorId)?.label ??
+                        action.connectorId,
+                      connectorKind: integrationByConnectorId.get(action.connectorId)?.kind,
+                      connectorSourceKind: integrationByConnectorId.get(action.connectorId)
                         ?.sourceKind,
-                      connectorDocsPath: integrationByConnectorId.get(task.connectorId)?.docsPath,
-                      connectorSelectionLabel: integrationByConnectorId.get(task.connectorId)
+                      connectorDocsPath: integrationByConnectorId.get(action.connectorId)?.docsPath,
+                      connectorSelectionLabel: integrationByConnectorId.get(action.connectorId)
                         ?.selectionLabel,
-                      connectorDetailLabel: integrationByConnectorId.get(task.connectorId)
+                      connectorDetailLabel: integrationByConnectorId.get(action.connectorId)
                         ?.detailLabel,
-                      connectorOnboarding: integrationByConnectorId.get(task.connectorId)
+                      connectorOnboarding: integrationByConnectorId.get(action.connectorId)
                         ?.onboarding,
-                      connectorRequiresConfig: integrationByConnectorId.get(task.connectorId)
+                      connectorRequiresConfig: integrationByConnectorId.get(action.connectorId)
                         ?.requiresConfig,
-                      connectorRequiresAuth: integrationByConnectorId.get(task.connectorId)
+                      connectorRequiresAuth: integrationByConnectorId.get(action.connectorId)
                         ?.requiresAuth,
-                      connectorInstallRequired: integrationByConnectorId.get(task.connectorId)
+                      connectorInstallRequired: integrationByConnectorId.get(action.connectorId)
                         ?.installRequired,
-                      connectorInstallStrategy: integrationByConnectorId.get(task.connectorId)
+                      connectorInstallStrategy: integrationByConnectorId.get(action.connectorId)
                         ?.installStrategy,
                     })),
                   )}
@@ -735,7 +1064,7 @@ function renderBuilderApplySection(
         ${
           result.automation.jobs.length > 0
             ? html`
-                <div class="label" style="margin-top:12px;">Cron Jobs</div>
+                <div class="label" style="margin-top:12px;">Scheduled Tasks</div>
                 ${result.automation.jobs.map(
                   (job) => html`
                     <div class="tpl-plan-file">
@@ -765,7 +1094,7 @@ function renderBuilderApplySection(
     return html`
       <section class="card">
         <div class="callout danger">${state.builderApplyError}</div>
-        <button class="btn primary" style="margin-top:12px;" @click=${props.onApply}>
+        <button type="button" class="btn primary" style="margin-top:12px;" @click=${props.onApply}>
           Retry Apply
         </button>
       </section>
@@ -786,32 +1115,46 @@ function renderBuilderApplySection(
         <div class="card-title section-title">Confirm Apply</div>
         <div class="card-sub" style="margin-bottom:12px;">
           This will create or update <strong>${draft.displayName}</strong> from the builder
-          plan and write config, workspace files, bindings, and cron jobs.
+          plan and write settings, files, and scheduled tasks.
         </div>
         <div style="display:flex; gap:8px;">
-          <button class="btn primary" @click=${props.onApply}>Yes, Apply</button>
-          <button class="btn" @click=${props.onCancelApply}>Cancel</button>
+          <button type="button" class="btn primary" @click=${props.onApply}>Yes, Apply</button>
+          <button type="button" class="btn" @click=${props.onCancelApply}>Cancel</button>
         </div>
       </section>
     `;
   }
 
   const canApply = draft.plannerStatus === "ready" && planStatus === "ready";
+  const hasPendingBlockingSetupAction = draft.buildSpec.setupActions.some(
+    (action) => (action.blocking ?? false) && action.status !== "completed",
+  );
   return html`
     <section class="card" style="text-align:center; padding:24px;">
-      <button class="btn primary" ?disabled=${!canApply} @click=${props.onConfirmApply}>
+      <button
+        type="button"
+        class="btn primary"
+        ?disabled=${!canApply || hasPendingBlockingSetupAction}
+        @click=${props.onConfirmApply}
+      >
         Apply Builder Plan
       </button>
       ${
-        canApply
+        canApply && !hasPendingBlockingSetupAction
           ? html`
               <div class="card-sub" style="margin-top: 8px">Creates the agent from the inferred blueprint.</div>
             `
-          : html`
-              <div class="card-sub" style="margin-top: 8px">
-                Resolve planner gaps or blueprint issues before apply.
-              </div>
-            `
+          : hasPendingBlockingSetupAction
+            ? html`
+                <div class="card-sub" style="margin-top: 8px">
+                  Finish the pending setup actions and rerun verification before apply.
+                </div>
+              `
+            : html`
+                <div class="card-sub" style="margin-top: 8px">
+                  Resolve planner gaps or blueprint issues before apply.
+                </div>
+              `
       }
     </section>
   `;
@@ -851,12 +1194,22 @@ const DELIVERY_CHANNEL_REF_MAP: Record<string, string> = {
   imessage: "channels.imessage",
 };
 
-export function resolveBuilderQuestionConfigRefs(question: BuilderQuestion): string[] {
+function resolveBuilderQuestionChannel(question: BuilderQuestion): string | null {
   if (question.id !== "delivery-target") {
-    return [];
+    return null;
   }
   const prompt = question.prompt.toLowerCase();
   const channel = Object.keys(DELIVERY_CHANNEL_REF_MAP).find((key) => prompt.includes(key));
+  return channel ?? null;
+}
+
+export function resolveBuilderQuestionSetupConnectorId(question: BuilderQuestion): string | null {
+  const channel = resolveBuilderQuestionChannel(question);
+  return channel ? `channel:${channel}` : null;
+}
+
+export function resolveBuilderQuestionConfigRefs(question: BuilderQuestion): string[] {
+  const channel = resolveBuilderQuestionChannel(question);
   if (!channel) {
     return [];
   }
@@ -872,6 +1225,7 @@ function builderQuestionList(state: AppViewState, questions: BuilderQuestion[]) 
       <div class="label" style="margin-bottom:8px;">Questions</div>
       ${questions.map((question) => {
         const refs = resolveBuilderQuestionConfigRefs(question);
+        const channel = resolveBuilderQuestionChannel(question);
         const hasTarget = resolveConfigTarget(refs);
         return html`
             <div class="tpl-note builder-issue-row">
@@ -880,9 +1234,16 @@ function builderQuestionList(state: AppViewState, questions: BuilderQuestion[]) 
                 hasTarget
                   ? html`
                       <button
+                        type="button"
                         class="builder-config-link"
                         @click=${() =>
                           navigateToConfig(state, refs, {
+                            ...(channel
+                              ? {
+                                  connectorId: resolveBuilderQuestionSetupConnectorId(question),
+                                  connectorLabel: titleCaseWords(channel),
+                                }
+                              : {}),
                             title: "Delivery target setup",
                             detail:
                               "Set the channel default delivery target, save the change, then rebuild the Builder plan.",
@@ -896,6 +1257,137 @@ function builderQuestionList(state: AppViewState, questions: BuilderQuestion[]) 
             </div>
           `;
       })}
+    </div>
+  `;
+}
+
+function builderBuildSpecCard(
+  buildSpec: NonNullable<AppViewState["builderPlan"]>["draft"]["buildSpec"],
+) {
+  const scheduleBits = [
+    buildSpec.schedule.description,
+    buildSpec.schedule.cron,
+    buildSpec.schedule.timezoneLabel ?? buildSpec.schedule.timezone,
+  ].filter((value): value is string => Boolean(value && value.trim()));
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">BuildSpec</div>
+      <div class="tpl-note">Planner: ${buildSpec.contract.id} (${buildSpec.contract.kind})</div>
+      <div class="tpl-note">
+        Planner mode: ${buildSpec.planner.mode}
+        ${buildSpec.planner.usedModelRef ? ` · ${buildSpec.planner.usedModelRef}` : ""}
+      </div>
+      <div class="tpl-note">
+        Goal: ${buildSpec.goal.primaryGoal} · ${buildSpec.goal.executionMode} · ${buildSpec.status}
+      </div>
+      <div class="tpl-note">
+        Template: ${buildSpec.template.displayName} (${buildSpec.template.templateId})
+      </div>
+      <div class="tpl-note">
+        Graph: ${buildSpec.graph.mode} with ${buildSpec.graph.nodes.length} node${
+          buildSpec.graph.nodes.length === 1 ? "" : "s"
+        }
+      </div>
+      ${
+        scheduleBits.length > 0
+          ? html`<div class="tpl-note">Schedule: ${scheduleBits.join(" · ")}</div>`
+          : nothing
+      }
+      <div class="tpl-note">
+        Planner context: ${buildSpec.context.capabilityContractCount} contracts ·
+        ${buildSpec.context.connectorCount} connectors ·
+        ${buildSpec.context.templateExemplarCount} exemplars
+      </div>
+      <div class="tpl-note">Setup actions: ${buildSpec.setupActions.length}</div>
+      ${
+        buildSpec.planner.fallbackReason
+          ? html`<div class="tpl-note">${buildSpec.planner.fallbackReason}</div>`
+          : nothing
+      }
+      ${
+        buildSpec.workspaceArtifacts.length > 0
+          ? html`
+              <div class="tpl-note" style="margin-top:8px;">
+                Workspace docs:
+                ${buildSpec.workspaceArtifacts.map((artifact) => artifact.fileName).join(", ")}
+              </div>
+            `
+          : nothing
+      }
+      ${buildSpec.notes.map((note) => html`<div class="tpl-note">${note}</div>`)}
+    </div>
+  `;
+}
+
+function builderWorkspacePreviewList(
+  state: AppViewState,
+  previews: NonNullable<AppViewState["builderPlan"]>["workspacePreviews"],
+) {
+  if (previews.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div>
+      <div class="label" style="margin-bottom:8px;">Managed Workspace Docs</div>
+      ${previews.map(
+        (preview) => html`
+          <div class="tpl-plan-file">
+            <span>${preview.roleId}${preview.entry ? " [entry]" : ""}</span>
+            <span class="tpl-pill tpl-pill--muted">${preview.files.length} files</span>
+          </div>
+          ${preview.files.map(
+            (file) => html`
+              <details class="tpl-note" style="margin-bottom:8px;">
+                <summary>${file.name}</summary>
+                <div class="card-sub" style="margin-top:8px; margin-bottom:8px;">
+                  Review or edit this managed section before apply. Your edits stay local to Builder
+                  until you apply the plan.
+                </div>
+                ${(() => {
+                  const key = `${preview.nodeId}:${file.name}`;
+                  const edited = Object.prototype.hasOwnProperty.call(
+                    state.builderWorkspaceDocEdits,
+                    key,
+                  );
+                  const value = edited ? (state.builderWorkspaceDocEdits[key] ?? "") : file.content;
+                  return html`
+                    <textarea
+                      class="mono"
+                      style="width:100%; min-height:220px; white-space:pre; resize:vertical;"
+                      .value=${value}
+                      @input=${(event: Event) =>
+                        updateBuilderWorkspaceDocEdit(state, {
+                          nodeId: preview.nodeId,
+                          fileName: file.name,
+                          content: (event.target as HTMLTextAreaElement).value,
+                        })}
+                    ></textarea>
+                    ${
+                      edited
+                        ? html`
+                            <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+                              <button
+                                type="button"
+                                class="builder-config-link"
+                                @click=${() =>
+                                  resetBuilderWorkspaceDocEdit(state, {
+                                    nodeId: preview.nodeId,
+                                    fileName: file.name,
+                                  })}
+                              >
+                                Reset to generated text
+                              </button>
+                            </div>
+                          `
+                        : nothing
+                    }
+                  `;
+                })()}
+              </details>
+            `,
+          )}
+        `,
+      )}
     </div>
   `;
 }
@@ -956,6 +1448,7 @@ function builderGapList(
               state && configRef
                 ? html`
                     <button
+                      type="button"
                       class="builder-config-link"
                       @click=${() =>
                         navigateToConfig(state, [codeRef], {
@@ -1267,6 +1760,7 @@ function builderIntegrationList(
               hasLink && needsAction && hasPendingTask && value.issues.length === 0
                 ? html`
                     <button
+                      type="button"
                       class="builder-config-link"
                       @click=${() =>
                         navigateToConfig(state, [configRef], {
@@ -1310,6 +1804,7 @@ function builderIntegrationList(
                   hasLink && hasPendingTask
                     ? html`
                         <button
+                          type="button"
                           class="builder-config-link"
                           @click=${() =>
                             navigateToConfig(state, [configRef], {
@@ -1348,15 +1843,47 @@ function builderIntegrationList(
   `;
 }
 
-function builderSetupTaskList(
+function builderSetupActionList(
   state: AppViewState,
   values: Array<{
+    id?: string;
     title: string;
     detail: string;
     status: string;
     connectorId: string;
     connectorLabel: string;
+    kind?: "install" | "connect" | "configure" | "enable" | "policy" | "verify" | "question";
+    source?:
+      | "setup-task"
+      | "verification"
+      | "requirement-gap"
+      | "planner-question"
+      | "runtime-auth";
+    blocking?: boolean;
     refs: string[];
+    requiredFields?: Array<{
+      key: string;
+      label: string;
+      kind: string;
+      required: boolean;
+      inputKey?: string;
+      configPath?: string;
+      inputType?: "text" | "secret" | "select";
+      placeholder?: string;
+      help?: string;
+      options?: Array<{ value: string; label: string }>;
+    }>;
+    workflowRoles?: string[];
+    uiSchema?: {
+      variant: "guided-setup" | "inline-question" | "expert-config";
+      section?: string;
+      fieldKeys: string[];
+    };
+    completionSignal?: {
+      kind: "integration-status" | "verification" | "builder-check";
+      target: string;
+      detail: string;
+    };
     connectorKind?: string;
     connectorSourceKind?: string;
     connectorDocsPath?: string;
@@ -1374,9 +1901,8 @@ function builderSetupTaskList(
   }
   return html`
     <div>
-      <div class="label" style="margin-bottom:8px;">Setup Tasks</div>
+      <div class="label" style="margin-bottom:8px;">Setup Actions</div>
       ${values.map((value) => {
-        // Resolve config target from refs first, fall back to connectorId
         const refsTarget = value.refs.length > 0 ? resolveConfigTarget(value.refs) : null;
         const connectorRef = connectorIdToConfigRef(value.connectorId);
         const fallbackTarget = connectorRef ? resolveConfigTarget([connectorRef]) : null;
@@ -1384,8 +1910,11 @@ function builderSetupTaskList(
         const navRefs = refsTarget ? value.refs : connectorRef ? [connectorRef] : [];
         return html`
           <div class="tpl-plan-file">
-            <span>${value.title}</span>
-            <span class="tpl-pill ${value.status === "completed" ? "tpl-pill--ok" : "tpl-pill--muted"}">${value.status}</span>
+            <span>
+              ${value.title}
+              ${value.kind ? html` <span class="mono">(${value.kind})</span>` : nothing}
+            </span>
+            <span class="tpl-pill ${value.status === "completed" ? "tpl-pill--ok" : "tpl-pill--error"}">${value.status}</span>
           </div>
           <div class="tpl-note builder-issue-row">
             <span>${value.detail}</span>
@@ -1393,9 +1922,11 @@ function builderSetupTaskList(
               canNavigate
                 ? html`
                     <button
+                      type="button"
                       class="builder-config-link"
                       @click=${() =>
                         navigateToConfig(state, navRefs, {
+                          actionId: value.id,
                           connectorId: value.connectorId,
                           connectorLabel: value.connectorLabel,
                           connectorKind: value.connectorKind,
@@ -1408,6 +1939,11 @@ function builderSetupTaskList(
                           connectorRequiresAuth: value.connectorRequiresAuth,
                           connectorInstallRequired: value.connectorInstallRequired,
                           connectorInstallStrategy: value.connectorInstallStrategy,
+                          actionKind: value.kind,
+                          actionSource: value.source,
+                          requiredFields: value.requiredFields,
+                          uiSchema: value.uiSchema,
+                          completionSignal: value.completionSignal,
                           title: value.title,
                           detail: value.detail,
                         })}
@@ -1423,6 +1959,34 @@ function builderSetupTaskList(
                 : nothing
             }
           </div>
+          ${
+            value.workflowRoles && value.workflowRoles.length > 0
+              ? html`<div class="tpl-note">Roles: ${value.workflowRoles.join(", ")}</div>`
+              : nothing
+          }
+          ${
+            value.requiredFields && value.requiredFields.length > 0
+              ? html`
+                  <div class="tpl-note">
+                    Required fields: ${value.requiredFields.map((field) => field.label).join(", ")}
+                  </div>
+                `
+              : nothing
+          }
+          ${
+            value.completionSignal
+              ? html`<div class="tpl-note">Complete when: ${value.completionSignal.detail}</div>`
+              : nothing
+          }
+          ${
+            value.connectorId === "channel:whatsapp" && canNavigate
+              ? html`
+                  <div class="tpl-note">
+                    Open WhatsApp setup to pair and optionally override the destination number/group.
+                  </div>
+                `
+              : nothing
+          }
           ${
             value.refs.length > 0
               ? html`<div class="tpl-note mono">${value.refs.join(", ")}</div>`
@@ -1489,6 +2053,7 @@ function builderVerificationList(
               hasLink
                 ? html`
                     <button
+                      type="button"
                       class="builder-config-link"
                       @click=${() =>
                         navigateToConfig(state, [configRef], {

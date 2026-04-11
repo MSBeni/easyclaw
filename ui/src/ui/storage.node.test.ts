@@ -171,6 +171,82 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
+  it("persists the builder draft in sessionStorage", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/builder",
+    });
+
+    const { loadBuilderDraft, saveBuilderDraft } = await import("./storage.ts");
+    saveBuilderDraft({
+      brief: "Summarize the AI Daily Brief podcast and send WhatsApp ideas.",
+      templateId: "daily-briefing",
+      modelId: "google/gemini-2.5-pro",
+      agentName: "AI Daily Brief WhatsApp",
+    });
+
+    expect(loadBuilderDraft()).toEqual({
+      brief: "Summarize the AI Daily Brief podcast and send WhatsApp ideas.",
+      templateId: "daily-briefing",
+      modelId: "google/gemini-2.5-pro",
+      agentName: "AI Daily Brief WhatsApp",
+    });
+  });
+
+  it("persists builder setup focus, inputs, and latest result in sessionStorage", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/builder",
+    });
+
+    const { clearBuilderSetupSession, loadBuilderSetupSession, saveBuilderSetupSession } =
+      await import("./storage.ts");
+    saveBuilderSetupSession({
+      focus: {
+        actionId: "tools:web:configure",
+        connectorId: "tools:web",
+        title: "Configure Web Tools",
+      },
+      inputs: {
+        provider: "brave",
+      },
+      result: {
+        actionId: "tools:web:configure",
+        connectorId: "tools:web",
+        status: "needs_auth",
+        message: "Provider saved, but credentials are still missing.",
+        updatedRefs: ["tools.web.search.provider"],
+      },
+    });
+
+    expect(loadBuilderSetupSession()).toEqual({
+      focus: {
+        actionId: "tools:web:configure",
+        connectorId: "tools:web",
+        title: "Configure Web Tools",
+      },
+      inputs: {
+        provider: "brave",
+      },
+      result: {
+        actionId: "tools:web:configure",
+        connectorId: "tools:web",
+        status: "needs_auth",
+        message: "Provider saved, but credentials are still missing.",
+        updatedRefs: ["tools.web.search.provider"],
+      },
+    });
+
+    clearBuilderSetupSession();
+    expect(loadBuilderSetupSession()).toEqual({
+      focus: null,
+      inputs: {},
+      result: null,
+    });
+  });
+
   it("does not reuse a session token for a different gatewayUrl", async () => {
     setTestLocation({
       protocol: "https:",

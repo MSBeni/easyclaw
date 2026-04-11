@@ -61,7 +61,12 @@ import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exe
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
-import { loadSettings, type UiSettings } from "./storage.ts";
+import {
+  loadBuilderDraft,
+  loadBuilderSetupSession,
+  loadSettings,
+  type UiSettings,
+} from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -112,6 +117,8 @@ function resolveOnboardingMode(): boolean {
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
+  private bootBuilderDraft = loadBuilderDraft();
+  private bootBuilderSetup = loadBuilderSetupSession();
   clientInstanceId = generateUUID();
   connectGeneration = 0;
   @state() settings: UiSettings = loadSettings();
@@ -262,15 +269,18 @@ export class OpenClawApp extends LitElement {
   @state() toolsCatalogResult: ToolsCatalogResult | null = null;
   @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
     "overview";
-  @state() builderBrief = "";
-  @state() builderTemplateId = "";
-  @state() builderModelId = "";
-  @state() builderSetupFocus: AppViewState["builderSetupFocus"] = null;
-  @state() builderSetupInputs: Record<string, string> = {};
+  @state() builderBrief = this.bootBuilderDraft.brief;
+  @state() builderTemplateId = this.bootBuilderDraft.templateId;
+  @state() builderModelId = this.bootBuilderDraft.modelId;
+  @state() builderAgentName = this.bootBuilderDraft.agentName;
+  @state() builderWorkspaceDocEdits: Record<string, string> = {};
+  @state() builderSetupFocus: AppViewState["builderSetupFocus"] =
+    (this.bootBuilderSetup.focus as AppViewState["builderSetupFocus"]) ?? null;
+  @state() builderSetupInputs: Record<string, string> = { ...this.bootBuilderSetup.inputs };
   @state() builderSetupRunningConnectorId: string | null = null;
   @state() builderSetupError: string | null = null;
   @state() builderSetupResult: import("./controllers/builder.ts").BuilderSetupRunResult | null =
-    null;
+    this.bootBuilderSetup.result;
   @state() builderPlan: import("./controllers/builder.ts").BuilderPlanResult | null = null;
   @state() builderPlanLoading = false;
   @state() builderPlanError: string | null = null;

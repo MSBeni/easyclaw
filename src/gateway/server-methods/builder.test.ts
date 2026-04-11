@@ -4,6 +4,41 @@ import { ErrorCodes } from "../protocol/index.js";
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({ agents: { default: "main" } })),
   writeConfigFile: vi.fn(async () => {}),
+  getChannelPluginCatalogEntry: vi.fn(),
+  clearPluginDiscoveryCache: vi.fn(),
+  enablePluginInConfig: vi.fn((cfg: Record<string, unknown>, pluginId: string) => {
+    const plugins = (cfg.plugins as Record<string, unknown> | undefined) ?? {};
+    const enabled = Array.isArray(plugins.enabled) ? plugins.enabled : [];
+    return {
+      enabled: true,
+      config: {
+        ...cfg,
+        plugins: {
+          ...plugins,
+          enabled: [...enabled, pluginId],
+        },
+      },
+    };
+  }),
+  installPluginFromNpmSpec: vi.fn(),
+  buildNpmResolutionInstallFields: vi.fn(() => ({})),
+  recordPluginInstall: vi.fn((cfg: Record<string, unknown>, update: Record<string, unknown>) => {
+    const plugins = (cfg.plugins as Record<string, unknown> | undefined) ?? {};
+    const installs =
+      plugins.installs && typeof plugins.installs === "object" && !Array.isArray(plugins.installs)
+        ? (plugins.installs as Record<string, unknown>)
+        : {};
+    return {
+      ...cfg,
+      plugins: {
+        ...plugins,
+        installs: {
+          ...installs,
+          [String(update.pluginId)]: update,
+        },
+      },
+    };
+  }),
   compileAgentBlueprintBuilderPlan: vi.fn(),
   applyAgentBlueprintBuilderPlan: vi.fn(),
   verifyAgentBlueprintBuilderPlan: vi.fn(),
@@ -28,6 +63,8 @@ const mocks = vi.hoisted(() => ({
   resolveTelegramAccount: vi.fn(),
   fetchTelegramBotIdentity: vi.fn(),
   fetchTelegramLatestDeliveryTarget: vi.fn(),
+  resolveWhatsAppAccount: vi.fn(),
+  readWebSelfId: vi.fn(),
   runGmailSetup: vi.fn(),
   getTailscaleConnectionSummary: vi.fn(),
   installMacAppWithBrew: vi.fn(),
@@ -69,6 +106,35 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
   writeConfigFile: mocks.writeConfigFile,
+}));
+
+vi.mock("../../channels/plugins/catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/plugins/catalog.js")>();
+  return {
+    ...actual,
+    getChannelPluginCatalogEntry: mocks.getChannelPluginCatalogEntry,
+  };
+});
+
+vi.mock("../../plugins/discovery.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/discovery.js")>();
+  return {
+    ...actual,
+    clearPluginDiscoveryCache: mocks.clearPluginDiscoveryCache,
+  };
+});
+
+vi.mock("../../plugins/enable.js", () => ({
+  enablePluginInConfig: mocks.enablePluginInConfig,
+}));
+
+vi.mock("../../plugins/install.js", () => ({
+  installPluginFromNpmSpec: mocks.installPluginFromNpmSpec,
+}));
+
+vi.mock("../../plugins/installs.js", () => ({
+  buildNpmResolutionInstallFields: mocks.buildNpmResolutionInstallFields,
+  recordPluginInstall: mocks.recordPluginInstall,
 }));
 
 vi.mock("../../../extensions/telegram/src/accounts.js", () => ({
@@ -148,6 +214,14 @@ vi.mock("../../../extensions/telegram/src/api-fetch.js", () => ({
   fetchTelegramLatestDeliveryTarget: mocks.fetchTelegramLatestDeliveryTarget,
 }));
 
+vi.mock("../../../extensions/whatsapp/src/accounts.js", () => ({
+  resolveWhatsAppAccount: mocks.resolveWhatsAppAccount,
+}));
+
+vi.mock("../../../extensions/whatsapp/src/auth-store.js", () => ({
+  readWebSelfId: mocks.readWebSelfId,
+}));
+
 vi.mock("../../agents/blueprints/builder.js", () => ({
   compileAgentBlueprintBuilderPlan: mocks.compileAgentBlueprintBuilderPlan,
   applyAgentBlueprintBuilderPlan: mocks.applyAgentBlueprintBuilderPlan,
@@ -182,13 +256,22 @@ type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 
 function createInvokeParams(method: keyof typeof builderHandlers, params: Record<string, unknown>) {
   const respond = vi.fn();
+  const context = {
+    cron: {
+      list: vi.fn(),
+      add: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+    },
+  };
   return {
     respond,
+    context,
     invoke: async () =>
       await builderHandlers[method]({
         params,
         respond: respond as never,
-        context: {} as never,
+        context: context as never,
         client: null,
         req: { type: "req", id: "req-1", method },
         isWebchatConnect: () => false,
@@ -199,6 +282,7 @@ function createInvokeParams(method: keyof typeof builderHandlers, params: Record
 describe("builder gateway handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.loadConfig.mockReturnValue({ agents: { default: "main" } });
     mocks.createSlackWebClient.mockReturnValue({
       apiCall: mocks.slackApiCall,
     });
@@ -316,6 +400,14 @@ describe("builder gateway handlers", () => {
       version: "0.13.0",
       error: null,
     });
+    mocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
+    mocks.installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "msteams",
+      targetDir: "/tmp/openclaw/extensions/msteams",
+      version: "1.2.3",
+      npmResolution: undefined,
+    });
     mocks.writeConfigFile.mockResolvedValue(undefined);
     mocks.resolveTelegramAccount.mockReturnValue({
       accountId: "default",
@@ -335,6 +427,17 @@ describe("builder gateway handlers", () => {
         id: "123456789",
         username: "vole_bot",
       },
+    });
+    mocks.resolveWhatsAppAccount.mockReturnValue({
+      accountId: "default",
+      authDir: "/tmp/openclaw-whatsapp/default",
+      enabled: true,
+      sendReadReceipts: true,
+      isLegacyAuthDir: false,
+    });
+    mocks.readWebSelfId.mockReturnValue({
+      e164: null,
+      jid: null,
     });
     mocks.launchMacApp.mockResolvedValue(undefined);
     mocks.launchMacPath.mockResolvedValue(undefined);
@@ -464,6 +567,48 @@ describe("builder gateway handlers", () => {
     );
   });
 
+  it("hydrates whatsapp default target for planning from linked session identity", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { default: "main" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+        },
+      },
+    });
+    mocks.readWebSelfId.mockReturnValue({
+      e164: "+15550001111",
+      jid: "15550001111@s.whatsapp.net",
+    });
+    mocks.compileAgentBlueprintBuilderPlan.mockResolvedValue({
+      draft: {
+        templateId: "daily-briefing",
+      },
+      plan: {
+        status: "ready",
+      },
+    });
+
+    const { invoke } = createInvokeParams("agents.builder.plan", {
+      brief: "Send my daily briefing to WhatsApp.",
+    });
+    await invoke();
+
+    expect(mocks.compileAgentBlueprintBuilderPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        brief: "Send my daily briefing to WhatsApp.",
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            whatsapp: expect.objectContaining({
+              defaultTo: "+15550001111",
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("forwards an explicit modelId to builder planning", async () => {
     mocks.compileAgentBlueprintBuilderPlan.mockResolvedValue({
       draft: {
@@ -547,6 +692,196 @@ describe("builder gateway handlers", () => {
     expect(mocks.compileAgentBlueprintBuilderPlan).toHaveBeenCalledWith({
       brief: "Create me a daily digest",
       modelId: "openai/gpt-4o",
+      cfg: { agents: { default: "main" } },
+    });
+  });
+
+  it("normalizes unqualified model selections to provider/model when uniquely configured", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { default: "main" },
+      models: {
+        providers: {
+          google: {
+            models: [{ id: "gemini-3-flash", name: "Gemini 3 Flash" }],
+          },
+        },
+      },
+    });
+    mocks.compileAgentBlueprintBuilderPlan.mockResolvedValue({
+      draft: {
+        brief: "Create me a daily digest",
+        templateId: "daily-briefing",
+        displayName: "Daily Briefing Agent",
+        confidence: "high",
+        plannerStatus: "ready",
+        reasons: [],
+        assumptions: [],
+        questions: [],
+        ready: true,
+        requirements: {
+          confidence: "high",
+          workflow: {
+            primaryGoal: "briefing",
+            executionMode: "scheduled",
+            triggerKinds: [],
+            sourceKinds: [],
+            transformKinds: [],
+            actionKinds: [],
+            deliveryKinds: [],
+            requiresApproval: false,
+          },
+          intentTags: [],
+          triggers: [],
+          inputs: [],
+          transforms: [],
+          decisions: [],
+          actions: [],
+          outputs: [],
+          policies: [],
+          constraints: [],
+          missingInputs: [],
+          setupGaps: [],
+          policyGaps: [],
+          unsupportedGaps: [],
+          ambiguities: [],
+          unsupportedRequests: [],
+          unsupportedClassifications: [],
+          missingDataFields: [],
+        },
+        planning: {
+          selections: [],
+          alternatives: [],
+          variants: [],
+          integrations: [],
+          setupTasks: [],
+          verifications: [],
+          topology: {
+            mode: "single-agent",
+            reason: "default",
+            roles: [],
+          },
+          graph: {
+            mode: "single-agent",
+            entryNodeId: "primary",
+            nodes: [],
+            edges: [],
+          },
+        },
+        extracted: {
+          agentId: "daily-briefing",
+          name: "Morning Brief",
+          ingressChannels: [],
+          sourceChannels: [],
+          deliveryTarget: null,
+          schedule: null,
+        },
+      },
+      plan: { status: "ready" },
+      graphPlans: [],
+    });
+
+    const { invoke } = createInvokeParams("agents.builder.plan", {
+      brief: "Create me a daily digest",
+      modelId: "gemini-3-flash",
+    });
+    await invoke();
+
+    expect(mocks.compileAgentBlueprintBuilderPlan).toHaveBeenCalledWith({
+      brief: "Create me a daily digest",
+      modelId: "google/gemini-3-flash",
+      cfg: expect.objectContaining({
+        models: expect.objectContaining({
+          providers: expect.objectContaining({
+            google: expect.any(Object),
+          }),
+        }),
+      }),
+    });
+  });
+
+  it("forwards agent name overrides to planning", async () => {
+    mocks.compileAgentBlueprintBuilderPlan.mockResolvedValue({
+      draft: {
+        brief: "Create me a daily digest",
+        templateId: "daily-briefing",
+        displayName: "Daily Briefing Agent",
+        confidence: "high",
+        plannerStatus: "ready",
+        reasons: [],
+        assumptions: [],
+        questions: [],
+        ready: true,
+        requirements: {
+          confidence: "high",
+          workflow: {
+            primaryGoal: "briefing",
+            executionMode: "scheduled",
+            triggerKinds: [],
+            sourceKinds: [],
+            transformKinds: [],
+            actionKinds: [],
+            deliveryKinds: [],
+            requiresApproval: false,
+          },
+          intentTags: [],
+          triggers: [],
+          inputs: [],
+          transforms: [],
+          decisions: [],
+          actions: [],
+          outputs: [],
+          policies: [],
+          constraints: [],
+          missingInputs: [],
+          setupGaps: [],
+          policyGaps: [],
+          unsupportedGaps: [],
+          ambiguities: [],
+          unsupportedRequests: [],
+          unsupportedClassifications: [],
+          missingDataFields: [],
+        },
+        planning: {
+          selections: [],
+          alternatives: [],
+          variants: [],
+          integrations: [],
+          setupTasks: [],
+          verifications: [],
+          topology: {
+            mode: "single-agent",
+            reason: "default",
+            roles: [],
+          },
+          graph: {
+            mode: "single-agent",
+            entryNodeId: "primary",
+            nodes: [],
+            edges: [],
+          },
+        },
+        extracted: {
+          agentId: "daily-briefing",
+          name: "Morning Brief",
+          ingressChannels: [],
+          sourceChannels: [],
+          deliveryTarget: null,
+          schedule: null,
+        },
+      },
+      plan: { status: "ready" },
+      graphPlans: [],
+    });
+
+    const { invoke } = createInvokeParams("agents.builder.plan", {
+      brief: "Create me a daily digest",
+      agentName: "Podcast Ideas Bot",
+    });
+    await invoke();
+
+    expect(mocks.compileAgentBlueprintBuilderPlan).toHaveBeenCalledWith({
+      brief: "Create me a daily digest",
+      agentName: "Podcast Ideas Bot",
       cfg: { agents: { default: "main" } },
     });
   });
@@ -636,7 +971,7 @@ describe("builder gateway handlers", () => {
       },
     });
 
-    const { respond, invoke } = createInvokeParams("agents.builder.apply", {
+    const { respond, context, invoke } = createInvokeParams("agents.builder.apply", {
       brief: "Create a support bot on Telegram",
     });
     await invoke();
@@ -644,6 +979,7 @@ describe("builder gateway handlers", () => {
     expect(mocks.applyAgentBlueprintBuilderPlan).toHaveBeenCalledWith({
       brief: "Create a support bot on Telegram",
       cfg: { agents: { default: "main" } },
+      cron: context.cron,
     });
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
@@ -654,6 +990,83 @@ describe("builder gateway handlers", () => {
         }),
       }),
     );
+  });
+
+  it("forwards edited managed workspace docs when applying a builder plan", async () => {
+    mocks.applyAgentBlueprintBuilderPlan.mockResolvedValue({
+      draft: {
+        brief: "Create a support bot on Telegram",
+        templateId: "support-responder",
+        displayName: "Support Responder",
+        confidence: "high",
+        plannerStatus: "ready",
+        reasons: [],
+        assumptions: [],
+        questions: [],
+        ready: true,
+        requirements: {
+          intentTags: ["support"],
+          triggers: [],
+          inputs: [],
+          transforms: [],
+          decisions: [],
+          actions: [],
+          outputs: [],
+          policies: [],
+          constraints: [],
+          missingInputs: [],
+          setupGaps: [],
+          policyGaps: [],
+          unsupportedGaps: [],
+        },
+        planning: {
+          selections: [],
+          integrations: [],
+          setupTasks: [],
+          verifications: [],
+        },
+        extracted: {
+          agentId: "support",
+          name: "Support",
+          ingressChannels: ["telegram"],
+          sourceChannels: [],
+          deliveryTarget: null,
+          schedule: null,
+        },
+      },
+      result: {
+        status: "applied",
+        agent: {
+          agentId: "support",
+          name: "Support",
+        },
+      },
+    });
+
+    const { context, invoke } = createInvokeParams("agents.builder.apply", {
+      brief: "Create a support bot on Telegram",
+      workspaceDocEdits: [
+        {
+          nodeId: "coordinator",
+          fileName: "AGENTS.md",
+          content: "## Reviewed Instructions\n\n- Escalate risky issues quickly.",
+        },
+      ],
+    });
+    await invoke();
+
+    expect(mocks.applyAgentBlueprintBuilderPlan).toHaveBeenCalledWith({
+      brief: "Create a support bot on Telegram",
+      workspaceDocEdits: [
+        {
+          nodeId: "coordinator",
+          fileName: "AGENTS.md",
+          content: "## Reviewed Instructions\n\n- Escalate risky issues quickly.",
+        },
+      ],
+      cfg: { agents: { default: "main" } },
+      cron: context.cron,
+    });
   });
 
   it("runs the Gmail helper setup for builder quick setup", async () => {
@@ -927,6 +1340,116 @@ describe("builder gateway handlers", () => {
     );
   });
 
+  it("auto-detects WhatsApp default target from linked self identity", async () => {
+    mocks.readWebSelfId.mockReturnValue({
+      e164: "+15551234567",
+      jid: "15551234567@s.whatsapp.net",
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:whatsapp:auto-default-target",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          whatsapp: expect.objectContaining({
+            defaultTo: "+15551234567",
+          }),
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:whatsapp:auto-default-target",
+        status: "configured",
+        message: expect.stringContaining("default target set to +15551234567"),
+        updatedRefs: ["channels.whatsapp.defaultTo"],
+      }),
+    );
+  });
+
+  it("sets WhatsApp default target to an explicit manual destination", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:whatsapp:auto-default-target",
+      inputs: {
+        "whatsapp.target": "+14155551234",
+      },
+    });
+    await invoke();
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          whatsapp: expect.objectContaining({
+            defaultTo: "+14155551234",
+          }),
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:whatsapp:auto-default-target",
+        status: "configured",
+        message: expect.stringContaining("default target set to +14155551234"),
+      }),
+    );
+  });
+
+  it("rejects invalid manual WhatsApp destination inputs", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:whatsapp:auto-default-target",
+      inputs: {
+        "whatsapp.target": "not-a-number",
+      },
+    });
+    await invoke();
+
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:whatsapp:auto-default-target",
+        status: "needs_setup",
+        message: expect.stringContaining("Invalid WhatsApp destination"),
+      }),
+    );
+  });
+
+  it("returns setup guidance when WhatsApp self identity is unavailable", async () => {
+    mocks.readWebSelfId.mockReturnValue({
+      e164: null,
+      jid: null,
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:whatsapp:auto-default-target",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:whatsapp:auto-default-target",
+        status: "needs_setup",
+        message: expect.stringContaining("could not find a linked account identity"),
+        resume: expect.objectContaining({
+          connectorId: "channel:whatsapp:auto-default-target",
+          label: "Auto-detect WhatsApp target",
+        }),
+      }),
+    );
+  });
+
   it("auto-detects Slack default target and writes channels.slack.defaultTo", async () => {
     mocks.slackApiCall.mockResolvedValue({
       ok: true,
@@ -986,6 +1509,88 @@ describe("builder gateway handlers", () => {
         connectorId: "channel:slack:auto-default-target",
         status: "needs_setup",
         message: expect.stringContaining("did not find any visible conversations"),
+        resume: expect.objectContaining({
+          connectorId: "channel:slack:auto-default-target",
+          label: "Auto-detect Slack target",
+        }),
+      }),
+    );
+  });
+
+  it("refuses to save a hinted Slack target when the bot is not in that channel", async () => {
+    mocks.slackApiCall.mockResolvedValue({
+      ok: true,
+      channels: [{ id: "C024BE91L", name: "engineering", is_member: false, is_archived: false }],
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:slack:auto-default-target",
+      inputs: { target: "#engineering" },
+    });
+    await invoke();
+
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:slack:auto-default-target",
+        status: "needs_setup",
+        message: expect.stringContaining("bot is not a member"),
+        resume: expect.objectContaining({
+          connectorId: "channel:slack:auto-default-target",
+          label: "Auto-detect Slack target",
+        }),
+      }),
+    );
+  });
+
+  it("refuses to auto-select Slack conversations the bot cannot post into", async () => {
+    mocks.slackApiCall.mockResolvedValue({
+      ok: true,
+      channels: [{ id: "C024BE91L", name: "engineering", is_member: false, is_archived: false }],
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:slack:auto-default-target",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:slack:auto-default-target",
+        status: "needs_setup",
+        message: expect.stringContaining("bot is not joined to any deliverable conversation"),
+        resume: expect.objectContaining({
+          connectorId: "channel:slack:auto-default-target",
+          label: "Auto-detect Slack target",
+        }),
+      }),
+    );
+  });
+
+  it("explains required Slack scopes when auto-detect hits missing_scope", async () => {
+    mocks.slackApiCall.mockRejectedValue(new Error("An API error occurred: missing_scope"));
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "channel:slack:auto-default-target",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:slack:auto-default-target",
+        status: "needs_setup",
+        message: expect.stringContaining(
+          "Add Slack bot scopes channels:read, groups:read, im:read, mpim:read",
+        ),
         resume: expect.objectContaining({
           connectorId: "channel:slack:auto-default-target",
           label: "Auto-detect Slack target",
@@ -1461,6 +2066,146 @@ describe("builder gateway handlers", () => {
         resume: expect.objectContaining({
           connectorId: "platform:webhook-runtime",
         }),
+      }),
+    );
+  });
+
+  it("returns setup guidance when web tools provider is missing", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "tools:web",
+      inputs: {},
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "tools:web",
+        status: "needs_setup",
+        message: expect.stringContaining("Select a web search provider first"),
+      }),
+    );
+  });
+
+  it("saves web tools provider credentials and returns configured status", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "tools:web",
+      inputs: {
+        provider: "brave",
+        apiKey: "brave-key",
+      },
+    });
+    await invoke();
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          web: expect.objectContaining({
+            search: expect.objectContaining({
+              enabled: true,
+              provider: "brave",
+              apiKey: "brave-key",
+            }),
+          }),
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "tools:web",
+        status: "configured",
+        message: expect.stringContaining('provider "brave"'),
+        updatedRefs: expect.arrayContaining([
+          "tools.web.search.provider",
+          "tools.web.search.apiKey",
+        ]),
+      }),
+    );
+  });
+
+  it("accepts action-native web setup requests", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      actionId: "tools:web:configure",
+      connectorId: "tools:web",
+      inputs: {
+        provider: "brave",
+        apiKey: "brave-key",
+      },
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "tools:web",
+        actionId: "tools:web:configure",
+        status: "configured",
+      }),
+    );
+  });
+
+  it("reports needs_auth when web tools provider is set without credentials", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "tools:web",
+      inputs: {
+        provider: "gemini",
+      },
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "tools:web",
+        status: "needs_auth",
+        message: expect.stringContaining("missing credentials"),
+      }),
+    );
+  });
+
+  it("installs channel plugins from the Builder install action", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { default: "main" },
+      plugins: {},
+    });
+    mocks.getChannelPluginCatalogEntry.mockReturnValue({
+      id: "msteams",
+      meta: {
+        id: "msteams",
+        label: "Microsoft Teams",
+        selectionLabel: "Microsoft Teams",
+        docsPath: "/channels/msteams",
+        blurb: "Teams channel",
+      },
+      install: {
+        npmSpec: "@openclaw/msteams",
+      },
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      actionId: "channel:msteams:install",
+      connectorId: "channel:msteams",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith({
+      spec: "@openclaw/msteams",
+      logger: expect.any(Object),
+    });
+    expect(mocks.writeConfigFile).toHaveBeenCalled();
+    expect(mocks.clearPluginDiscoveryCache).toHaveBeenCalledTimes(1);
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:msteams",
+        actionId: "channel:msteams:install",
       }),
     );
   });

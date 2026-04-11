@@ -14,6 +14,7 @@ import {
 } from "../controllers/builder.ts";
 import { updateConfigFormValue, saveConfig, applyConfig } from "../controllers/config.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
+import { clearBuilderSetupSession } from "../storage.ts";
 
 // ---------------------------------------------------------------------------
 // Essential field definitions per integration
@@ -39,14 +40,16 @@ type QuickAssistField = {
   key: string;
   label: string;
   placeholder: string;
-  type: "text" | "secret";
+  type: "text" | "secret" | "select";
+  options?: Array<{ value: string; label: string }>;
   required?: boolean;
   help?: string;
   configPath?: Array<string | number>;
 };
 
 type QuickAssistAction = {
-  connectorId: string;
+  actionId: string;
+  connectorId?: string;
   title: string;
   description: string;
   runLabel: string;
@@ -70,6 +73,7 @@ type QuickSetupDef = {
 };
 
 type BuilderSetupFocus = NonNullable<AppViewState["builderSetupFocus"]>;
+type BuilderSetupActionField = NonNullable<BuilderSetupFocus["requiredFields"]>[number];
 
 function docsUrlFromPath(path: string | null | undefined): string | undefined {
   if (!path) {
@@ -113,6 +117,140 @@ function connectorSetupSubtitle(focus: BuilderSetupFocus): string {
     return `Install or enable ${label}, then finish its setup details below.`;
   }
   return `Configure ${label} so this workflow can use it safely.`;
+}
+
+function configPathSegments(path: string | null | undefined): Array<string | number> {
+  if (!path) {
+    return [];
+  }
+  return path
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : segment));
+}
+
+function fieldInputType(field: BuilderSetupActionField): QuickField["type"] {
+  return field.inputType === "secret" || field.inputType === "select" ? field.inputType : "text";
+}
+
+function genericActionRunLabel(focus: BuilderSetupFocus): string {
+  if ((focus.requiredFields?.length ?? 0) > 0 && focus.actionKind === "verify") {
+    return "Configure and Verify";
+  }
+  switch (focus.actionKind) {
+    case "install":
+      return `Install ${connectorSetupLabel(focus)}`;
+    case "verify":
+      return "Run verification";
+    case "question":
+      return "Continue setup";
+    case "policy":
+      return "Check approvals";
+    default:
+      return "Run setup";
+  }
+}
+
+function genericActionRunningLabel(focus: BuilderSetupFocus): string {
+  if ((focus.requiredFields?.length ?? 0) > 0 && focus.actionKind === "verify") {
+    return "Configuring...";
+  }
+  switch (focus.actionKind) {
+    case "install":
+      return "Installing...";
+    case "verify":
+      return "Verifying...";
+    default:
+      return "Running...";
+  }
+}
+
+function buildActionBackedQuickSetup(focus: BuilderSetupFocus): QuickSetupDef | null {
+  const actionId = focus.actionId?.trim() ?? "";
+  if (!actionId) {
+    return null;
+  }
+  const requiredFields = focus.requiredFields ?? [];
+  const configFields = requiredFields.filter((field) => Boolean(field.configPath));
+  const configOnlyFields =
+    configFields.length > 0 && configFields.length === requiredFields.length
+      ? configFields.map(
+          (field) =>
+            ({
+              label: field.label,
+              path: configPathSegments(field.configPath),
+              placeholder: field.placeholder ?? "",
+              type: fieldInputType(field),
+              options: field.options,
+              help: field.help,
+            }) satisfies QuickField,
+        )
+      : [];
+  const assistFields =
+    configOnlyFields.length === requiredFields.length
+      ? []
+      : requiredFields.map(
+          (field) =>
+            ({
+              key: field.inputKey ?? field.key,
+              label: field.label,
+              placeholder: field.placeholder ?? "",
+              type: fieldInputType(field),
+              options: field.options,
+              required: field.required,
+              help: field.help,
+              configPath: field.configPath ? configPathSegments(field.configPath) : undefined,
+            }) satisfies QuickAssistField,
+        );
+
+  const label = connectorSetupLabel(focus);
+  const baseSteps: SetupStep[] = [];
+  if (focus.actionKind === "install") {
+    baseSteps.push({
+      instruction:
+        focus.connectorInstallStrategy === "npm"
+          ? `Install the ${label} plugin package, then return here so Builder can refresh readiness.`
+          : `Install or enable ${label}, then return here so Builder can refresh readiness.`,
+    });
+  } else if (configOnlyFields.length > 0) {
+    baseSteps.push({
+      instruction:
+        "Fill in the minimum fields below and save them before running the Builder check.",
+    });
+  } else {
+    baseSteps.push({
+      instruction:
+        "Run the guided setup action below. Builder will re-check this connector immediately afterward.",
+    });
+  }
+  if (focus.completionSignal?.detail) {
+    baseSteps.push({
+      instruction: focus.completionSignal.detail,
+    });
+  }
+
+  return {
+    title: focus.title || `Set up ${label}`,
+    subtitle: focus.detail || connectorSetupSubtitle(focus),
+    difficulty: focus.actionKind === "install" ? "moderate" : "easy",
+    timeEstimate: focus.actionKind === "install" ? "2-5 minutes" : "1-3 minutes",
+    steps: baseSteps,
+    fields: configOnlyFields,
+    docsHint: docsUrlFromPath(focus.connectorDocsPath),
+    assist: {
+      actionId,
+      connectorId: focus.connectorId ?? undefined,
+      title: focus.title || `Set up ${label}`,
+      description:
+        configOnlyFields.length > 0
+          ? "After saving the fields below, run the Builder check so EasyClaw can confirm the connector is ready."
+          : focus.detail || `Run the guided setup step for ${label}.`,
+      runLabel: genericActionRunLabel(focus),
+      runningLabel: genericActionRunningLabel(focus),
+      fields: assistFields,
+    },
+  };
 }
 
 function buildGenericChannelQuickSetup(focus: BuilderSetupFocus): QuickSetupDef {
@@ -162,6 +300,7 @@ function buildGenericChannelQuickSetup(focus: BuilderSetupFocus): QuickSetupDef 
     ...(connectorId
       ? {
           assist: {
+            actionId: focus.actionId?.trim() || connectorId,
             connectorId,
             title: `Check ${label} setup status`,
             description:
@@ -223,6 +362,7 @@ function buildGenericConnectorQuickSetup(focus: BuilderSetupFocus): QuickSetupDe
     ...(connectorId
       ? {
           assist: {
+            actionId: focus.actionId?.trim() || connectorId,
             connectorId,
             title: `Check ${label} setup status`,
             description:
@@ -238,8 +378,26 @@ function buildGenericConnectorQuickSetup(focus: BuilderSetupFocus): QuickSetupDe
 
 /** Map connector metadata and config refs to a quick-setup definition. */
 export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupDef | null {
+  if (focus.actionKind === "install") {
+    const installBacked = buildActionBackedQuickSetup(focus);
+    if (installBacked) {
+      return installBacked;
+    }
+  }
+
   const refKey = focus.refs[0] ?? "";
   const id = focus.connectorId ?? "";
+  const prefersCustomGuide =
+    id === "channel:telegram" ||
+    id === "channel:discord" ||
+    id === "channel:slack" ||
+    id === "channel:signal" ||
+    id === "channel:googlechat" ||
+    id === "channel:matrix" ||
+    id === "channel:msteams" ||
+    id === "channel:imessage" ||
+    id === "channel:whatsapp" ||
+    id.startsWith("platform:gmail-hook");
 
   // Telegram
   if (id.includes("telegram") || refKey.startsWith("channels.telegram")) {
@@ -302,7 +460,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
         },
       ],
       assist: {
-        connectorId: "channel:telegram:auto-default-target",
+        actionId: "channel:telegram:auto-default-target",
         title: "Auto-detect Telegram default target",
         description:
           "EasyClaw can read the bot's recent updates and set defaultTo automatically. Send one message to the bot in your destination chat first, then run this.",
@@ -364,7 +522,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
         },
       ],
       assist: {
-        connectorId: "channel:discord:auto-default-target",
+        actionId: "channel:discord:auto-default-target",
         title: "Auto-detect Discord default target",
         description:
           "Discover a reachable guild text channel and set channels.discord.defaultTo automatically (optionally constrained by guild/channel hint).",
@@ -429,11 +587,11 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
         },
         {
           instruction:
-            'Go to "OAuth & Permissions", scroll to Scopes, and add the bot scopes you need (at minimum: chat:write, app_mentions:read, im:history, im:read, im:write). Then click "Install to Workspace" and copy the Bot User OAuth Token (starts with xoxb-).',
+            'Go to "OAuth & Permissions", scroll to Scopes, and add the bot scopes you need. For Builder setup and runtime, include at minimum: chat:write, app_mentions:read, channels:history, channels:read, groups:history, groups:read, im:history, im:read, im:write, mpim:history, mpim:read, mpim:write. Then click "Install to Workspace" and copy the Bot User OAuth Token (starts with xoxb-).',
         },
         {
           instruction:
-            "Paste the Bot Token (xoxb-...) into the Bot Token field below and click Save.",
+            "Paste the Bot Token (xoxb-...) into the Bot Token field below and click Save. If you add scopes later, reinstall the app to the workspace before retrying auto-detect.",
         },
       ],
       fields: [
@@ -453,7 +611,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
         },
       ],
       assist: {
-        connectorId: "channel:slack:auto-default-target",
+        actionId: "channel:slack:auto-default-target",
         title: "Auto-detect Slack default target",
         description:
           "Discover a visible Slack conversation and set channels.slack.defaultTo automatically (optionally constrained by channel hint).",
@@ -525,7 +683,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
         },
       ],
       assist: {
-        connectorId: "channel:signal:auto-detect-http-url",
+        actionId: "channel:signal:auto-detect-http-url",
         title: "Auto-detect Signal transport URL",
         description:
           "Probe common local signal-cli endpoints, save the first healthy URL to config, and report readiness.",
@@ -607,7 +765,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
         },
       ],
       assist: {
-        connectorId: "channel:googlechat:verify-auth",
+        actionId: "channel:googlechat:verify-auth",
         title: "Verify Google Chat auth",
         description:
           "Runs a live Google Chat API auth check and confirms audienceType + audience are set for webhook validation.",
@@ -685,7 +843,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
         },
       ],
       assist: {
-        connectorId: "channel:matrix:verify-credentials",
+        actionId: "channel:matrix:verify-credentials",
         title: "Verify Matrix credentials",
         description:
           "Runs a Matrix auth probe (`whoami`) for the selected account and confirms the homeserver/token combination works.",
@@ -749,7 +907,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
         },
       ],
       assist: {
-        connectorId: "channel:msteams:verify-credentials",
+        actionId: "channel:msteams:verify-credentials",
         title: "Verify Teams credentials",
         description:
           "Checks Bot Framework token acquisition and attempts a Graph token probe to validate Microsoft Teams auth readiness.",
@@ -826,7 +984,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
         },
       ],
       assist: {
-        connectorId: "channel:imessage:verify-transport",
+        actionId: "channel:imessage:verify-transport",
         title: "Verify iMessage transport",
         description:
           "Checks iMessage transport health by probing imsg RPC support and a lightweight chats.list request.",
@@ -906,7 +1064,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
       timeEstimate: "15-20 minutes",
       stepsTitle: "Manual fallback",
       assist: {
-        connectorId: "platform:gmail-hook",
+        actionId: "platform:gmail-hook",
         title: "Let EasyClaw do the hard setup",
         description:
           "This runs the same OpenClaw Gmail helper command used in the terminal. It can enable the APIs, create or update the topic and subscription, configure the webhook endpoint, and start Gmail watch().",
@@ -1009,6 +1167,85 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
     };
   }
 
+  if (!prefersCustomGuide) {
+    const actionBacked = buildActionBackedQuickSetup(focus);
+    if (actionBacked) {
+      return actionBacked;
+    }
+  }
+
+  if (id === "platform:exec-approvals" || refKey === "approvals.exec") {
+    return {
+      title: "Configure Exec Approvals",
+      subtitle:
+        "Choose how approvals are routed and set a fallback destination for risky on-behalf actions.",
+      difficulty: "moderate",
+      timeEstimate: "2-4 minutes",
+      steps: [
+        {
+          instruction:
+            "Enable exec approval forwarding so OpenClaw can ask for confirmation before browser or operator actions run on your behalf.",
+        },
+        {
+          instruction:
+            "Choose whether approvals should go back to the originating session, to explicit approval targets, or both.",
+        },
+        {
+          instruction:
+            "If you use explicit targets, enter the channel and destination where approval prompts should be delivered, then save the change.",
+        },
+      ],
+      fields: [
+        {
+          label: "Forward Exec Approvals",
+          path: ["approvals", "exec", "enabled"],
+          placeholder: "",
+          type: "select",
+          options: [
+            { value: "true", label: "Enabled" },
+            { value: "false", label: "Disabled" },
+          ],
+        },
+        {
+          label: "Approval Forwarding Mode",
+          path: ["approvals", "exec", "mode"],
+          placeholder: "session",
+          type: "select",
+          options: [
+            { value: "session", label: "Session only" },
+            { value: "targets", label: "Explicit targets only" },
+            { value: "both", label: "Session and targets" },
+          ],
+        },
+        {
+          label: "Approval Target Channel",
+          path: ["approvals", "exec", "targets", 0, "channel"],
+          placeholder: "telegram",
+          type: "text",
+          help: "Used when the forwarding mode includes explicit targets.",
+        },
+        {
+          label: "Approval Target Destination",
+          path: ["approvals", "exec", "targets", 0, "to"],
+          placeholder: "123456789",
+          type: "text",
+          help: "Chat ID, channel ID, or user ID for the approval target.",
+        },
+      ],
+      assist: {
+        actionId: "platform:exec-approvals:configure",
+        connectorId: "platform:exec-approvals",
+        title: "Check approval routing",
+        description:
+          "Run a readiness check after saving so Builder can confirm approval prompts have a valid route.",
+        runLabel: "Check approvals",
+        runningLabel: "Checking approvals...",
+        fields: [],
+      },
+      docsHint: "https://docs.openclaw.ai/configuration#approvals",
+    };
+  }
+
   // Models / AI config
   if (id === "platform:core-model" || refKey === "models") {
     return {
@@ -1086,34 +1323,61 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
   }
 
   // Web tools
-  if (id === "tools:web" || refKey === "web") {
+  if (id === "tools:web" || refKey === "web" || refKey.startsWith("tools.web")) {
     return {
       title: "Configure Web Tools",
-      subtitle: "Set up web browsing and fetch capabilities.",
+      subtitle: "Configure web search so research and latest-news workflows can run automatically.",
       difficulty: "easy",
-      timeEstimate: "30 seconds",
+      timeEstimate: "1-2 minutes",
       steps: [
         {
+          instruction: 'Choose a Web Search Provider below. If you are unsure, keep "Brave".',
+        },
+        {
           instruction:
-            'Toggle Web to "Enabled" below. This lets your agent browse the web and fetch content from URLs.',
+            "Paste the provider API key (or keep your existing env key), then click Configure and Verify.",
         },
         {
-          instruction: "Click Save. No additional setup is needed.",
+          instruction:
+            "EasyClaw will save the web search settings and immediately re-check connector readiness for this workflow.",
         },
       ],
-      fields: [
-        {
-          label: "Web Enabled",
-          path: ["web", "enabled"],
-          placeholder: "",
-          type: "select",
-          options: [
-            { value: "true", label: "Enabled" },
-            { value: "false", label: "Disabled" },
-          ],
-        },
-      ],
-      docsHint: "https://docs.openclaw.ai/configuration#web",
+      fields: [],
+      assist: {
+        actionId: "tools:web:configure",
+        connectorId: "tools:web",
+        title: "Configure and verify web search",
+        description:
+          "Save provider credentials for web_search and verify this workflow can use web tools before you apply the plan.",
+        runLabel: "Configure and Verify",
+        runningLabel: "Configuring...",
+        fields: [
+          {
+            key: "provider",
+            label: "Web Search Provider",
+            placeholder: "brave",
+            type: "select",
+            required: true,
+            options: [
+              { value: "brave", label: "Brave" },
+              { value: "gemini", label: "Gemini" },
+              { value: "grok", label: "Grok" },
+              { value: "kimi", label: "Kimi" },
+              { value: "perplexity", label: "Perplexity" },
+            ],
+            help: "Provider used by web_search for research/news queries.",
+            configPath: ["tools", "web", "search", "provider"],
+          },
+          {
+            key: "apiKey",
+            label: "API Key (optional if already configured in env)",
+            placeholder: "Paste provider API key",
+            type: "secret",
+            help: "Leave blank to keep existing key from config or environment variables.",
+          },
+        ],
+      },
+      docsHint: "https://docs.openclaw.ai/tools/web",
     };
   }
 
@@ -1171,7 +1435,7 @@ function mapAssistInputs(
   assist: QuickAssistAction,
   inputs: Record<string, string>,
 ): Record<string, string> {
-  if (assist.connectorId.startsWith("platform:gmail-hook")) {
+  if (assist.actionId.startsWith("platform:gmail-hook")) {
     return {
       account: inputs["gmail.account"] ?? "",
       project: inputs["gmail.project"] ?? "",
@@ -1192,11 +1456,13 @@ function renderAssistSetup(
   if (!assist) {
     return nothing;
   }
-  const running = state.builderSetupRunningConnectorId === assist.connectorId;
+  const running = state.builderSetupRunningConnectorId === assist.actionId;
   const result =
     state.builderSetupResult &&
-    (state.builderSetupResult.connectorId === assist.connectorId ||
-      state.builderSetupResult.connectorId.startsWith(`${assist.connectorId}:`))
+    ((state.builderSetupResult.actionId ?? state.builderSetupResult.connectorId) ===
+      assist.actionId ||
+      state.builderSetupResult.connectorId === (assist.connectorId ?? assist.actionId) ||
+      state.builderSetupResult.connectorId.startsWith(`${assist.connectorId ?? assist.actionId}:`))
       ? state.builderSetupResult
       : null;
   const hasMissingRequired = assist.fields.some((field) => {
@@ -1227,15 +1493,44 @@ function renderAssistSetup(
           (field) => html`
             <label class="quick-setup__field">
               <span class="quick-setup__field-label">${field.label}</span>
-              <input
-                class="quick-setup__input"
-                type=${field.type === "secret" ? "password" : "text"}
-                .value=${readAssistValue(state, configForm, field)}
-                placeholder=${field.placeholder}
-                @input=${(e: Event) => {
-                  updateBuilderSetupInput(state, field.key, (e.target as HTMLInputElement).value);
-                }}
-              />
+              ${
+                field.type === "select" && field.options
+                  ? html`
+                      <select
+                        class="quick-setup__input"
+                        .value=${readAssistValue(state, configForm, field)}
+                        @change=${(e: Event) => {
+                          updateBuilderSetupInput(
+                            state,
+                            field.key,
+                            (e.target as HTMLSelectElement).value,
+                          );
+                        }}
+                      >
+                        <option value="">— select —</option>
+                        ${field.options.map(
+                          (option) => html`
+                            <option value=${option.value}>${option.label}</option>
+                          `,
+                        )}
+                      </select>
+                    `
+                  : html`
+                      <input
+                        class="quick-setup__input"
+                        type=${field.type === "secret" ? "password" : "text"}
+                        .value=${readAssistValue(state, configForm, field)}
+                        placeholder=${field.placeholder}
+                        @input=${(e: Event) => {
+                          updateBuilderSetupInput(
+                            state,
+                            field.key,
+                            (e.target as HTMLInputElement).value,
+                          );
+                        }}
+                      />
+                    `
+              }
               ${field.help ? html`<span class="quick-setup__help">${field.help}</span>` : nothing}
             </label>
           `,
@@ -1245,10 +1540,12 @@ function renderAssistSetup(
       <div class="quick-setup__actions">
         <div class="quick-setup__actions-left">
           <button
+            type="button"
             class="btn btn--sm primary"
             ?disabled=${running || hasMissingRequired}
             @click=${() =>
               void runBuilderSetupAction(state, {
+                actionId: assist.actionId,
                 connectorId: assist.connectorId,
                 inputs: mapAssistInputs(assist, inputs),
               })}
@@ -1291,16 +1588,22 @@ function renderAssistSetup(
                                 <div style="margin-top:4px;"><code>${step.command}</code></div>
                                 <div style="margin-top:8px;">
                                   <button
+                                    type="button"
                                     class="btn btn--sm"
-                                    ?disabled=${state.builderSetupRunningConnectorId === step.connectorId}
+                                    ?disabled=${
+                                      state.builderSetupRunningConnectorId ===
+                                      (step.actionId ?? step.connectorId)
+                                    }
                                     @click=${() =>
                                       void runBuilderSetupAction(state, {
+                                        actionId: step.actionId ?? step.connectorId,
                                         connectorId: step.connectorId,
                                         inputs: step.inputs,
                                       })}
                                   >
                                     ${
-                                      state.builderSetupRunningConnectorId === step.connectorId
+                                      state.builderSetupRunningConnectorId ===
+                                      (step.actionId ?? step.connectorId)
                                         ? "Opening…"
                                         : step.label
                                     }
@@ -1325,16 +1628,22 @@ function renderAssistSetup(
                                 <div style="margin-top:4px;"><code>${step.command}</code></div>
                                 <div style="margin-top:8px;">
                                   <button
+                                    type="button"
                                     class="btn btn--sm"
-                                    ?disabled=${state.builderSetupRunningConnectorId === step.connectorId}
+                                    ?disabled=${
+                                      state.builderSetupRunningConnectorId ===
+                                      (step.actionId ?? step.connectorId)
+                                    }
                                     @click=${() =>
                                       void runBuilderSetupAction(state, {
+                                        actionId: step.actionId ?? step.connectorId,
                                         connectorId: step.connectorId,
                                         inputs: step.inputs,
                                       })}
                                   >
                                     ${
-                                      state.builderSetupRunningConnectorId === step.connectorId
+                                      state.builderSetupRunningConnectorId ===
+                                      (step.actionId ?? step.connectorId)
                                         ? "Opening…"
                                         : step.label
                                     }
@@ -1357,6 +1666,7 @@ function renderAssistSetup(
                           </div>
                           <div style="margin-top:8px;">
                             <button
+                              type="button"
                               class="btn btn--sm"
                               @click=${() => {
                                 openExternalUrlSafe(credentialImport.consoleUrl);
@@ -1375,13 +1685,18 @@ function renderAssistSetup(
                                     </div>
                                     <div style="margin-top:10px;">
                                       <button
+                                        type="button"
                                         class="btn btn--sm primary"
                                         ?disabled=${
                                           state.builderSetupRunningConnectorId ===
-                                          credentialImport.autoDetect.connectorId
+                                          (credentialImport.autoDetect.actionId ??
+                                            credentialImport.autoDetect.connectorId)
                                         }
                                         @click=${() =>
                                           void runBuilderSetupAction(state, {
+                                            actionId:
+                                              credentialImport.autoDetect!.actionId ??
+                                              credentialImport.autoDetect!.connectorId,
                                             connectorId: credentialImport.autoDetect!.connectorId,
                                             inputs: {
                                               account: inputs["gmail.account"] ?? "",
@@ -1394,7 +1709,8 @@ function renderAssistSetup(
                                       >
                                         ${
                                           state.builderSetupRunningConnectorId ===
-                                          credentialImport.autoDetect.connectorId
+                                          (credentialImport.autoDetect.actionId ??
+                                            credentialImport.autoDetect.connectorId)
                                             ? "Importing…"
                                             : credentialImport.autoDetect.label
                                         }
@@ -1435,14 +1751,17 @@ function renderAssistSetup(
                             }
                             <div style="margin-top:10px;">
                               <button
+                                type="button"
                                 class="btn btn--sm"
                                 ?disabled=${
                                   !oauthJson.trim() ||
                                   state.builderSetupRunningConnectorId ===
-                                    credentialImport.connectorId
+                                    (credentialImport.actionId ?? credentialImport.connectorId)
                                 }
                                 @click=${() =>
                                   void runBuilderSetupAction(state, {
+                                    actionId:
+                                      credentialImport.actionId ?? credentialImport.connectorId,
                                     connectorId: credentialImport.connectorId,
                                     inputs: {
                                       account: inputs["gmail.account"] ?? "",
@@ -1457,7 +1776,7 @@ function renderAssistSetup(
                               >
                                 ${
                                   state.builderSetupRunningConnectorId ===
-                                  credentialImport.connectorId
+                                  (credentialImport.actionId ?? credentialImport.connectorId)
                                     ? "Importing…"
                                     : credentialImport.label
                                 }
@@ -1508,16 +1827,22 @@ function renderAssistSetup(
                           <div>${resumeAction.detail}</div>
                           <div style="margin-top:8px;">
                             <button
+                              type="button"
                               class="btn btn--sm"
-                              ?disabled=${state.builderSetupRunningConnectorId === resumeAction.connectorId}
+                              ?disabled=${
+                                state.builderSetupRunningConnectorId ===
+                                (resumeAction.actionId ?? resumeAction.connectorId)
+                              }
                               @click=${() =>
                                 void runBuilderSetupAction(state, {
+                                  actionId: resumeAction.actionId ?? resumeAction.connectorId,
                                   connectorId: resumeAction.connectorId,
                                   inputs: resumeAction.inputs,
                                 })}
                             >
                               ${
-                                state.builderSetupRunningConnectorId === resumeAction.connectorId
+                                state.builderSetupRunningConnectorId ===
+                                (resumeAction.actionId ?? resumeAction.connectorId)
                                   ? "Retrying…"
                                   : resumeAction.label
                               }
@@ -1535,7 +1860,28 @@ function renderAssistSetup(
   `;
 }
 
-function renderWhatsAppInlineSetup(state: AppViewState): unknown {
+function renderWhatsAppInlineSetup(
+  state: AppViewState,
+  configForm: Record<string, unknown> | null,
+): unknown {
+  const manualTargetKey = "whatsapp.target";
+  const manualTargetInput = state.builderSetupInputs[manualTargetKey];
+  const configuredDefaultTarget = readConfigValue(configForm, [
+    "channels",
+    "whatsapp",
+    "defaultTo",
+  ]);
+  const manualTarget =
+    (typeof manualTargetInput === "string" && manualTargetInput.length > 0
+      ? manualTargetInput
+      : configuredDefaultTarget) ?? "";
+  const targetAssistConnectorId = "channel:whatsapp:auto-default-target";
+  const targetAssistRunning = state.builderSetupRunningConnectorId === targetAssistConnectorId;
+  const targetAssistResult =
+    (state.builderSetupResult?.actionId ?? state.builderSetupResult?.connectorId) ===
+    targetAssistConnectorId
+      ? state.builderSetupResult
+      : null;
   return html`
     <div class="quick-setup__assist">
       <div class="quick-setup__assist-header">
@@ -1550,6 +1896,7 @@ function renderWhatsAppInlineSetup(state: AppViewState): unknown {
       <div class="quick-setup__actions">
         <div class="quick-setup__actions-left">
           <button
+            type="button"
             class="btn btn--sm primary"
             ?disabled=${state.whatsappBusy || !state.connected}
             @click=${() => void state.handleWhatsAppStart(false)}
@@ -1557,6 +1904,7 @@ function renderWhatsAppInlineSetup(state: AppViewState): unknown {
             ${state.whatsappBusy ? "Working..." : "Show QR"}
           </button>
           <button
+            type="button"
             class="btn btn--sm"
             ?disabled=${state.whatsappBusy || !state.connected}
             @click=${() => void state.handleWhatsAppStart(true)}
@@ -1564,6 +1912,7 @@ function renderWhatsAppInlineSetup(state: AppViewState): unknown {
             Relink
           </button>
           <button
+            type="button"
             class="btn btn--sm"
             ?disabled=${state.whatsappBusy || !state.connected}
             @click=${() => void state.handleWhatsAppWait()}
@@ -1571,6 +1920,7 @@ function renderWhatsAppInlineSetup(state: AppViewState): unknown {
             Wait for scan
           </button>
           <button
+            type="button"
             class="btn btn--sm danger"
             ?disabled=${state.whatsappBusy || !state.connected}
             @click=${() => void state.handleWhatsAppLogout()}
@@ -1579,6 +1929,56 @@ function renderWhatsAppInlineSetup(state: AppViewState): unknown {
           </button>
         </div>
       </div>
+
+      <div class="quick-setup__fields" style="margin-top:12px;">
+        <label class="quick-setup__field">
+          <span class="quick-setup__field-label">Default destination (optional override)</span>
+          <input
+            class="quick-setup__input"
+            type="text"
+            .value=${manualTarget}
+            placeholder="+15551234567 or 120363025391234567@g.us"
+            @input=${(e: Event) =>
+              updateBuilderSetupInput(state, manualTargetKey, (e.target as HTMLInputElement).value)}
+          />
+          <span class="quick-setup__help">
+            Leave empty to auto-use your linked WhatsApp number. Set this to any other number or
+            group JID when you want delivery elsewhere.
+          </span>
+        </label>
+      </div>
+
+      <div class="quick-setup__actions">
+        <div class="quick-setup__actions-left">
+          <button
+            type="button"
+            class="btn btn--sm primary"
+            ?disabled=${targetAssistRunning}
+            @click=${() =>
+              void runBuilderSetupAction(state, {
+                actionId: targetAssistConnectorId,
+                inputs: manualTarget.trim()
+                  ? {
+                      "whatsapp.target": manualTarget.trim(),
+                    }
+                  : {},
+              })}
+          >
+            ${targetAssistRunning ? "Saving..." : manualTarget.trim() ? "Set Destination" : "Use Linked Phone"}
+          </button>
+        </div>
+      </div>
+
+      ${
+        targetAssistResult
+          ? html`<div class="callout success" style="margin-top:12px;">${targetAssistResult.message}</div>`
+          : nothing
+      }
+      ${
+        state.builderSetupError
+          ? html`<div class="callout danger" style="margin-top:12px;">${state.builderSetupError}</div>`
+          : nothing
+      }
 
       ${
         state.whatsappLoginMessage
@@ -1627,6 +2027,8 @@ export function renderQuickSetup(state: AppViewState): unknown {
   }
 
   const configForm = state.configForm ?? null;
+  const fields = def.fields ?? [];
+  const assistFields = def.assist?.fields ?? [];
 
   const difficultyLabel =
     def.difficulty === "easy"
@@ -1636,6 +2038,7 @@ export function renderQuickSetup(state: AppViewState): unknown {
         : def.difficulty === "advanced"
           ? "Advanced"
           : null;
+  const canOpenSetupTab = state.tab === "builder" && focus.targetTab === "onboarding";
 
   return html`
     <div class="quick-setup">
@@ -1659,19 +2062,45 @@ export function renderQuickSetup(state: AppViewState): unknown {
           <div class="quick-setup__subtitle">${def.subtitle}</div>
         </div>
         <div class="quick-setup__nav">
+          ${
+            canOpenSetupTab
+              ? html`
+                  <button
+                    type="button"
+                    class="builder-config-link"
+                    @click=${() => {
+                      state.setTab("onboarding");
+                      if (typeof window !== "undefined") {
+                        window.requestAnimationFrame(() => {
+                          window.scrollTo({ top: 0, behavior: "smooth" });
+                        });
+                      }
+                    }}
+                  >
+                    Open Setup Tab
+                  </button>
+                `
+              : nothing
+          }
           <button
+            type="button"
             class="builder-config-link"
             @click=${() => {
+              state.builderSetupFocus = null;
+              clearBuilderSetupSession();
               state.setTab("builder");
               void loadBuilderPlan(state);
             }}
           >
-            Return to Builder
+            ${state.tab === "builder" ? "Close setup" : "Return to Builder"}
           </button>
           <button
+            type="button"
             class="btn btn--sm"
             @click=${() => {
               state.builderSetupFocus = null;
+              clearBuilderSetupSession();
+              state.setTab(state.tab);
             }}
           >
             Dismiss
@@ -1681,8 +2110,8 @@ export function renderQuickSetup(state: AppViewState): unknown {
 
       ${
         focus.connectorId === "channel:whatsapp"
-          ? renderWhatsAppInlineSetup(state)
-          : def.assist
+          ? renderWhatsAppInlineSetup(state, configForm)
+          : def.assist && !(fields.length > 0 && assistFields.length === 0)
             ? renderAssistSetup(state, def, configForm)
             : nothing
       }
@@ -1718,10 +2147,10 @@ export function renderQuickSetup(state: AppViewState): unknown {
       }
 
       ${
-        def.fields.length > 0
+        fields.length > 0
           ? html`
               <div class="quick-setup__fields">
-                ${def.fields.map((field) => {
+                ${fields.map((field) => {
                   const value = readConfigValue(configForm, field.path);
                   return html`
                     <label class="quick-setup__field">
@@ -1774,6 +2203,7 @@ export function renderQuickSetup(state: AppViewState): unknown {
               <div class="quick-setup__actions">
                 <div class="quick-setup__actions-left">
                   <button
+                    type="button"
                     class="btn btn--sm primary"
                     ?disabled=${!state.configFormDirty || state.configSaving}
                     @click=${() => saveConfig(state as Parameters<typeof saveConfig>[0])}
@@ -1781,6 +2211,7 @@ export function renderQuickSetup(state: AppViewState): unknown {
                     ${state.configSaving ? "Saving\u2026" : "Save"}
                   </button>
                   <button
+                    type="button"
                     class="btn btn--sm"
                     ?disabled=${!state.configFormDirty || state.configApplying}
                     @click=${() => applyConfig(state as Parameters<typeof applyConfig>[0])}
@@ -1812,6 +2243,11 @@ export function renderQuickSetup(state: AppViewState): unknown {
                     : nothing
                 }
               </div>
+              ${
+                def.assist && assistFields.length === 0
+                  ? html`${renderAssistSetup(state, def, configForm)}`
+                  : nothing
+              }
             `
           : html`
               <div class="quick-setup__empty">
