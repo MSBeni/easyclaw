@@ -2210,6 +2210,62 @@ describe("builder gateway handlers", () => {
     );
   });
 
+  it("returns retry guidance when a Builder plugin install fails", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { default: "main" },
+      plugins: {},
+    });
+    mocks.getChannelPluginCatalogEntry.mockReturnValue({
+      id: "msteams",
+      meta: {
+        id: "msteams",
+        label: "Microsoft Teams",
+        selectionLabel: "Microsoft Teams",
+        docsPath: "/channels/msteams",
+        blurb: "Teams channel",
+      },
+      install: {
+        npmSpec: "@openclaw/msteams",
+      },
+    });
+    mocks.installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "npm registry temporarily unavailable",
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      actionId: "channel:msteams:install",
+      connectorId: "channel:msteams",
+      inputs: {},
+    });
+    await invoke();
+
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.clearPluginDiscoveryCache).not.toHaveBeenCalled();
+    expect(mocks.enablePluginInConfig).not.toHaveBeenCalled();
+    expect(mocks.recordPluginInstall).not.toHaveBeenCalled();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual({
+      connectorId: "channel:msteams",
+      actionId: "channel:msteams:install",
+      status: "needs_setup",
+      message: "Plugin install failed for Microsoft Teams: npm registry temporarily unavailable",
+      updatedRefs: [],
+      resume: {
+        connectorId: "channel:msteams",
+        actionId: "channel:msteams:install",
+        label: "Install Microsoft Teams",
+        detail: "Retry the npm install for @openclaw/msteams after fixing the install error.",
+        inputs: {},
+      },
+      summary: {
+        command: "npm install @openclaw/msteams",
+      },
+    });
+  });
+
   it("returns generic configured status for connectors already ready", async () => {
     mocks.loadConfig.mockReturnValueOnce({
       agents: {
