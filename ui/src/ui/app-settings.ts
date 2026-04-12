@@ -42,6 +42,76 @@ import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from
 import type { AgentsListResult, AttentionItem } from "./types.ts";
 import { resetChatViewState } from "./views/chat.ts";
 
+type BuilderSetupFocusState = {
+  actionId?: string | null;
+  connectorId: string | null;
+  connectorLabel?: string | null;
+  connectorKind?: string | null;
+  connectorSourceKind?: string | null;
+  connectorDocsPath?: string | null;
+  connectorSelectionLabel?: string | null;
+  connectorDetailLabel?: string | null;
+  connectorOnboarding?: boolean;
+  connectorRequiresConfig?: boolean;
+  connectorRequiresAuth?: boolean;
+  connectorInstallRequired?: boolean;
+  connectorInstallStrategy?: "none" | "bundled" | "npm" | "local" | "external" | null;
+  actionKind?: "install" | "connect" | "configure" | "enable" | "policy" | "verify" | "question";
+  actionSource?:
+    | "setup-task"
+    | "verification"
+    | "requirement-gap"
+    | "planner-question"
+    | "runtime-auth"
+    | null;
+  requiredFields?: Array<{
+    key: string;
+    label: string;
+    kind: string;
+    required: boolean;
+    inputKey?: string;
+    configPath?: string;
+    inputType?: "text" | "secret" | "select";
+    placeholder?: string;
+    help?: string;
+    options?: Array<{ value: string; label: string }>;
+  }>;
+  uiSchema?: {
+    variant: "guided-setup" | "inline-question" | "expert-config";
+    section?: string;
+    fieldKeys: string[];
+  } | null;
+  completionSignal?: {
+    kind: "integration-status" | "verification" | "builder-check";
+    target: string;
+    detail: string;
+  } | null;
+  title: string;
+  detail: string;
+  refs: string[];
+  targetTab: Tab;
+};
+
+const BUILDER_SETUP_QUERY_KEYS = [
+  "builderSetupActionId",
+  "builderSetupConnectorId",
+  "builderSetupLabel",
+  "builderSetupKind",
+  "builderSetupSourceKind",
+  "builderSetupDocsPath",
+  "builderSetupSelectionLabel",
+  "builderSetupDetailLabel",
+  "builderSetupOnboarding",
+  "builderSetupRequiresConfig",
+  "builderSetupRequiresAuth",
+  "builderSetupInstallRequired",
+  "builderSetupInstallStrategy",
+  "builderSetupTitle",
+  "builderSetupDetail",
+  "builderSetupTargetTab",
+  "builderSetupRef",
+] as const;
+
 type SettingsHost = {
   settings: UiSettings;
   password?: string;
@@ -63,7 +133,140 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
   systemThemeCleanup?: (() => void) | null;
   pendingGatewayToken?: string | null;
+  builderSetupFocus?: BuilderSetupFocusState | null;
 };
+
+function trimParam(value: string | null): string {
+  return value?.trim() ?? "";
+}
+
+function parseBooleanParam(value: string): boolean | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "true") {
+    return true;
+  }
+  if (normalized === "false") {
+    return false;
+  }
+  return undefined;
+}
+
+function setOptionalSearchParam(url: URL, key: string, value: string | null | undefined) {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed) {
+    url.searchParams.set(key, trimmed);
+    return;
+  }
+  url.searchParams.delete(key);
+}
+
+function clearBuilderSetupParams(url: URL) {
+  for (const key of BUILDER_SETUP_QUERY_KEYS) {
+    url.searchParams.delete(key);
+  }
+}
+
+function readBuilderSetupFocusFromUrl(url: URL): BuilderSetupFocusState | null {
+  const connectorId = trimParam(url.searchParams.get("builderSetupConnectorId"));
+  if (!connectorId) {
+    return null;
+  }
+  const rawTargetTab = trimParam(url.searchParams.get("builderSetupTargetTab"));
+  const targetTab: Tab =
+    rawTargetTab === "builder" ||
+    rawTargetTab === "agents" ||
+    rawTargetTab === "templates" ||
+    rawTargetTab === "overview" ||
+    rawTargetTab === "onboarding" ||
+    rawTargetTab === "channels" ||
+    rawTargetTab === "instances" ||
+    rawTargetTab === "sessions" ||
+    rawTargetTab === "usage" ||
+    rawTargetTab === "cron" ||
+    rawTargetTab === "skills" ||
+    rawTargetTab === "nodes" ||
+    rawTargetTab === "chat" ||
+    rawTargetTab === "config" ||
+    rawTargetTab === "communications" ||
+    rawTargetTab === "appearance" ||
+    rawTargetTab === "automation" ||
+    rawTargetTab === "infrastructure" ||
+    rawTargetTab === "aiAgents" ||
+    rawTargetTab === "debug" ||
+    rawTargetTab === "logs"
+      ? rawTargetTab
+      : "onboarding";
+  const refs = url.searchParams
+    .getAll("builderSetupRef")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const installStrategyRaw = trimParam(url.searchParams.get("builderSetupInstallStrategy"));
+  const connectorInstallStrategy =
+    installStrategyRaw === "none" ||
+    installStrategyRaw === "bundled" ||
+    installStrategyRaw === "npm" ||
+    installStrategyRaw === "local" ||
+    installStrategyRaw === "external"
+      ? installStrategyRaw
+      : null;
+  return {
+    actionId: trimParam(url.searchParams.get("builderSetupActionId")) || null,
+    connectorId,
+    connectorLabel: trimParam(url.searchParams.get("builderSetupLabel")) || null,
+    connectorKind: trimParam(url.searchParams.get("builderSetupKind")) || null,
+    connectorSourceKind: trimParam(url.searchParams.get("builderSetupSourceKind")) || null,
+    connectorDocsPath: trimParam(url.searchParams.get("builderSetupDocsPath")) || null,
+    connectorSelectionLabel: trimParam(url.searchParams.get("builderSetupSelectionLabel")) || null,
+    connectorDetailLabel: trimParam(url.searchParams.get("builderSetupDetailLabel")) || null,
+    connectorOnboarding: parseBooleanParam(
+      trimParam(url.searchParams.get("builderSetupOnboarding")),
+    ),
+    connectorRequiresConfig: parseBooleanParam(
+      trimParam(url.searchParams.get("builderSetupRequiresConfig")),
+    ),
+    connectorRequiresAuth: parseBooleanParam(
+      trimParam(url.searchParams.get("builderSetupRequiresAuth")),
+    ),
+    connectorInstallRequired: parseBooleanParam(
+      trimParam(url.searchParams.get("builderSetupInstallRequired")),
+    ),
+    connectorInstallStrategy,
+    title: trimParam(url.searchParams.get("builderSetupTitle")) || "Open setup",
+    detail:
+      trimParam(url.searchParams.get("builderSetupDetail")) ||
+      "Finish the requested setup here, save or apply your changes, then return to Builder.",
+    refs,
+    targetTab,
+  };
+}
+
+function mergeBuilderSetupFocus(
+  existing: BuilderSetupFocusState | null | undefined,
+  next: BuilderSetupFocusState | null,
+): BuilderSetupFocusState | null {
+  if (!next) {
+    return null;
+  }
+  if (!existing) {
+    return next;
+  }
+  const sameAction =
+    (existing.actionId?.trim() ?? "") === (next.actionId?.trim() ?? "") &&
+    (existing.connectorId?.trim() ?? "") === (next.connectorId?.trim() ?? "");
+  if (!sameAction) {
+    return next;
+  }
+  return {
+    ...existing,
+    ...next,
+    requiredFields: existing.requiredFields,
+    uiSchema: existing.uiSchema,
+    completionSignal: existing.completionSignal,
+  };
+}
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
@@ -98,6 +301,12 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const url = new URL(window.location.href);
   const params = new URLSearchParams(url.search);
   const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  if ("builderSetupFocus" in host) {
+    host.builderSetupFocus = mergeBuilderSetupFocus(
+      host.builderSetupFocus,
+      readBuilderSetupFocusFromUrl(url),
+    );
+  }
 
   const gatewayUrlRaw = params.get("gatewayUrl") ?? hashParams.get("gatewayUrl");
   const nextGatewayUrl = gatewayUrlRaw?.trim() ?? "";
@@ -396,6 +605,12 @@ export function onPopState(host: SettingsHost) {
       lastActiveSessionKey: session,
     });
   }
+  if ("builderSetupFocus" in host) {
+    host.builderSetupFocus = mergeBuilderSetupFocus(
+      host.builderSetupFocus,
+      readBuilderSetupFocusFromUrl(url),
+    );
+  }
 
   setTabFromRoute(host, resolved);
 }
@@ -454,6 +669,52 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
     url.searchParams.set("session", host.sessionKey);
   } else {
     url.searchParams.delete("session");
+  }
+  clearBuilderSetupParams(url);
+  const focus = host.builderSetupFocus;
+  if (focus && focus.targetTab === tab) {
+    setOptionalSearchParam(url, "builderSetupActionId", focus.actionId);
+    setOptionalSearchParam(url, "builderSetupConnectorId", focus.connectorId);
+    setOptionalSearchParam(url, "builderSetupLabel", focus.connectorLabel);
+    setOptionalSearchParam(url, "builderSetupKind", focus.connectorKind);
+    setOptionalSearchParam(url, "builderSetupSourceKind", focus.connectorSourceKind);
+    setOptionalSearchParam(url, "builderSetupDocsPath", focus.connectorDocsPath);
+    setOptionalSearchParam(url, "builderSetupSelectionLabel", focus.connectorSelectionLabel);
+    setOptionalSearchParam(url, "builderSetupDetailLabel", focus.connectorDetailLabel);
+    setOptionalSearchParam(
+      url,
+      "builderSetupOnboarding",
+      typeof focus.connectorOnboarding === "boolean" ? String(focus.connectorOnboarding) : null,
+    );
+    setOptionalSearchParam(
+      url,
+      "builderSetupRequiresConfig",
+      typeof focus.connectorRequiresConfig === "boolean"
+        ? String(focus.connectorRequiresConfig)
+        : null,
+    );
+    setOptionalSearchParam(
+      url,
+      "builderSetupRequiresAuth",
+      typeof focus.connectorRequiresAuth === "boolean" ? String(focus.connectorRequiresAuth) : null,
+    );
+    setOptionalSearchParam(
+      url,
+      "builderSetupInstallRequired",
+      typeof focus.connectorInstallRequired === "boolean"
+        ? String(focus.connectorInstallRequired)
+        : null,
+    );
+    setOptionalSearchParam(url, "builderSetupInstallStrategy", focus.connectorInstallStrategy);
+    setOptionalSearchParam(url, "builderSetupTitle", focus.title);
+    setOptionalSearchParam(url, "builderSetupDetail", focus.detail);
+    setOptionalSearchParam(url, "builderSetupTargetTab", focus.targetTab);
+    for (const ref of focus.refs) {
+      const trimmedRef = ref.trim();
+      if (trimmedRef) {
+        url.searchParams.append("builderSetupRef", trimmedRef);
+      }
+    }
   }
 
   if (currentPath !== targetPath) {

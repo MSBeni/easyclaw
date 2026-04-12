@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   agentLogoUrl,
+  resolveBuilderModelOverrideOptions,
   resolveConfiguredCronModelSuggestions,
   resolveModelOptions,
   resolveAgentAvatarUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./agents-utils.ts";
+import { shouldOpenBuilderQuickSetup } from "./builder.ts";
 
 describe("resolveEffectiveModelFallbacks", () => {
   it("inherits defaults when no entry fallbacks are configured", () => {
@@ -98,6 +100,66 @@ describe("buildModelOptions", () => {
       (option) => option.value,
     );
     expect(values).toEqual(["anthropic/claude-opus-4-6", "openai/gpt-5.4"]);
+  });
+});
+
+describe("resolveBuilderModelOverrideOptions", () => {
+  it("marks configured and unconfigured models separately for builder model override", () => {
+    const options = resolveBuilderModelOverrideOptions(
+      {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+          },
+        },
+      },
+      undefined,
+      ["openai/gpt-5.4", "xai/grok-4"],
+      [
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          provider: "openai",
+          configured: true,
+        },
+        {
+          id: "grok-4",
+          name: "Grok 4",
+          provider: "xai",
+          configured: false,
+        },
+      ],
+    );
+
+    const openai = options.find((option) => option.value === "openai/gpt-5.4");
+    const grok = options.find((option) => option.value === "xai/grok-4");
+    expect(openai?.configured).toBe(true);
+    expect(grok?.configured).toBe(false);
+    expect((openai?.label ?? "").toLowerCase()).toContain("openai");
+    expect((grok?.label ?? "").toLowerCase()).toContain("xai");
+  });
+
+  it("keeps the current override visible even when it is not in catalog", () => {
+    const options = resolveBuilderModelOverrideOptions(null, "openai/gpt-5.4-pro", [], []);
+    expect(options[0]).toMatchObject({
+      value: "openai/gpt-5.4-pro",
+      label: "Current (openai/gpt-5.4-pro)",
+    });
+  });
+});
+
+describe("shouldOpenBuilderQuickSetup", () => {
+  it("routes guided Builder connectors to focused setup", () => {
+    expect(shouldOpenBuilderQuickSetup("tools:web")).toBe(true);
+    expect(shouldOpenBuilderQuickSetup("platform:gmail-hook")).toBe(true);
+    expect(shouldOpenBuilderQuickSetup("platform:exec-approvals")).toBe(true);
+    expect(shouldOpenBuilderQuickSetup("channel:telegram")).toBe(true);
+    expect(shouldOpenBuilderQuickSetup("channel:whatsapp")).toBe(true);
+  });
+
+  it("keeps non-guided connectors on config tabs", () => {
+    expect(shouldOpenBuilderQuickSetup("platform:observability")).toBe(false);
+    expect(shouldOpenBuilderQuickSetup(null)).toBe(false);
   });
 });
 

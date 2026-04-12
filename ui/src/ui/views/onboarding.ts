@@ -1130,9 +1130,12 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
       { instruction: "Paste the App Token below." },
       {
         instruction:
-          'Go to "OAuth & Permissions", add bot scopes (chat:write, app_mentions:read, im:history, im:read, im:write), install to workspace, copy the Bot Token (xoxb-...).',
+          'Go to "OAuth & Permissions", add bot scopes (at minimum: chat:write, app_mentions:read, channels:history, channels:read, groups:history, groups:read, im:history, im:read, im:write, mpim:history, mpim:read, mpim:write), install to workspace, copy the Bot Token (xoxb-...).',
       },
-      { instruction: "Paste the Bot Token below and click Save Step." },
+      {
+        instruction:
+          "Paste the Bot Token below and click Save Step. If you later add scopes, reinstall the app to the workspace before retrying channel discovery.",
+      },
     ],
     fields: [
       {
@@ -1857,7 +1860,50 @@ function isStepConfigured(
     return false;
   }
   const val = readConfigValue(form, step.configCheck);
-  return val !== "" && val !== "false" && val !== "undefined";
+  const configured = val !== "" && val !== "false" && val !== "undefined";
+  if (!configured) {
+    return false;
+  }
+  return !resolveStepLiveVerificationIssue(step, state);
+}
+
+function resolveStepLiveVerificationIssue(
+  step: OnboardingStep,
+  state?: WhatsAppOnboardingState,
+): string | null {
+  if (step.id !== "slack") {
+    return null;
+  }
+  if (state?.builderSetupFocus?.connectorId !== "channel:slack") {
+    return null;
+  }
+  const verifications = state.builderPlan?.draft.planning.verifications ?? [];
+  const failedVerification =
+    verifications.find(
+      (verification) =>
+        verification.connectorId === "channel:slack" &&
+        verification.source === "live" &&
+        (verification.status === "failed" || verification.status === "blocked"),
+    ) ??
+    verifications.find(
+      (verification) =>
+        verification.connectorId === "channel:slack" &&
+        (verification.status === "failed" || verification.status === "blocked"),
+    );
+  return failedVerification?.detail?.trim() || null;
+}
+
+function summarizeStepLiveVerificationIssue(
+  step: OnboardingStep,
+  detail: string | null,
+): string | null {
+  if (!detail) {
+    return null;
+  }
+  if (step.id === "slack" && detail.includes("not a member of")) {
+    return "Credential saved, but the bot still needs access to the selected Slack channel.";
+  }
+  return "Credential saved, but live verification still needs attention.";
 }
 
 // ---------------------------------------------------------------------------
@@ -1890,7 +1936,9 @@ function renderStepCard(
   form: Record<string, unknown> | null,
   step: OnboardingStep,
 ): unknown {
+  const verificationIssue = resolveStepLiveVerificationIssue(step, state);
   const done = isStepConfigured(form, step, state);
+  const issueSummary = summarizeStepLiveVerificationIssue(step, verificationIssue);
   return html`
     <button
       class="onboarding__card ${done ? "onboarding__card--done" : "onboarding__card--pending"}"
@@ -1903,23 +1951,31 @@ function renderStepCard(
         <div class="onboarding__card-title-row">
           <span class="onboarding__card-title">${step.title}</span>
               ${
-                done
+                verificationIssue
                   ? html`
-                      <span class="onboarding__card-status onboarding__card-status--ready">\u2713 Added</span>
+                      <span class="onboarding__card-status onboarding__card-status--setup">Needs attention</span>
                     `
-                  : html`
-                      <span class="onboarding__card-status onboarding__card-status--setup">Set up</span>
-                    `
+                  : done
+                    ? html`
+                        <span class="onboarding__card-status onboarding__card-status--ready">\u2713 Added</span>
+                      `
+                    : html`
+                        <span class="onboarding__card-status onboarding__card-status--setup">Set up</span>
+                      `
               }
         </div>
         <div class="onboarding__card-subtitle">${step.subtitle}</div>
         <div class="onboarding__card-meta">
           ${
-            done
+            issueSummary
               ? html`
-                  <span class="onboarding__card-meta--ready">Credential saved</span>
+                  <span>${issueSummary}</span>
                 `
-              : html`<span>${step.timeEstimate} \u00B7 ${step.difficulty}</span>`
+              : done
+                ? html`
+                    <span class="onboarding__card-meta--ready">Credential saved</span>
+                  `
+                : html`<span>${step.timeEstimate} \u00B7 ${step.difficulty}</span>`
           }
         </div>
       </div>

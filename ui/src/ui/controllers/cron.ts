@@ -233,7 +233,13 @@ export async function loadCronModelSuggestions(state: CronModelSuggestionsState)
           return "";
         }
         const id = (entry as { id?: unknown }).id;
-        return typeof id === "string" ? id.trim() : "";
+        const provider = (entry as { provider?: unknown }).provider;
+        const modelId = typeof id === "string" ? id.trim() : "";
+        const providerId = typeof provider === "string" ? provider.trim() : "";
+        if (!modelId) {
+          return "";
+        }
+        return providerId ? `${providerId}/${modelId}` : modelId;
       })
       .filter(Boolean);
     state.cronModelSuggestions = Array.from(new Set(ids)).toSorted((a, b) => a.localeCompare(b));

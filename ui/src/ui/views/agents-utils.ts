@@ -8,6 +8,7 @@ import type {
   AgentIdentityResult,
   AgentsFilesListResult,
   AgentsListResult,
+  ModelCatalogEntry,
   ToolCatalogProfile,
   ToolsCatalogResult,
 } from "../types.ts";
@@ -556,6 +557,96 @@ type ConfiguredModelOption = {
   label: string;
 };
 
+export type BuilderModelOverrideOption = {
+  value: string;
+  label: string;
+  configured: boolean;
+  provider: string | null;
+};
+
+function normalizeModelRefProvider(valueRaw: unknown): string | null {
+  if (typeof valueRaw !== "string") {
+    return null;
+  }
+  const value = valueRaw.trim();
+  if (!value) {
+    return null;
+  }
+  const slashIndex = value.indexOf("/");
+  if (slashIndex <= 0) {
+    return null;
+  }
+  const provider = value.slice(0, slashIndex).trim().toLowerCase();
+  return provider || null;
+}
+
+function buildProviderScopedModelRef(params: {
+  modelId: string;
+  provider?: string | null;
+}): string {
+  const modelId = params.modelId.trim();
+  if (!modelId) {
+    return "";
+  }
+  if (modelId.includes("/")) {
+    return modelId;
+  }
+  const provider = params.provider?.trim();
+  return provider ? `${provider}/${modelId}` : modelId;
+}
+
+function addBuilderModelOption(
+  out: Map<string, BuilderModelOverrideOption>,
+  params: {
+    valueRaw: unknown;
+    labelHint?: string;
+    configured: boolean;
+    providerHint?: string | null;
+  },
+) {
+  if (typeof params.valueRaw !== "string") {
+    return;
+  }
+  const value = params.valueRaw.trim();
+  if (!value) {
+    return;
+  }
+  const key = value.toLowerCase();
+  const label = params.labelHint?.trim() || value;
+  const provider = params.providerHint?.trim().toLowerCase() || normalizeModelRefProvider(value);
+  const incoming: BuilderModelOverrideOption = {
+    value,
+    label,
+    configured: params.configured,
+    provider,
+  };
+  const existing = out.get(key);
+  if (!existing) {
+    out.set(key, incoming);
+    return;
+  }
+  if (!existing.configured && incoming.configured) {
+    out.set(key, incoming);
+    return;
+  }
+  if (
+    existing.configured === incoming.configured &&
+    existing.label === existing.value &&
+    incoming.label !== incoming.value
+  ) {
+    out.set(key, incoming);
+    return;
+  }
+  if (
+    existing.configured === incoming.configured &&
+    !existing.provider &&
+    incoming.provider &&
+    incoming.label === existing.label
+  ) {
+    out.set(key, incoming);
+  }
+}
+
 function addConfiguredModelOption(
   out: Map<string, ConfiguredModelOption>,
   valueRaw: unknown,
@@ -693,6 +784,85 @@ export function resolveModelOptions(
     options.unshift({ value: current, label: `Current (${current})` });
   }
   return options;
+}
+
+export function resolveBuilderModelOverrideOptions(
+  configForm: Record<string, unknown> | null,
+  current?: string | null,
+  suggestedModelIds?: Iterable<string>,
+  modelCatalog?: readonly ModelCatalogEntry[] | null,
+): BuilderModelOverrideOption[] {
+  const byValue = new Map<string, BuilderModelOverrideOption>();
+
+  for (const option of resolveConfiguredModels(configForm)) {
+    addBuilderModelOption(byValue, {
+      valueRaw: option.value,
+      labelHint: option.label,
+      configured: true,
+      providerHint: normalizeModelRefProvider(option.value),
+    });
+  }
+
+  if (Array.isArray(modelCatalog)) {
+    for (const entry of modelCatalog) {
+      const modelId = entry?.id?.trim();
+      if (!modelId) {
+        continue;
+      }
+      const provider = entry.provider?.trim();
+      const value = buildProviderScopedModelRef({ modelId, provider });
+      if (!value) {
+        continue;
+      }
+      const baseLabel = provider ? `${modelId} · ${provider}` : modelId;
+      addBuilderModelOption(byValue, {
+        valueRaw: value,
+        labelHint: baseLabel,
+        configured: entry.configured !== false,
+        providerHint: provider ?? null,
+      });
+    }
+  }
+
+  const configuredProviders = new Set<string>();
+  for (const option of byValue.values()) {
+    if (!option.configured || !option.provider) {
+      continue;
+    }
+    configuredProviders.add(option.provider);
+  }
+
+  if (suggestedModelIds) {
+    for (const suggestion of suggestedModelIds) {
+      const provider = normalizeModelRefProvider(suggestion);
+      addBuilderModelOption(byValue, {
+        valueRaw: suggestion,
+        configured: provider ? configuredProviders.has(provider) : false,
+        providerHint: provider,
+      });
+    }
+  }
+
+  const currentValue = current?.trim();
+  if (currentValue && !byValue.has(currentValue.toLowerCase())) {
+    const provider = normalizeModelRefProvider(currentValue);
+    addBuilderModelOption(byValue, {
+      valueRaw: currentValue,
+      labelHint: `Current (${currentValue})`,
+      configured: provider ? configuredProviders.has(provider) : false,
+      providerHint: provider,
+    });
+  }
+
+  const sortOptions = (a: BuilderModelOverrideOption, b: BuilderModelOverrideOption) =>
+    a.label.localeCompare(b.label) || a.value.localeCompare(b.value);
+  const configured = Array.from(byValue.values())
+    .filter((option) => option.configured)
+    .toSorted(sortOptions);
+  const unconfigured = Array.from(byValue.values())
+    .filter((option) => !option.configured)
+    .toSorted(sortOptions);
+  return [...configured, ...unconfigured];
 }
 
 type CompiledPattern =
