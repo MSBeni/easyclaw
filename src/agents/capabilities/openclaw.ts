@@ -7,6 +7,8 @@ import type {
   CapabilityContract,
   CapabilityRegistry,
   ConnectorDefinition,
+  ConnectorSetupActionDescriptor,
+  ConnectorWorkspaceArtifact,
   VerificationProbe,
 } from "./schema.js";
 
@@ -701,6 +703,8 @@ function buildChannelConnectorDefinition(params: {
   setup?: Partial<ConnectorDefinition["setup"]>;
   verification?: Partial<ConnectorDefinition["verification"]>;
   plannerAliases?: string[];
+  setupActionDescriptors?: ConnectorSetupActionDescriptor[];
+  workspaceArtifacts?: ConnectorWorkspaceArtifact[];
 }): ConnectorDefinition {
   const aliases = Array.from(
     new Set([...(params.aliases ?? []), ...(params.plannerAliases ?? [])].filter(Boolean)),
@@ -736,6 +740,12 @@ function buildChannelConnectorDefinition(params: {
       ...(params.detailLabel ? { detailLabel: params.detailLabel } : {}),
       ...(aliases.length ? { aliases } : {}),
       ...(params.systemImage ? { systemImage: params.systemImage } : {}),
+      ...(params.setupActionDescriptors?.length
+        ? { setupActionDescriptors: params.setupActionDescriptors }
+        : {}),
+      ...(params.workspaceArtifacts?.length
+        ? { workspaceArtifacts: params.workspaceArtifacts }
+        : {}),
     },
   };
 }
@@ -786,6 +796,8 @@ function listCatalogChannelConnectorDefinitions(
       setup: entry.builder?.channelConnector?.setup,
       verification: entry.builder?.channelConnector?.verification,
       plannerAliases: entry.builder?.channelConnector?.plannerHints?.aliases,
+      setupActionDescriptors: entry.builder?.channelConnector?.setupActions,
+      workspaceArtifacts: entry.builder?.channelConnector?.workspaceArtifacts,
     }),
   );
 }

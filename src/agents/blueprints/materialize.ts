@@ -659,6 +659,7 @@ async function materializeWorkspaceFiles(params: {
   bundle: AgentBlueprintBundle;
   plan: AgentBlueprintPlan;
   managedSectionOverrides?: Record<string, string>;
+  extraManagedWorkspaceDocs?: AgentBlueprintManagedWorkspaceDocPreview[];
 }): Promise<AgentBlueprintWorkspaceFileResult[]> {
   await ensureAgentWorkspace({
     dir: params.plan.agent.workspaceDir,
@@ -671,6 +672,7 @@ async function materializeWorkspaceFiles(params: {
   await fs.mkdir(path.join(params.plan.agent.workspaceDir, MEMORY_DIRNAME), { recursive: true });
 
   const results: AgentBlueprintWorkspaceFileResult[] = [];
+  const writtenFiles = new Set<string>();
   for (const file of params.plan.workspace.bootstrapFiles) {
     const filePath = path.join(params.plan.agent.workspaceDir, file.name);
     const managed =
@@ -697,6 +699,33 @@ async function materializeWorkspaceFiles(params: {
       path: filePath,
       status,
     });
+    writtenFiles.add(file.name);
+  }
+
+  for (const doc of params.extraManagedWorkspaceDocs ?? []) {
+    if (!doc.name.trim() || !doc.content.trim() || writtenFiles.has(doc.name)) {
+      continue;
+    }
+    const filePath = path.join(params.plan.agent.workspaceDir, doc.name);
+    let existing: string | null = null;
+    try {
+      existing = await fs.readFile(filePath, "utf-8");
+    } catch {
+      existing = null;
+    }
+    const next =
+      existing === null
+        ? `${managedSection(doc.content).trimEnd()}\n`
+        : upsertManagedSection(existing, doc.content);
+    const status = existing === null ? "created" : existing === next ? "unchanged" : "updated";
+    if (existing !== next) {
+      await fs.writeFile(filePath, next, "utf-8");
+    }
+    results.push({
+      name: doc.name,
+      path: filePath,
+      status,
+    });
   }
 
   return results;
@@ -707,6 +736,7 @@ export async function applyAgentBlueprint(params: {
   variables?: AgentBlueprintVariableMap;
   cron?: CronService;
   workspaceManagedSections?: Record<string, string>;
+  extraManagedWorkspaceDocs?: AgentBlueprintManagedWorkspaceDocPreview[];
 }): Promise<AgentBlueprintApplyResult> {
   const resolved = resolveAgentBlueprintVariables({
     bundle: params.loaded.bundle,
@@ -803,6 +833,9 @@ export async function applyAgentBlueprint(params: {
     plan,
     ...(params.workspaceManagedSections
       ? { managedSectionOverrides: params.workspaceManagedSections }
+      : {}),
+    ...(params.extraManagedWorkspaceDocs?.length
+      ? { extraManagedWorkspaceDocs: params.extraManagedWorkspaceDocs }
       : {}),
   });
   // Ensure per-agent auth store is initialized and inherits main credentials when available.

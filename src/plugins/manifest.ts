@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type {
   CapabilityContract,
+  ConnectorSetupActionDescriptor,
+  ConnectorWorkspaceArtifact,
   RiskClass,
   VerificationProbe,
 } from "../agents/capabilities/schema.js";
@@ -172,6 +174,8 @@ export type PluginPackageChannelConnector = {
   setup?: PluginPackageChannelConnectorSetup;
   verification?: PluginPackageChannelConnectorVerification;
   plannerHints?: PluginPackageChannelConnectorPlannerHints;
+  setupActions?: ConnectorSetupActionDescriptor[];
+  workspaceArtifacts?: ConnectorWorkspaceArtifact[];
 };
 
 export type PluginPackageBuilder = {

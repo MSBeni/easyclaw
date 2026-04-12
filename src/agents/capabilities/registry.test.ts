@@ -220,6 +220,28 @@ describe("openclaw capability substrate", () => {
                   plannerHints: {
                     aliases: ["phone call"],
                   },
+                  setupActions: [
+                    {
+                      actionId: "channel:voice-call:verify",
+                      title: "Verify voice route",
+                      requiredFields: [
+                        {
+                          key: "destination",
+                          label: "Phone destination",
+                          kind: "destination",
+                          required: true,
+                        },
+                      ],
+                    },
+                  ],
+                  workspaceArtifacts: [
+                    {
+                      fileName: "VOICE_CALL.md",
+                      purpose: "Voice call runbook",
+                      previewSummary: "Documents the reviewed voice-call routing.",
+                      managedSection: "## Voice Call Runbook",
+                    },
+                  ],
                 },
               },
             },
@@ -251,5 +273,9 @@ describe("openclaw capability substrate", () => {
       ],
     });
     expect(connector?.metadata.aliases).toContain("phone call");
+    expect(connector?.metadata.setupActionDescriptors?.[0]?.actionId).toBe(
+      "channel:voice-call:verify",
+    );
+    expect(connector?.metadata.workspaceArtifacts?.[0]?.fileName).toBe("VOICE_CALL.md");
   });
 });

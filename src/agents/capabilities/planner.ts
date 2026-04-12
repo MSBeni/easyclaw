@@ -12,6 +12,8 @@ import type {
 } from "./requirements.js";
 import type {
   CapabilityRegistry,
+  ConnectorSetupActionDescriptor,
+  ConnectorWorkspaceArtifact,
   ConnectorDefinition,
   IntegrationInstance,
   PlannerStatus,
@@ -83,6 +85,8 @@ export type PlannedIntegrationInstance = IntegrationInstance & {
   sourceKind: ConnectorDefinition["source"]["kind"];
   contracts: string[];
   verification: VerificationProbe[];
+  setupActionDescriptors?: ConnectorSetupActionDescriptor[];
+  workspaceArtifacts?: ConnectorWorkspaceArtifact[];
   docsPath?: string;
   selectionLabel?: string;
   detailLabel?: string;
@@ -664,6 +668,12 @@ function describeIntegrationInstance(
     sourceKind: connector.source.kind,
     contracts: connector.contracts,
     verification: connector.verification.probes,
+    ...(connector.metadata.setupActionDescriptors?.length
+      ? { setupActionDescriptors: connector.metadata.setupActionDescriptors }
+      : {}),
+    ...(connector.metadata.workspaceArtifacts?.length
+      ? { workspaceArtifacts: connector.metadata.workspaceArtifacts }
+      : {}),
     docsPath: connector.metadata.docsPath,
     selectionLabel: connector.metadata.selectionLabel,
     detailLabel: connector.metadata.detailLabel,

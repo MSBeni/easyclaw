@@ -69,6 +69,67 @@ export type VerificationProbe = {
   successDescription: string;
 };
 
+export type ConnectorSetupActionField = {
+  key: string;
+  label: string;
+  kind:
+    | "account"
+    | "destination"
+    | "sender"
+    | "filter"
+    | "session"
+    | "auth"
+    | "approval"
+    | "schedule"
+    | "model"
+    | "provider"
+    | "plugin"
+    | "generic";
+  required: boolean;
+  inputKey?: string;
+  configPath?: string;
+  inputType?: "text" | "secret" | "select";
+  placeholder?: string;
+  help?: string;
+  options?: Array<{
+    value: string;
+    label: string;
+  }>;
+};
+
+export type ConnectorSetupActionDescriptor = {
+  actionId?: string;
+  kind?: "install" | "connect" | "configure" | "enable" | "policy" | "verify" | "question";
+  title?: string;
+  detail?: string;
+  blocking?: boolean;
+  refs?: string[];
+  requiredFields?: ConnectorSetupActionField[];
+  uiSchema?: {
+    variant?: "guided-setup" | "inline-question" | "expert-config";
+    section?: string;
+    fieldKeys?: string[];
+  };
+  guidedLauncher?: {
+    available: boolean;
+    target: "builder-quick-setup" | "config-tab";
+    connectorId?: string;
+  };
+  completionSignal?: {
+    kind: "integration-status" | "verification" | "builder-check";
+    target: string;
+    detail: string;
+  };
+};
+
+export type ConnectorWorkspaceArtifact = {
+  fileName: string;
+  purpose: string;
+  status?: "planned" | "suggested" | "generated";
+  previewSummary: string;
+  managedSection?: string;
+};
+
 export type CapabilityContract = {
   id: string;
   label: string;
@@ -130,6 +191,8 @@ export type ConnectorDefinition = {
     systemImage?: string;
     toolSectionId?: string;
     toolIds?: string[];
+    setupActionDescriptors?: ConnectorSetupActionDescriptor[];
+    workspaceArtifacts?: ConnectorWorkspaceArtifact[];
   };
 };
 

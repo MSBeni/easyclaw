@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setActiveWebListener } from "../../../extensions/whatsapp/src/active-listener.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
@@ -7,6 +10,7 @@ import {
 } from "../../../extensions/whatsapp/src/runtime.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { __testing as plannerAgentTesting } from "../planning/planner-agent.js";
 import {
   applyAgentBlueprintBuilderPlan,
@@ -145,6 +149,118 @@ describe("agent blueprint builder", () => {
     );
     expect(entryPreview?.files.find((file) => file.name === "MEMORY.md")?.content).toContain(
       "## Easyclaw Blueprint Memory Strategy",
+    );
+  });
+
+  it("surfaces and materializes external workspace artifacts from catalog metadata", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-phase13-builder-"));
+    const catalogPath = path.join(dir, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/voice-delivery",
+            openclaw: {
+              channel: {
+                id: "voice-delivery",
+                label: "Voice Delivery",
+                selectionLabel: "Voice Delivery",
+                docsPath: "/channels/voice-delivery",
+                blurb: "Voice call delivery for outbound updates.",
+              },
+              install: {
+                npmSpec: "@openclaw/voice-delivery",
+              },
+              builder: {
+                channelConnector: {
+                  contracts: ["delivery.chat", "message.send"],
+                  setup: {
+                    onboarding: false,
+                    requiresConfig: true,
+                    requiresAuth: false,
+                  },
+                  plannerHints: {
+                    aliases: ["phone call"],
+                  },
+                  verification: {
+                    supported: true,
+                    probes: [],
+                  },
+                  workspaceArtifacts: [
+                    {
+                      fileName: "VOICE_DELIVERY.md",
+                      purpose: "Voice delivery runbook",
+                      status: "suggested",
+                      previewSummary:
+                        "Documents the reviewed voice routing assumptions before activation.",
+                      managedSection:
+                        "## Voice Delivery Runbook\n\n- Confirm the caller profile.\n- Confirm the destination route.",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath,
+        OPENAI_API_KEY: "test-openai-key",
+      },
+      async () => {
+        const cfg = {
+          channels: {
+            "voice-delivery": {
+              destination: "+15551234567",
+              sender: "Daily Brief Bot",
+            },
+          },
+          agents: {
+            defaults: {
+              model: "openai/gpt-4o",
+            },
+          },
+        };
+        const brief = "Create an assistant that can send short updates to phone call.";
+
+        const compiled = await compileAgentBlueprintBuilderPlan({
+          brief,
+          modelId: "openai/gpt-4o",
+          cfg,
+        });
+
+        expect(compiled.draft.buildSpec.workspaceArtifacts).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              fileName: "VOICE_DELIVERY.md",
+              purpose: "Voice delivery runbook",
+            }),
+          ]),
+        );
+        const entryPreview = compiled.workspacePreviews.find((preview) => preview.entry);
+        expect(
+          entryPreview?.files.find((file) => file.name === "VOICE_DELIVERY.md")?.content,
+        ).toContain("## Voice Delivery Runbook");
+
+        const applied = await applyAgentBlueprintBuilderPlan({
+          brief,
+          modelId: "openai/gpt-4o",
+          cfg,
+        });
+
+        const extraWorkspaceFile = fs.readFileSync(
+          path.join(applied.result.agent.workspaceDir, "VOICE_DELIVERY.md"),
+          "utf-8",
+        );
+        expect(extraWorkspaceFile).toContain("## Voice Delivery Runbook");
+        expect(applied.result.workspace.files.map((file) => file.name)).toContain(
+          "VOICE_DELIVERY.md",
+        );
+      },
     );
   });
 

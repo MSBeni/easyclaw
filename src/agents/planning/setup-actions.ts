@@ -47,9 +47,12 @@ type SetupActionDraft = {
   detailParts: string[];
   kind: SetupActionKind;
   source: SetupActionSource;
+  blocking: boolean;
   refs: Set<string>;
   requiredFields: Map<string, SetupField>;
   workflowRoles: Set<string>;
+  uiSchema?: SetupAction["uiSchema"];
+  guidedLauncher?: SetupAction["guidedLauncher"];
   completionSignal: NonNullable<SetupAction["completionSignal"]>;
 };
 
@@ -253,6 +256,95 @@ function addRequiredField(draft: SetupActionDraft, field: SetupField) {
     required: existing.required || field.required,
     options: field.options ?? existing.options,
   });
+}
+
+function findSetupActionDescriptor(params: {
+  integration: PlannedIntegrationInstance | undefined;
+  actionId: string;
+  kind: SetupActionKind;
+}) {
+  const descriptors = params.integration?.setupActionDescriptors ?? [];
+  return (
+    descriptors.find(
+      (descriptor) => descriptor.actionId?.trim() && descriptor.actionId.trim() === params.actionId,
+    ) ??
+    descriptors.find((descriptor) => descriptor.kind === params.kind) ??
+    null
+  );
+}
+
+function applySetupActionDescriptor(params: {
+  draft: SetupActionDraft;
+  descriptor: NonNullable<ReturnType<typeof findSetupActionDescriptor>>;
+}) {
+  if (params.descriptor.title?.trim()) {
+    params.draft.title = params.descriptor.title.trim();
+  }
+  if (params.descriptor.detail?.trim()) {
+    params.draft.detailParts.push(params.descriptor.detail.trim());
+  }
+  if (params.descriptor.blocking !== undefined) {
+    params.draft.blocking = params.descriptor.blocking;
+  }
+  for (const ref of params.descriptor.refs ?? []) {
+    if (ref.trim()) {
+      params.draft.refs.add(ref.trim());
+    }
+  }
+  for (const field of params.descriptor.requiredFields ?? []) {
+    addRequiredField(params.draft, field);
+  }
+  if (params.descriptor.uiSchema) {
+    params.draft.uiSchema = {
+      variant: params.descriptor.uiSchema.variant ?? "guided-setup",
+      ...(params.descriptor.uiSchema.section?.trim()
+        ? { section: params.descriptor.uiSchema.section.trim() }
+        : {}),
+      fieldKeys: params.descriptor.uiSchema.fieldKeys?.filter((key) => key.trim().length > 0) ?? [],
+    };
+  }
+  if (params.descriptor.guidedLauncher) {
+    params.draft.guidedLauncher = {
+      available: params.descriptor.guidedLauncher.available,
+      target: params.descriptor.guidedLauncher.target,
+      ...(params.descriptor.guidedLauncher.connectorId?.trim()
+        ? { connectorId: params.descriptor.guidedLauncher.connectorId.trim() }
+        : {}),
+    };
+  }
+  if (params.descriptor.completionSignal) {
+    params.draft.completionSignal = params.descriptor.completionSignal;
+  }
+}
+
+function mergeWorkspaceArtifacts(params: {
+  buildSpec: BuildSpec;
+  planning: RequirementPlannerResult;
+}): BuildSpec["workspaceArtifacts"] {
+  const merged = new Map(
+    params.buildSpec.workspaceArtifacts.map((artifact) => [artifact.fileName, artifact] as const),
+  );
+
+  for (const integration of params.planning.integrations) {
+    for (const artifact of integration.workspaceArtifacts ?? []) {
+      const existing = merged.get(artifact.fileName);
+      merged.set(artifact.fileName, {
+        fileName: artifact.fileName,
+        purpose: artifact.purpose || existing?.purpose || artifact.fileName,
+        status: artifact.status ?? existing?.status ?? "suggested",
+        previewSummary: artifact.previewSummary || existing?.previewSummary || artifact.purpose,
+        ...(artifact.managedSection?.trim()
+          ? { managedSection: artifact.managedSection.trim() }
+          : existing?.managedSection
+            ? { managedSection: existing.managedSection }
+            : {}),
+      });
+    }
+  }
+
+  return Array.from(merged.values()).toSorted((left, right) =>
+    left.fileName.localeCompare(right.fileName),
+  );
 }
 
 function actionSpecificIds(connectorId: string): {
@@ -1060,6 +1152,7 @@ export function synchronizeBuildSpec(params: {
       detailParts: [],
       kind: paramsForAction.kind,
       source: paramsForAction.source,
+      blocking: true,
       refs: new Set([
         ...(integration?.configRefs ?? []),
         ...(integration?.authRefs ?? []),
@@ -1083,6 +1176,14 @@ export function synchronizeBuildSpec(params: {
         planning: params.planning,
       }),
     };
+    const descriptor = findSetupActionDescriptor({
+      integration,
+      actionId: paramsForAction.actionId,
+      kind: paramsForAction.kind,
+    });
+    if (descriptor) {
+      applySetupActionDescriptor({ draft, descriptor });
+    }
     setupActionDrafts.set(paramsForAction.actionId, draft);
     return draft;
   };
@@ -1214,6 +1315,17 @@ export function synchronizeBuildSpec(params: {
     };
   }
 
+  for (const draft of setupActionDrafts.values()) {
+    const descriptor = findSetupActionDescriptor({
+      integration: integrationsById.get(draft.connectorId),
+      actionId: draft.id,
+      kind: draft.kind,
+    });
+    if (descriptor) {
+      applySetupActionDescriptor({ draft, descriptor });
+    }
+  }
+
   const setupActions = sortActions(
     Array.from(setupActionDrafts.values()).map((draft) => {
       const refs = sortStrings(draft.refs);
@@ -1230,20 +1342,29 @@ export function synchronizeBuildSpec(params: {
         status: "pending" as const,
         kind: draft.kind,
         source: draft.source,
-        blocking: true,
+        blocking: draft.blocking,
         refs,
         requiredFields: Array.from(draft.requiredFields.values()),
         workflowRoles: sortStrings(draft.workflowRoles),
         uiSchema: {
-          variant: actionUiVariant(draft.kind, guided),
-          ...(refs[0] ? { section: refs[0] } : {}),
-          fieldKeys: Array.from(draft.requiredFields.keys()),
+          variant: draft.uiSchema?.variant ?? actionUiVariant(draft.kind, guided),
+          ...(draft.uiSchema?.section?.trim()
+            ? { section: draft.uiSchema.section.trim() }
+            : refs[0]
+              ? { section: refs[0] }
+              : {}),
+          fieldKeys:
+            draft.uiSchema?.fieldKeys && draft.uiSchema.fieldKeys.length > 0
+              ? draft.uiSchema.fieldKeys
+              : Array.from(draft.requiredFields.keys()),
         },
-        guidedLauncher: {
-          available: guided,
-          target: guided ? "builder-quick-setup" : "config-tab",
-          connectorId: draft.connectorId,
-        },
+        guidedLauncher:
+          draft.guidedLauncher ??
+          ({
+            available: guided,
+            target: guided ? "builder-quick-setup" : "config-tab",
+            connectorId: draft.connectorId,
+          } satisfies NonNullable<SetupAction["guidedLauncher"]>),
         fallbackTarget: {
           refs,
           label: "Open expert setup",
@@ -1264,6 +1385,7 @@ export function synchronizeBuildSpec(params: {
         params.planning.integrations.length - readyIntegrationCount,
       ),
     },
+    workspaceArtifacts: mergeWorkspaceArtifacts(params),
     integrations: params.planning.integrations.map((integration) => ({
       connectorId: integration.connectorId,
       label: integration.label,

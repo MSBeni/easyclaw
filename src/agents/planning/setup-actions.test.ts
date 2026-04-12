@@ -1,4 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildOpenClawCapabilityRegistry } from "../capabilities/openclaw.js";
 import {
   buildRequirementPlannerResult,
   rebuildRequirementPlannerResult,
@@ -336,5 +340,187 @@ describe("synchronizeBuildSpec", () => {
         blockers: [],
       },
     });
+  });
+
+  it("merges external setup descriptors and workspace artifacts from catalog metadata", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-phase13-setup-"));
+    const catalogPath = path.join(dir, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/voice-delivery",
+            openclaw: {
+              channel: {
+                id: "voice-delivery",
+                label: "Voice Delivery",
+                selectionLabel: "Voice Delivery",
+                docsPath: "/channels/voice-delivery",
+                blurb: "Voice call delivery for outbound updates.",
+              },
+              install: {
+                npmSpec: "@openclaw/voice-delivery",
+              },
+              builder: {
+                channelConnector: {
+                  contracts: ["delivery.chat", "message.send"],
+                  plannerHints: {
+                    aliases: ["phone call"],
+                  },
+                  verification: {
+                    supported: true,
+                    probes: [
+                      {
+                        kind: "status",
+                        label: "Voice route probe",
+                        successDescription: "The voice route is ready for outbound delivery.",
+                      },
+                    ],
+                  },
+                  setupActions: [
+                    {
+                      actionId: "channel:voice-delivery:verify",
+                      title: "Verify voice route",
+                      detail: "Confirm the voice destination and caller profile before activation.",
+                      requiredFields: [
+                        {
+                          key: "destination",
+                          label: "Phone destination",
+                          kind: "destination",
+                          required: true,
+                          configPath: "channels.voice-delivery.destination",
+                        },
+                        {
+                          key: "sender",
+                          label: "Caller profile",
+                          kind: "sender",
+                          required: true,
+                          configPath: "channels.voice-delivery.sender",
+                        },
+                      ],
+                      uiSchema: {
+                        variant: "guided-setup",
+                        section: "channels.voice-delivery",
+                        fieldKeys: ["destination", "sender"],
+                      },
+                      guidedLauncher: {
+                        available: true,
+                        target: "builder-quick-setup",
+                        connectorId: "channel:voice-delivery",
+                      },
+                      completionSignal: {
+                        kind: "verification",
+                        target: "channel:voice-delivery:status",
+                        detail: "Pass the voice route probe for Voice Delivery.",
+                      },
+                    },
+                  ],
+                  workspaceArtifacts: [
+                    {
+                      fileName: "VOICE_DELIVERY.md",
+                      purpose: "Voice delivery runbook",
+                      status: "suggested",
+                      previewSummary:
+                        "Documents the reviewed voice routing assumptions before activation.",
+                      managedSection:
+                        "## Voice Delivery Runbook\n\n- Confirm the caller profile.\n- Confirm the destination route.",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        "voice-delivery": {
+          destination: "+15551234567",
+          sender: "Daily Brief Bot",
+        },
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-4o",
+        },
+      },
+    };
+    const registry = buildOpenClawCapabilityRegistry({ catalogPaths: [catalogPath] });
+    const requirements = buildRequirementSet({
+      brief: "Create an assistant that can send short updates to phone call.",
+      cfg,
+      registry,
+    });
+    const basePlanning = buildRequirementPlannerResult({
+      requirements,
+      cfg,
+      registry,
+    });
+    const planning = rebuildRequirementPlannerResult({
+      status: basePlanning.status,
+      selections: basePlanning.selections,
+      alternatives: basePlanning.alternatives,
+      variants: basePlanning.variants,
+      topology: basePlanning.topology,
+      integrations: basePlanning.integrations,
+      verifications: basePlanning.verifications.map((verification) =>
+        verification.connectorId === "channel:voice-delivery"
+          ? {
+              ...verification,
+              status: "failed",
+              detail: "Voice destination is configured, but the caller profile still needs review.",
+              source: "live",
+            }
+          : verification,
+      ),
+      verificationFingerprint: basePlanning.verificationFingerprint,
+      registry,
+    });
+
+    const synced = synchronizeBuildSpec({
+      buildSpec: createBaseBuildSpec({
+        brief: requirements.brief,
+        status: planning.status,
+      }),
+      requirements,
+      planning,
+      questions: [],
+      cfg,
+    });
+
+    expect(
+      synced.setupActions.find((action) => action.id === "channel:voice-delivery:verify"),
+    ).toEqual(
+      expect.objectContaining({
+        title: "Verify voice route",
+        detail: expect.stringContaining("caller profile"),
+        guidedLauncher: expect.objectContaining({
+          available: true,
+          target: "builder-quick-setup",
+        }),
+        completionSignal: {
+          kind: "verification",
+          target: "channel:voice-delivery:status",
+          detail: "Pass the voice route probe for Voice Delivery.",
+        },
+      }),
+    );
+    expect(
+      synced.setupActions
+        .find((action) => action.id === "channel:voice-delivery:verify")
+        ?.requiredFields?.map((field) => field.key),
+    ).toEqual(expect.arrayContaining(["destination", "sender"]));
+    expect(synced.workspaceArtifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fileName: "VOICE_DELIVERY.md",
+          purpose: "Voice delivery runbook",
+          previewSummary: expect.stringContaining("voice routing assumptions"),
+        }),
+      ]),
+    );
   });
 });

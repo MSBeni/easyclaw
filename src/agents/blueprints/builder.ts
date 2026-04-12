@@ -1693,31 +1693,53 @@ function buildRuntimeGraphWorkspacePreviews(params: {
     nodeId: entry.nodeId,
     roleId: entry.roleId,
     entry: entry.entry,
-    files: previewAgentBlueprintManagedWorkspaceDocs({
-      bundle:
-        params.graph.nodes.find((node) => node.id === entry.nodeId)?.bundle ??
-        (() => {
-          throw new Error(`Missing runtime graph bundle for node ${entry.nodeId}.`);
-        })(),
-      plan: entry.plan,
-      managedSectionOverrides: Object.fromEntries(
-        entry.plan.workspace.bootstrapFiles
-          .map((file) => {
-            const edited = docEditMap.get(`${entry.nodeId}:${file.name}`)?.trim();
-            if (edited) {
-              return [file.name, edited] as const;
-            }
-            if (entry.entry) {
-              const plannerManagedSection = plannerManagedSections.get(file.name)?.trim();
-              if (plannerManagedSection) {
-                return [file.name, plannerManagedSection] as const;
+    files: (() => {
+      const previewFiles = previewAgentBlueprintManagedWorkspaceDocs({
+        bundle:
+          params.graph.nodes.find((node) => node.id === entry.nodeId)?.bundle ??
+          (() => {
+            throw new Error(`Missing runtime graph bundle for node ${entry.nodeId}.`);
+          })(),
+        plan: entry.plan,
+        managedSectionOverrides: Object.fromEntries(
+          entry.plan.workspace.bootstrapFiles
+            .map((file) => {
+              const edited = docEditMap.get(`${entry.nodeId}:${file.name}`)?.trim();
+              if (edited) {
+                return [file.name, edited] as const;
               }
-            }
-            return null;
-          })
-          .filter((value): value is readonly [string, string] => Boolean(value)),
-      ),
-    }),
+              if (entry.entry) {
+                const plannerManagedSection = plannerManagedSections.get(file.name)?.trim();
+                if (plannerManagedSection) {
+                  return [file.name, plannerManagedSection] as const;
+                }
+              }
+              return null;
+            })
+            .filter((value): value is readonly [string, string] => Boolean(value)),
+        ),
+      });
+      const bootstrapFileNames = new Set(
+        entry.plan.workspace.bootstrapFiles.map((file) => file.name),
+      );
+      const extraManagedDocs =
+        entry.entry && params.buildSpec
+          ? params.buildSpec.workspaceArtifacts
+              .filter(
+                (artifact) =>
+                  artifact.managedSection?.trim() && !bootstrapFileNames.has(artifact.fileName),
+              )
+              .map((artifact) => ({
+                name: artifact.fileName,
+                content:
+                  docEditMap.get(`${entry.nodeId}:${artifact.fileName}`)?.trim() ??
+                  artifact.managedSection?.trim() ??
+                  "",
+              }))
+              .filter((artifact) => artifact.content.length > 0)
+          : [];
+      return [...previewFiles, ...extraManagedDocs];
+    })(),
   }));
 }
 
@@ -1743,6 +1765,30 @@ function buildRuntimeGraphManagedSectionOverrides(params: {
     ...plannerManagedSections,
     ...userEdits,
   };
+}
+
+function buildRuntimeGraphExtraManagedWorkspaceDocs(params: {
+  draft: AgentBlueprintBuilderDraft;
+  nodeId: string;
+  bootstrapFileNames: string[];
+  workspaceDocEdits?: AgentBlueprintBuilderManagedDocEdit[];
+}): AgentBlueprintManagedWorkspaceDocPreview[] {
+  if (params.draft.runtimeGraph.entryNodeId !== params.nodeId) {
+    return [];
+  }
+  const bootstrapFiles = new Set(params.bootstrapFileNames);
+  return (params.draft.buildSpec.workspaceArtifacts ?? [])
+    .filter((artifact) => artifact.managedSection?.trim() && !bootstrapFiles.has(artifact.fileName))
+    .map((artifact) => {
+      const edited = params.workspaceDocEdits
+        ?.find((entry) => entry.nodeId === params.nodeId && entry.fileName === artifact.fileName)
+        ?.content.trim();
+      return {
+        name: artifact.fileName,
+        content: edited || artifact.managedSection?.trim() || "",
+      } satisfies AgentBlueprintManagedWorkspaceDocPreview;
+    })
+    .filter((artifact) => artifact.content.length > 0);
 }
 
 function withDraftPlanning(
@@ -2100,6 +2146,12 @@ export async function applyAgentBlueprintBuilderPlan(params: {
         nodeId: node.id,
         workspaceDocEdits: params.workspaceDocEdits,
       }),
+      extraManagedWorkspaceDocs: buildRuntimeGraphExtraManagedWorkspaceDocs({
+        draft,
+        nodeId: node.id,
+        bootstrapFileNames: node.bundle.workspace.bootstrapFiles ?? [],
+        workspaceDocEdits: params.workspaceDocEdits,
+      }),
       ...(params.cron ? { cron: params.cron } : {}),
     });
     graphResults.push({
@@ -2117,6 +2169,14 @@ export async function applyAgentBlueprintBuilderPlan(params: {
       workspaceManagedSections: buildRuntimeGraphManagedSectionOverrides({
         draft,
         nodeId: draft.runtimeGraph.entryNodeId,
+        workspaceDocEdits: params.workspaceDocEdits,
+      }),
+      extraManagedWorkspaceDocs: buildRuntimeGraphExtraManagedWorkspaceDocs({
+        draft,
+        nodeId: draft.runtimeGraph.entryNodeId,
+        bootstrapFileNames:
+          draft.runtimeGraph.nodes.find((node) => node.id === draft.runtimeGraph.entryNodeId)
+            ?.bundle.workspace.bootstrapFiles ?? [],
         workspaceDocEdits: params.workspaceDocEdits,
       }),
       ...(params.cron ? { cron: params.cron } : {}),
