@@ -146,6 +146,7 @@ const BlueprintScheduleSchema = Type.Object(
   {
     name: Type.String(),
     schedule: Type.String(),
+    timezone: Type.Optional(Type.String()),
     purpose: Type.String(),
   },
   { additionalProperties: false },

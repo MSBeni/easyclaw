@@ -392,6 +392,48 @@ export function buildModelAliasIndex(params: {
   return { byAlias, byKey };
 }
 
+function resolveUniqueProviderModelRef(params: {
+  cfg: OpenClawConfig;
+  modelId: string;
+}): ModelRef | null {
+  const providers = params.cfg.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return null;
+  }
+  const matches = new Set<string>();
+  for (const [providerName, providerRaw] of Object.entries(providers)) {
+    if (!providerRaw || typeof providerRaw !== "object") {
+      continue;
+    }
+    const models = (providerRaw as { models?: unknown }).models;
+    if (!Array.isArray(models)) {
+      continue;
+    }
+    for (const modelRaw of models) {
+      if (!modelRaw || typeof modelRaw !== "object") {
+        continue;
+      }
+      const discoveredId =
+        typeof (modelRaw as { id?: unknown }).id === "string"
+          ? ((modelRaw as { id?: string }).id ?? "").trim()
+          : "";
+      if (!discoveredId || discoveredId !== params.modelId) {
+        continue;
+      }
+      matches.add(`${providerName}/${discoveredId}`);
+    }
+  }
+  if (matches.size !== 1) {
+    return null;
+  }
+  const resolved = Array.from(matches)[0];
+  if (!resolved) {
+    return null;
+  }
+  const parsed = parseModelRef(resolved, DEFAULT_PROVIDER);
+  return parsed ?? null;
+}
+
 export function resolveModelRefFromString(params: {
   raw: string;
   defaultProvider: string;
@@ -432,6 +474,13 @@ export function resolveConfiguredModelRef(params: {
       const aliasMatch = aliasIndex.byAlias.get(aliasKey);
       if (aliasMatch) {
         return aliasMatch.ref;
+      }
+      const uniqueProviderMatch = resolveUniqueProviderModelRef({
+        cfg: params.cfg,
+        modelId: trimmed,
+      });
+      if (uniqueProviderMatch) {
+        return uniqueProviderMatch;
       }
 
       // Default to anthropic if no provider is specified, but warn as this is deprecated.

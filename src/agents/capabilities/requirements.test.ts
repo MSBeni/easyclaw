@@ -119,6 +119,72 @@ describe("capability requirements", () => {
     expect(requirements.plannerStatus).toBe("ready");
   });
 
+  it("treats plain read-my-email phrasing as an email source request", () => {
+    const requirements = buildRequirementSet({
+      brief: "Read my email and give me a daily brief each day at 9am and send it to Telegram.",
+      cfg: {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "user@example.com",
+            topic: "projects/test/topics/watch",
+            pushToken: "push-token",
+          },
+        },
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+          },
+        },
+      },
+    });
+
+    expect(requirements.intentTags).toEqual(
+      expect.arrayContaining(["email", "scheduled", "summary"]),
+    );
+    expect(requirements.inputs.map((entry) => entry.id)).toContain("email-source");
+    expect(requirements.requestedContractIds).toEqual(
+      expect.arrayContaining([
+        "ingest.email",
+        "message.send",
+        "schedule.trigger",
+        "transform.summarize",
+      ]),
+    );
+    expect(requirements.setupGaps.map((gap) => gap.code)).not.toContain("gmail-hook");
+    expect(requirements.workflow.primaryGoal).toBe("briefing");
+    expect(requirements.workflow.executionMode).toBe("scheduled");
+    expect(requirements.plannerStatus).toBe("ready");
+  });
+
+  it("keeps Gmail newsletters on the email-source path instead of generic feed tooling", () => {
+    const requirements = buildRequirementSet({
+      brief:
+        "Read my Gmail AI newsletters, give me business ideas every day at 9am PST, and send it to WhatsApp.",
+      cfg: {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "user@example.com",
+            topic: "projects/test/topics/watch",
+            pushToken: "push-token",
+          },
+        },
+        channels: {
+          whatsapp: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(requirements.inputs.map((entry) => entry.id)).toContain("email-source");
+    expect(requirements.inputs.map((entry) => entry.id)).not.toContain("feed-source");
+    expect(requirements.requestedContractIds).toContain("ingest.email");
+    expect(requirements.requestedContractIds).not.toContain("ingest.feed");
+    expect(requirements.recommendedConnectorIds).not.toContain("tools:web");
+  });
+
   it("recognizes env-backed Telegram credentials as configured", () => {
     const requirements = withEnv({ TELEGRAM_BOT_TOKEN: "123:env-token" }, () =>
       buildRequirementSet({

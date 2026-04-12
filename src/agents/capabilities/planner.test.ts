@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
-import { buildRequirementPlannerResult, inspectConnectorSetupState } from "./planner.js";
+import {
+  buildRequirementPlannerResult,
+  inspectConnectorSetupState,
+  rebuildRequirementPlannerResult,
+} from "./planner.js";
 import { buildRequirementSet } from "./requirements.js";
 
 describe("capability planner", () => {
@@ -226,6 +230,52 @@ describe("capability planner", () => {
     );
   });
 
+  it("downgrades a ready plan when live verification is blocked", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-4o",
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+        },
+      },
+    };
+    const requirements = buildRequirementSet({
+      brief: "Create a daily Telegram briefing every morning at 9am.",
+      cfg,
+    });
+    const plan = buildRequirementPlannerResult({
+      requirements,
+      cfg,
+    });
+    const verifications = plan.verifications.map((verification) =>
+      verification.connectorId === "channel:telegram" && verification.probeKind === "status"
+        ? {
+            ...verification,
+            status: "blocked" as const,
+            source: "live" as const,
+            detail: "Telegram is temporarily unavailable.",
+          }
+        : verification,
+    );
+
+    const rebuilt = rebuildRequirementPlannerResult({
+      status: plan.status,
+      selections: plan.selections,
+      alternatives: plan.alternatives,
+      variants: plan.variants,
+      integrations: plan.integrations,
+      verifications,
+      topology: plan.topology,
+    });
+
+    expect(plan.status).toBe("ready");
+    expect(rebuilt.status).toBe("needs_setup");
+  });
+
   it("inspects connector setup state for a specific connector", () => {
     const inspected = inspectConnectorSetupState({
       connectorId: "channel:slack",
@@ -263,6 +313,46 @@ describe("capability planner", () => {
       },
       workspaceDir: process.cwd(),
     });
+
+    expect(inspected?.integration.status).toBe("configured");
+    expect(inspected?.setupTask.status).toBe("completed");
+  });
+
+  it("marks web tools setup as pending when web search credentials are missing", () => {
+    const inspected = withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        XAI_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        PERPLEXITY_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+      },
+      () =>
+        inspectConnectorSetupState({
+          connectorId: "tools:web",
+          cfg: {},
+          workspaceDir: process.cwd(),
+        }),
+    );
+
+    expect(inspected?.integration.status).toBe("discovered");
+    expect(inspected?.setupTask.status).toBe("pending");
+    expect(inspected?.integration.issues[0]).toContain("web search provider is not configured");
+    expect(inspected?.setupTask.refs).toEqual(
+      expect.arrayContaining(["tools.web.search.enabled", "tools.web.search.provider"]),
+    );
+  });
+
+  it("marks web tools setup as configured when provider credentials are available", () => {
+    const inspected = withEnv({ BRAVE_API_KEY: "brave-test-key" }, () =>
+      inspectConnectorSetupState({
+        connectorId: "tools:web",
+        cfg: {},
+        workspaceDir: process.cwd(),
+      }),
+    );
 
     expect(inspected?.integration.status).toBe("configured");
     expect(inspected?.setupTask.status).toBe("completed");

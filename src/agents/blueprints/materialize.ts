@@ -82,6 +82,11 @@ export type AgentBlueprintWorkspaceFileResult = {
   status: "created" | "updated" | "unchanged";
 };
 
+export type AgentBlueprintManagedWorkspaceDocPreview = {
+  name: string;
+  content: string;
+};
+
 export type AgentBlueprintApplyResult = {
   status: "applied";
   source: AgentBlueprintPlan["source"];
@@ -278,6 +283,21 @@ function buildUserSection(bundle: AgentBlueprintBundle): string {
   ].join("\n");
 }
 
+function buildMemorySection(plan: AgentBlueprintPlan): string {
+  const lines = [
+    "## Easyclaw Blueprint Memory Strategy",
+    "",
+    `- Memory mode: ${plan.workspace.memoryMode ?? "default"}`,
+  ];
+  if (plan.routing.sources.length > 0) {
+    lines.push(`- Source context: ${plan.routing.sources.map(summarizeSourceEntry).join(", ")}`);
+  }
+  if (plan.validation.successCriteria.length > 0) {
+    lines.push(`- Success criteria to remember: ${plan.validation.successCriteria.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
 function defaultWorkspaceFileContent(name: string): string {
   if (name === "MEMORY.md") {
     return "# MEMORY.md\n\nCapture durable, curated memory here.\n";
@@ -324,7 +344,29 @@ function buildWorkspaceManagedSection(params: {
   if (params.fileName === "USER.md") {
     return buildUserSection(params.bundle);
   }
+  if (params.fileName === "MEMORY.md") {
+    return buildMemorySection(params.plan);
+  }
   return null;
+}
+
+export function previewAgentBlueprintManagedWorkspaceDocs(params: {
+  bundle: AgentBlueprintBundle;
+  plan: AgentBlueprintPlan;
+  managedSectionOverrides?: Record<string, string>;
+}): AgentBlueprintManagedWorkspaceDocPreview[] {
+  return params.plan.workspace.bootstrapFiles
+    .map((file) => {
+      const content =
+        params.managedSectionOverrides?.[file.name] ??
+        buildWorkspaceManagedSection({
+          fileName: file.name,
+          bundle: params.bundle,
+          plan: params.plan,
+        });
+      return content ? { name: file.name, content } : null;
+    })
+    .filter((entry): entry is AgentBlueprintManagedWorkspaceDocPreview => Boolean(entry));
 }
 
 function pickAgentEntry(cfg: OpenClawConfig, agentId: string) {
@@ -572,7 +614,11 @@ function buildCronJobCreate(params: {
     description: params.schedule.purpose,
     enabled: true,
     agentId: params.plan.agent.agentId,
-    schedule: { kind: "cron", expr: params.schedule.schedule },
+    schedule: {
+      kind: "cron",
+      expr: params.schedule.schedule,
+      ...(params.schedule.timezone?.trim() ? { tz: params.schedule.timezone.trim() } : {}),
+    },
     sessionTarget,
     wakeMode: "next-heartbeat",
     payload: {
@@ -612,6 +658,7 @@ function toCronPatch(input: CronJobCreate): CronJobPatch {
 async function materializeWorkspaceFiles(params: {
   bundle: AgentBlueprintBundle;
   plan: AgentBlueprintPlan;
+  managedSectionOverrides?: Record<string, string>;
 }): Promise<AgentBlueprintWorkspaceFileResult[]> {
   await ensureAgentWorkspace({
     dir: params.plan.agent.workspaceDir,
@@ -626,11 +673,13 @@ async function materializeWorkspaceFiles(params: {
   const results: AgentBlueprintWorkspaceFileResult[] = [];
   for (const file of params.plan.workspace.bootstrapFiles) {
     const filePath = path.join(params.plan.agent.workspaceDir, file.name);
-    const managed = buildWorkspaceManagedSection({
-      fileName: file.name,
-      bundle: params.bundle,
-      plan: params.plan,
-    });
+    const managed =
+      params.managedSectionOverrides?.[file.name] ??
+      buildWorkspaceManagedSection({
+        fileName: file.name,
+        bundle: params.bundle,
+        plan: params.plan,
+      });
     let existing: string | null = null;
     try {
       existing = await fs.readFile(filePath, "utf-8");
@@ -656,6 +705,8 @@ async function materializeWorkspaceFiles(params: {
 export async function applyAgentBlueprint(params: {
   loaded: LoadedAgentBlueprint;
   variables?: AgentBlueprintVariableMap;
+  cron?: CronService;
+  workspaceManagedSections?: Record<string, string>;
 }): Promise<AgentBlueprintApplyResult> {
   const resolved = resolveAgentBlueprintVariables({
     bundle: params.loaded.bundle,
@@ -750,6 +801,9 @@ export async function applyAgentBlueprint(params: {
   const workspaceFiles = await materializeWorkspaceFiles({
     bundle: resolved.bundle,
     plan,
+    ...(params.workspaceManagedSections
+      ? { managedSectionOverrides: params.workspaceManagedSections }
+      : {}),
   });
   // Ensure per-agent auth store is initialized and inherits main credentials when available.
   ensureAuthProfileStore(plan.agent.agentDir, { allowKeychainPrompt: false });
@@ -761,7 +815,7 @@ export async function applyAgentBlueprint(params: {
 
   await writeConfigFile(nextConfig, writeOptions);
 
-  const cron = createCronServiceForApply(nextConfig);
+  const cron = params.cron ?? createCronServiceForApply(nextConfig);
   const existingJobs = await cron.list({ includeDisabled: true });
   const automationJobs: AgentBlueprintApplyResult["automation"]["jobs"] = [];
   const resolvedCronModelRef = resolveDefaultModelForAgent({

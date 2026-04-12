@@ -358,6 +358,146 @@ function hasCoreModelSelectionConfigured(cfg: OpenClawConfig | undefined): boole
   return false;
 }
 
+type WebSearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+
+const WEB_SEARCH_PROVIDER_ORDER: WebSearchProvider[] = [
+  "brave",
+  "gemini",
+  "grok",
+  "kimi",
+  "perplexity",
+];
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizeWebSearchProvider(value: unknown): WebSearchProvider | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "brave" ||
+    normalized === "gemini" ||
+    normalized === "grok" ||
+    normalized === "kimi" ||
+    normalized === "perplexity"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function hasConfiguredSecret(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return false;
+  }
+  const source = typeof record.source === "string" ? record.source.trim() : "";
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  return source.length > 0 && id.length > 0;
+}
+
+function envVarsForWebSearchProvider(provider: WebSearchProvider): string[] {
+  switch (provider) {
+    case "brave":
+      return ["BRAVE_API_KEY"];
+    case "gemini":
+      return ["GEMINI_API_KEY"];
+    case "grok":
+      return ["XAI_API_KEY"];
+    case "kimi":
+      return ["KIMI_API_KEY", "MOONSHOT_API_KEY"];
+    case "perplexity":
+      return ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"];
+  }
+}
+
+function hasProviderEnvCredential(provider: WebSearchProvider): boolean {
+  return envVarsForWebSearchProvider(provider).some((name) => {
+    const value = process.env[name];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+function hasConfiguredWebSearchProviderCredential(
+  cfg: OpenClawConfig | undefined,
+  provider: WebSearchProvider,
+): boolean {
+  const search = asRecord(asRecord(asRecord(cfg)?.tools)?.web)?.search;
+  const searchRecord = asRecord(search);
+  if (!searchRecord) {
+    return hasProviderEnvCredential(provider);
+  }
+  const configuredSecret =
+    provider === "brave"
+      ? hasConfiguredSecret(searchRecord.apiKey)
+      : hasConfiguredSecret(asRecord(searchRecord[provider])?.apiKey);
+  return configuredSecret || hasProviderEnvCredential(provider);
+}
+
+function resolveConfiguredWebSearchProvider(cfg: OpenClawConfig | undefined): {
+  provider: WebSearchProvider | null;
+  providerSource: "configured" | "auto-detect" | "none";
+} {
+  const search = asRecord(asRecord(asRecord(cfg)?.tools)?.web)?.search;
+  const explicitProvider = normalizeWebSearchProvider(asRecord(search)?.provider);
+  if (explicitProvider) {
+    return { provider: explicitProvider, providerSource: "configured" };
+  }
+  for (const provider of WEB_SEARCH_PROVIDER_ORDER) {
+    if (hasConfiguredWebSearchProviderCredential(cfg, provider)) {
+      return { provider, providerSource: "auto-detect" };
+    }
+  }
+  return { provider: null, providerSource: "none" };
+}
+
+function describeWebToolingReadiness(cfg: OpenClawConfig | undefined): {
+  status: IntegrationInstance["status"];
+  issues: string[];
+} {
+  const search = asRecord(asRecord(asRecord(cfg)?.tools)?.web)?.search;
+  const searchEnabled = asRecord(search)?.enabled !== false;
+  if (!searchEnabled) {
+    return {
+      status: "degraded",
+      issues: ["web search is disabled (set tools.web.search.enabled=true)"],
+    };
+  }
+
+  const resolvedProvider = resolveConfiguredWebSearchProvider(cfg);
+  if (!resolvedProvider.provider) {
+    return {
+      status: "discovered",
+      issues: [
+        "web search provider is not configured (set tools.web.search.provider and API key, or export a supported env key)",
+      ],
+    };
+  }
+
+  if (!hasConfiguredWebSearchProviderCredential(cfg, resolvedProvider.provider)) {
+    return {
+      status: "discovered",
+      issues: [
+        `web search provider "${resolvedProvider.provider}" is missing credentials (add tools.web.search.${resolvedProvider.provider === "brave" ? "apiKey" : `${resolvedProvider.provider}.apiKey`} or set the matching env var)`,
+      ],
+    };
+  }
+
+  return {
+    status: "configured",
+    issues: [],
+  };
+}
+
 function statusRank(status: IntegrationInstance["status"]): number {
   switch (status) {
     case "verified":
@@ -388,7 +528,9 @@ function derivePlannerStatus(params: {
     return params.baseStatus;
   }
   if (
-    params.verifications.some((result) => result.status === "failed") ||
+    params.verifications.some(
+      (result) => result.status === "failed" || result.status === "blocked",
+    ) ||
     params.integrations.some(
       (integration) => integration.status === "degraded" || integration.status === "failed",
     )
@@ -415,6 +557,8 @@ function connectorConfigRefs(connector: ConnectorDefinition): string[] {
       return ["cron.enabled"];
     case "tools:ui":
       return ["browser.enabled"];
+    case "tools:web":
+      return ["tools.web.search.enabled", "tools.web.search.provider"];
     default:
       return [];
   }
@@ -431,6 +575,14 @@ function connectorAuthRefs(connector: ConnectorDefinition): string[] {
       return ["hooks.token", "hooks.gmail.pushToken"];
     case "platform:webhook-runtime":
       return ["hooks.token"];
+    case "tools:web":
+      return [
+        "tools.web.search.apiKey",
+        "tools.web.search.gemini.apiKey",
+        "tools.web.search.grok.apiKey",
+        "tools.web.search.kimi.apiKey",
+        "tools.web.search.perplexity.apiKey",
+      ];
     default:
       return [];
   }
@@ -452,6 +604,11 @@ function describeIntegrationInstance(
     if (connector.id === "tools:ui" && cfg?.browser?.enabled === false) {
       status = "degraded";
       issues.push("browser control is disabled");
+    }
+    if (connector.id === "tools:web") {
+      const readiness = describeWebToolingReadiness(cfg);
+      status = readiness.status;
+      issues.push(...readiness.issues);
     }
   } else if (connector.source.kind === "builtin_channel") {
     status = isChannelConfigured(cfg, connector.source.id) ? "authenticated" : "discovered";
@@ -561,17 +718,17 @@ function describeConnectorAction(
   }
 
   if (connector.setup.requiresAuth) {
+    const authReady =
+      integration.status === "authenticated" ||
+      integration.status === "verified" ||
+      integration.status === "configured";
     return {
       kind: "connect",
-      title:
-        integration.status === "authenticated" || integration.status === "verified"
-          ? `${connector.label} connected`
-          : `Connect ${connector.label}`,
-      detail:
-        integration.status === "authenticated" || integration.status === "verified"
-          ? `${connector.label} is connected and available to this workflow.`
-          : (integration.issues[0] ??
-            `Connect and authenticate ${connector.label} for this workflow.`),
+      title: authReady ? `${connector.label} connected` : `Connect ${connector.label}`,
+      detail: authReady
+        ? `${connector.label} is connected and available to this workflow.`
+        : (integration.issues[0] ??
+          `Connect and authenticate ${connector.label} for this workflow.`),
     };
   }
 

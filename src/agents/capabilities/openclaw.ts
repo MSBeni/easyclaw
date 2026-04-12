@@ -564,6 +564,7 @@ function listToolConnectorDefinitions(): ConnectorDefinition[] {
         : section.id === "ui"
           ? { supported: true, probes: [BROWSER_SESSION_PROBE] }
           : { supported: true, probes: [STATUS_PROBE] };
+    const requiresWebSearchSetup = section.id === "web";
     connectors.push({
       id: `tools:${section.id}`,
       label: `OpenClaw ${section.label} Tools`,
@@ -581,8 +582,8 @@ function listToolConnectorDefinitions(): ConnectorDefinition[] {
       },
       setup: {
         onboarding: false,
-        requiresConfig: false,
-        requiresAuth: false,
+        requiresConfig: requiresWebSearchSetup,
+        requiresAuth: requiresWebSearchSetup,
       },
       verification,
       metadata: {

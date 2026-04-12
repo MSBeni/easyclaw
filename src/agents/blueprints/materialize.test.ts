@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, readConfigFileSnapshot } from "../../config/config.js";
+import type { CronService } from "../../cron/service.js";
 import { dailyBriefingBlueprint, supportResponderBlueprint } from "./examples.js";
 import { applyAgentBlueprint } from "./materialize.js";
 import type { AgentBlueprintBundle } from "./schema.js";
@@ -30,6 +31,13 @@ describe("agent blueprint materializer", () => {
         {
           cron: {
             store: cronStorePath,
+          },
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai/gpt-4o",
+              },
+            },
           },
         },
         null,
@@ -128,6 +136,104 @@ describe("agent blueprint materializer", () => {
     };
     expect(cronStore.jobs).toHaveLength(1);
     expect(cronStore.jobs[0]?.delivery?.to).toBe("@second");
+  });
+
+  it("uses an injected cron service when provided", async () => {
+    const listMock = vi.fn(async () => []);
+    const addMock = vi.fn(async (input: { name: string }) => ({ id: "job-1", name: input.name }));
+    const cron = {
+      list: listMock,
+      add: addMock,
+      update: vi.fn(),
+      remove: vi.fn(),
+    } as unknown as CronService;
+
+    await applyAgentBlueprint({
+      loaded: {
+        kind: "template",
+        source: "daily-briefing",
+        format: null,
+        bundle: dailyBriefingBlueprint,
+      },
+      variables: {
+        owner_target: "@owner",
+      },
+      cron,
+    });
+
+    expect(listMock).toHaveBeenCalled();
+    expect(addMock).toHaveBeenCalled();
+  });
+
+  it("writes cron timezone and managed memory docs when present in the plan", async () => {
+    const timezoneBundle = structuredClone(dailyBriefingBlueprint) as AgentBlueprintBundle;
+    timezoneBundle.automation = {
+      schedules: [
+        {
+          name: "weekday-morning-brief",
+          schedule: "0 9 * * 1-5",
+          timezone: "America/Los_Angeles",
+          purpose: "Send the morning digest.",
+        },
+      ],
+    };
+    timezoneBundle.workspace = {
+      ...timezoneBundle.workspace,
+      bootstrapFiles: [
+        ...(timezoneBundle.workspace.bootstrapFiles ?? []),
+        "IDENTITY.md",
+        "USER.md",
+        "MEMORY.md",
+      ],
+    };
+
+    const result = await applyAgentBlueprint({
+      loaded: {
+        kind: "template",
+        source: "daily-briefing",
+        format: null,
+        bundle: timezoneBundle,
+      },
+      variables: {
+        owner_target: "@owner",
+      },
+    });
+
+    const memoryFile = await fs.readFile(
+      path.join(result.agent.workspaceDir, "MEMORY.md"),
+      "utf-8",
+    );
+    expect(memoryFile).toContain("## Easyclaw Blueprint Memory Strategy");
+
+    const cronStore = JSON.parse(await fs.readFile(cronStorePath, "utf-8")) as {
+      jobs: Array<{ schedule?: { tz?: string } }>;
+    };
+    expect(cronStore.jobs[0]?.schedule?.tz).toBe("America/Los_Angeles");
+  });
+
+  it("writes explicit managed workspace section overrides when provided", async () => {
+    const result = await applyAgentBlueprint({
+      loaded: {
+        kind: "template",
+        source: "daily-briefing",
+        format: null,
+        bundle: dailyBriefingBlueprint,
+      },
+      variables: {
+        owner_target: "@owner",
+      },
+      workspaceManagedSections: {
+        "AGENTS.md":
+          "## Custom Planner Instructions\n\n- Use the reviewed managed section override.",
+      },
+    });
+
+    const agentsFile = await fs.readFile(
+      path.join(result.agent.workspaceDir, "AGENTS.md"),
+      "utf-8",
+    );
+    expect(agentsFile).toContain("## Custom Planner Instructions");
+    expect(agentsFile).toContain("Use the reviewed managed section override.");
   });
 
   it("removes stale managed bindings when the blueprint changes", async () => {

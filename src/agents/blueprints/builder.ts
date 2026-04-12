@@ -4,10 +4,13 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import type { CronService } from "../../cron/service.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import {
   applyRequirementGaps,
   applyRequirementQuestions,
+  buildOpenClawCapabilityRegistry,
   buildRequirementPlannerResult,
   hydrateRequirementPlannerIntegrationState,
   hydrateRequirementPlannerVerificationState,
@@ -27,14 +30,30 @@ import type { PlannerStatus } from "../capabilities/schema.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
 import { ensureAuthProfileStore, resolveApiKeyForProvider } from "../model-auth.js";
 import { parseModelRef } from "../model-selection.js";
+import type { BuildSpec } from "../planning/build-spec.js";
+import { runBuilderPlannerAgent } from "../planning/planner-agent.js";
+import { hasBlockingSetupActions, synchronizeBuildSpec } from "../planning/setup-actions.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_USER_FILENAME,
+} from "../workspace.js";
 import { compileAgentBlueprintPlan, type AgentBlueprintPlan } from "./compiler.js";
 import { researchAgentBlueprint } from "./examples.js";
 import type { LoadedAgentBlueprint } from "./files.js";
-import { applyAgentBlueprint, type AgentBlueprintApplyResult } from "./materialize.js";
-import { getAgentBlueprintTemplate } from "./registry.js";
+import {
+  applyAgentBlueprint,
+  previewAgentBlueprintManagedWorkspaceDocs,
+  type AgentBlueprintApplyResult,
+  type AgentBlueprintManagedWorkspaceDocPreview,
+} from "./materialize.js";
+import { getAgentBlueprintTemplate, listAgentBlueprintCatalog } from "./registry.js";
 import type { AgentBlueprintBundle } from "./schema.js";
 
-const DIRECT_DELIVERY_CHANNELS = new Set(["telegram", "discord", "signal", "whatsapp"]);
 const WEEKDAY_CRON = "1-5";
 
 const DAY_SPECS: Array<{ pattern: RegExp; day: string; label: string }> = [
@@ -55,6 +74,14 @@ export type AgentBlueprintBuilderQuestion = {
   required: boolean;
 };
 
+export type AgentBlueprintBuilderManagedDocEdit = {
+  nodeId: string;
+  fileName: string;
+  content: string;
+};
+
+type AgentBlueprintBuilderGraphMode = "single-agent" | "multi-agent" | "swarm";
+
 export type AgentBlueprintBuilderDraftSummary = {
   brief: string;
   templateId: string;
@@ -65,6 +92,7 @@ export type AgentBlueprintBuilderDraftSummary = {
   assumptions: string[];
   questions: AgentBlueprintBuilderQuestion[];
   ready: boolean;
+  buildSpec: BuildSpec;
   requirements: RequirementSet;
   planning: {
     selections: RequirementPlannerSelection[];
@@ -110,12 +138,12 @@ export type AgentBlueprintBuilderRuntimeGraphEdge = {
   id: string;
   fromNodeId: string;
   toNodeId: string;
-  kind: "delegates" | "reports";
+  kind: string;
   label: string;
 };
 
 export type AgentBlueprintBuilderRuntimeGraphSummary = {
-  mode: RequirementPlannerResult["topology"]["mode"];
+  mode: AgentBlueprintBuilderGraphMode;
   entryNodeId: string;
   nodes: AgentBlueprintBuilderRuntimeGraphNodeSummary[];
   edges: AgentBlueprintBuilderRuntimeGraphEdge[];
@@ -126,7 +154,7 @@ type AgentBlueprintBuilderRuntimeGraphNodeDraft = AgentBlueprintBuilderRuntimeGr
 };
 
 type AgentBlueprintBuilderRuntimeGraphDraft = {
-  mode: RequirementPlannerResult["topology"]["mode"];
+  mode: AgentBlueprintBuilderGraphMode;
   entryNodeId: string;
   nodes: AgentBlueprintBuilderRuntimeGraphNodeDraft[];
   edges: AgentBlueprintBuilderRuntimeGraphEdge[];
@@ -134,6 +162,12 @@ type AgentBlueprintBuilderRuntimeGraphDraft = {
 
 export type AgentBlueprintBuilderPlan = {
   draft: AgentBlueprintBuilderDraftSummary;
+  workspacePreviews: Array<{
+    nodeId: string;
+    roleId: string;
+    entry: boolean;
+    files: AgentBlueprintManagedWorkspaceDocPreview[];
+  }>;
   plan: AgentBlueprintPlan;
   graphPlans: Array<{
     nodeId: string;
@@ -157,6 +191,7 @@ export type AgentBlueprintBuilderApplyResult = {
 
 export type AgentBlueprintBuilderVerifyResult = {
   draft: AgentBlueprintBuilderDraftSummary;
+  workspacePreviews: AgentBlueprintBuilderPlan["workspacePreviews"];
   plan: AgentBlueprintPlan;
   graphPlans: AgentBlueprintBuilderPlan["graphPlans"];
   verification: RequirementPlannerVerificationRun;
@@ -171,8 +206,27 @@ type TemplateSelection = {
 type InferredSchedule = {
   cron: string;
   description: string;
+  timezone?: string;
+  timezoneLabel?: string;
   assumed: boolean;
 };
+
+const PACIFIC_TIMEZONE = "America/Los_Angeles";
+const MOUNTAIN_TIMEZONE = "America/Denver";
+const CENTRAL_TIMEZONE = "America/Chicago";
+const EASTERN_TIMEZONE = "America/New_York";
+const ALASKA_TIMEZONE = "America/Anchorage";
+const HAWAII_TIMEZONE = "Pacific/Honolulu";
+
+const MANAGED_WORKSPACE_BOOTSTRAP_FILES = [
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+] as const;
 
 type InferredDelivery = {
   channel?: string;
@@ -338,6 +392,29 @@ function parseTime(brief: string): { hour: number; minute: number; assumed: bool
   return null;
 }
 
+function parseTimezone(brief: string): { timezone: string; label: string } | null {
+  const normalized = brief.toUpperCase();
+  if (/\b(PST|PDT|PT)\b/.test(normalized)) {
+    return { timezone: PACIFIC_TIMEZONE, label: "Pacific Time" };
+  }
+  if (/\b(MST|MDT|MT)\b/.test(normalized)) {
+    return { timezone: MOUNTAIN_TIMEZONE, label: "Mountain Time" };
+  }
+  if (/\b(CST|CDT|CT)\b/.test(normalized)) {
+    return { timezone: CENTRAL_TIMEZONE, label: "Central Time" };
+  }
+  if (/\b(EST|EDT|ET)\b/.test(normalized)) {
+    return { timezone: EASTERN_TIMEZONE, label: "Eastern Time" };
+  }
+  if (/\b(AKST|AKDT|AKT)\b/.test(normalized)) {
+    return { timezone: ALASKA_TIMEZONE, label: "Alaska Time" };
+  }
+  if (/\b(HST|HDT|HT)\b/.test(normalized)) {
+    return { timezone: HAWAII_TIMEZONE, label: "Hawaii Time" };
+  }
+  return null;
+}
+
 function formatTime(hour: number, minute: number): string {
   const suffix = hour >= 12 ? "PM" : "AM";
   const hour12 = hour % 12 || 12;
@@ -361,6 +438,7 @@ function inferSchedule(brief: string): InferredSchedule | null {
   }
 
   const time = parseTime(brief) ?? { hour: 9, minute: 0, assumed: true };
+  const timezone = parseTimezone(brief);
   const explicitDays = DAY_SPECS.filter((entry) => entry.pattern.test(brief));
   const daySpec = /\bweekday(s)?\b/i.test(brief)
     ? WEEKDAY_CRON
@@ -380,7 +458,10 @@ function inferSchedule(brief: string): InferredSchedule | null {
 
   return {
     cron: `${time.minute} ${time.hour} * * ${daySpec}`,
-    description: `${dayLabel} at ${formatTime(time.hour, time.minute)}`,
+    description: `${dayLabel} at ${formatTime(time.hour, time.minute)}${
+      timezone ? ` ${timezone.label}` : ""
+    }`,
+    ...(timezone ? { timezone: timezone.timezone, timezoneLabel: timezone.label } : {}),
     assumed: time.assumed || (/\bweekly\b/i.test(brief) && explicitDays.length === 0),
   };
 }
@@ -409,39 +490,81 @@ function inferDelivery(
 
   const assumptions: string[] = [];
   const questions: AgentBlueprintBuilderQuestion[] = [];
+  const inferExplicitWhatsAppTarget = (): string | null => {
+    if (!/\bwhatsapp\b/i.test(brief)) {
+      return null;
+    }
+    const candidates = new Set<string>();
+    for (const match of brief.matchAll(/\+\d[\d()\s.-]{6,}\d/g)) {
+      const value = match[0]?.trim();
+      if (value) {
+        candidates.add(value);
+      }
+    }
+    for (const match of brief.matchAll(/\d+(?::\d+)?@s\.whatsapp\.net/gi)) {
+      const value = match[0]?.trim();
+      if (value) {
+        candidates.add(value);
+      }
+    }
+    for (const match of brief.matchAll(/\d+(?:-\d+)*@g\.us/gi)) {
+      const value = match[0]?.trim();
+      if (value) {
+        candidates.add(value);
+      }
+    }
+    for (const candidate of candidates) {
+      const normalized = normalizeWhatsAppTarget(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return null;
+  };
   const deliveryMatch = brief.match(
     /\b(?:send|deliver|post|publish|share)[^.!?\n]*?\b(?:to|into|in)\s+(?:my\s+)?(discord|matrix|msteams|signal|slack|telegram|whatsapp)\b(?:\s+(?:channel|dm|group|chat))?\s*([#@][\w./-]+)?/i,
   );
   if (deliveryMatch?.[1]) {
     const channel = deliveryMatch[1].toLowerCase();
     const to = deliveryMatch[2];
+    if (!to && channel === "whatsapp") {
+      const explicitWhatsAppTarget = inferExplicitWhatsAppTarget();
+      if (explicitWhatsAppTarget) {
+        assumptions.push("Used explicit WhatsApp destination from your brief.");
+        return { channel, to: explicitWhatsAppTarget, assumptions, questions };
+      }
+    }
     if (to) {
       return { channel, to, assumptions, questions };
     }
-    if (DIRECT_DELIVERY_CHANNELS.has(channel)) {
-      const configuredTarget = resolveConfiguredDefaultTarget(channel);
-      if (configuredTarget) {
-        assumptions.push(`Used configured ${channel} default target.`);
-        return { channel, to: configuredTarget, assumptions, questions };
-      }
-      questions.push({
-        id: "delivery-target",
-        prompt: `Which ${channel} destination should receive the digest?`,
-        required: true,
-      });
-      return { channel, to: null, assumptions, questions };
+    const configuredTarget = resolveConfiguredDefaultTarget(channel);
+    if (configuredTarget) {
+      assumptions.push(`Used configured ${channel} default target.`);
+      return { channel, to: configuredTarget, assumptions, questions };
     }
     questions.push({
       id: "delivery-target",
       prompt: `Which ${channel} destination should receive the digest?`,
       required: true,
     });
-    return { channel, assumptions, questions };
+    return { channel, to: null, assumptions, questions };
   }
 
   if (outputChannels.length > 0) {
     const channel = outputChannels[0] ?? "telegram";
     const explicitTarget = brief.match(/(?:^|\s)([#@][\w./-]+)/)?.[1];
+    if (!explicitTarget && channel === "whatsapp") {
+      const explicitWhatsAppTarget = inferExplicitWhatsAppTarget();
+      if (explicitWhatsAppTarget) {
+        assumptions.push("Used explicit WhatsApp destination from your brief.");
+        return {
+          channel,
+          to: explicitWhatsAppTarget,
+          assumptions,
+          questions,
+        };
+      }
+    }
     if (explicitTarget) {
       return {
         channel,
@@ -450,38 +573,25 @@ function inferDelivery(
         questions,
       };
     }
-    if (DIRECT_DELIVERY_CHANNELS.has(channel)) {
-      const configuredTarget = resolveConfiguredDefaultTarget(channel);
-      if (configuredTarget) {
-        assumptions.push(`Used configured ${channel} default target.`);
-        return {
-          channel,
-          to: configuredTarget,
-          assumptions,
-          questions,
-        };
-      }
-      if (!requiresExplicitDeliveryTarget) {
-        return { assumptions, questions };
-      }
-      questions.push({
-        id: "delivery-target",
-        prompt: `Which ${channel} destination should receive the result?`,
-        required: true,
-      });
+    const configuredTarget = resolveConfiguredDefaultTarget(channel);
+    if (configuredTarget) {
+      assumptions.push(`Used configured ${channel} default target.`);
       return {
         channel,
-        to: null,
+        to: configuredTarget,
         assumptions,
         questions,
       };
+    }
+    if (!requiresExplicitDeliveryTarget) {
+      return { assumptions, questions };
     }
     questions.push({
       id: "delivery-target",
       prompt: `Which ${channel} destination should receive the result?`,
       required: true,
     });
-    return { channel, assumptions, questions };
+    return { channel, to: null, assumptions, questions };
   }
 
   if (/\b(send|deliver|post).*\b(me|for me)\b/i.test(brief)) {
@@ -594,6 +704,11 @@ function withAgentIdentity(
   };
 }
 
+function normalizeBuilderAgentName(value: string | undefined): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized ? titleCase(normalized) : null;
+}
+
 function ensureBuilderOwnedAgent(bundle: AgentBlueprintBundle): {
   bundle: AgentBlueprintBundle;
   assumptions: string[];
@@ -607,6 +722,31 @@ function ensureBuilderOwnedAgent(bundle: AgentBlueprintBundle): {
   return {
     bundle: next,
     assumptions: ["Created a dedicated agent instead of overwriting the default main agent."],
+  };
+}
+
+function ensureManagedWorkspaceBootstrapFiles(bundle: AgentBlueprintBundle): {
+  bundle: AgentBlueprintBundle;
+  assumptions: string[];
+} {
+  const existing = bundle.workspace.bootstrapFiles ?? [];
+  const combined = [...existing];
+  for (const fileName of MANAGED_WORKSPACE_BOOTSTRAP_FILES) {
+    if (!combined.includes(fileName)) {
+      combined.push(fileName);
+    }
+  }
+  const added = combined.filter((fileName) => !existing.includes(fileName));
+  if (added.length === 0) {
+    return { bundle, assumptions: [] };
+  }
+  const next = structuredClone(bundle);
+  next.workspace.bootstrapFiles = combined;
+  return {
+    bundle: next,
+    assumptions: [
+      `Added managed workspace docs for review before activation: ${added.join(", ")}.`,
+    ],
   };
 }
 
@@ -736,6 +876,7 @@ function applyPlannerWorkflowShape(
         {
           name: "builder-schedule",
           schedule: schedule.cron,
+          ...(schedule.timezone ? { timezone: schedule.timezone } : {}),
           purpose: "Run the requested digest cadence.",
         },
       ],
@@ -852,7 +993,9 @@ function summarizeSchedule(bundle: AgentBlueprintBundle): string | null {
   if (!first) {
     return null;
   }
-  return `${first.name}: ${first.schedule}`;
+  return `${first.name}: ${first.schedule}${
+    first.timezone?.trim() ? ` (${first.timezone.trim()})` : ""
+  }`;
 }
 
 function summarizeIngressChannels(bundle: AgentBlueprintBundle): string[] {
@@ -1210,6 +1353,9 @@ function createRuntimeGraphRoleBundle(params: {
   next.runtime.subagents = {
     enabled: false,
   };
+  if (params.baseBundle.runtime.model?.trim()) {
+    next.runtime.model = params.baseBundle.runtime.model;
+  }
   next.ingress = {
     interactionMode: "direct",
     ...(params.baseBundle.ingress?.sources?.length
@@ -1235,7 +1381,7 @@ function createRuntimeGraphRoleBundle(params: {
   return next;
 }
 
-function buildRuntimeGraphDraft(params: {
+function buildDeterministicRuntimeGraphDraft(params: {
   bundle: AgentBlueprintBundle;
   templateId: string;
   planning: RequirementPlannerResult;
@@ -1306,28 +1452,197 @@ function buildRuntimeGraphDraft(params: {
 
   const edges = nodes
     .filter((node) => !node.entry)
-    .flatMap((node) => [
-      {
-        id: `${entryRoleId}->${node.id}:delegates`,
-        fromNodeId: entryRoleId,
-        toNodeId: node.id,
-        kind: "delegates" as const,
-        label: `Delegate ${node.label.toLowerCase()} work`,
-      },
-      {
-        id: `${node.id}->${entryRoleId}:reports`,
-        fromNodeId: node.id,
-        toNodeId: entryRoleId,
-        kind: "reports" as const,
-        label: `Report results back to ${entryRoleId}`,
-      },
-    ]);
+    .map((node) => ({
+      id: `${entryRoleId}->${node.id}:delegates`,
+      fromNodeId: entryRoleId,
+      toNodeId: node.id,
+      kind: "delegates" as const,
+      label: `Delegate ${node.label.toLowerCase()} work`,
+    }));
 
   return {
     mode: params.planning.topology.mode,
     entryNodeId: entryRoleId,
     nodes,
     edges,
+  };
+}
+
+function inferPlannerNodeTemplateId(params: {
+  node: BuildSpec["graph"]["nodes"][number];
+  fallbackTemplateId: string;
+}): string {
+  const explicitTemplateId = params.node.templateId?.trim();
+  if (explicitTemplateId && getAgentBlueprintTemplate(explicitTemplateId)) {
+    return explicitTemplateId;
+  }
+  if (params.node.entry) {
+    return params.fallbackTemplateId;
+  }
+  const text = [
+    params.node.roleId,
+    params.node.label,
+    params.node.goal ?? "",
+    ...params.node.responsibilities,
+    ...params.node.connectorIds,
+  ]
+    .join(" ")
+    .toLowerCase();
+  if (/\bsupport|responder|triage|reply|customer\b/.test(text)) {
+    return "support-responder";
+  }
+  if (/\bresearch|analy|summar|source|brief|opportunit|competitor\b/.test(text)) {
+    return "research-agent";
+  }
+  if (/\bdigest|newsletter|briefing|daily\b/.test(text)) {
+    return "daily-briefing";
+  }
+  return "personal-assistant";
+}
+
+function buildPlannerNodeWorkspaceNotes(params: {
+  node: BuildSpec["graph"]["nodes"][number];
+  graph: BuildSpec["graph"];
+  baseAgentName: string;
+}): string[] {
+  const incoming = params.graph.edges
+    .filter((edge) => edge.toNodeId === params.node.id)
+    .map((edge) => `${edge.fromNodeId} -> ${edge.kind}`);
+  const outgoing = params.graph.edges
+    .filter((edge) => edge.fromNodeId === params.node.id)
+    .map((edge) => `${edge.kind} -> ${edge.toNodeId}`);
+
+  return [
+    `Act as the ${params.node.label.toLowerCase()} for ${params.baseAgentName}.`,
+    ...(params.node.goal ? [`Primary goal: ${params.node.goal}.`] : []),
+    ...params.node.responsibilities,
+    ...(params.node.connectorIds.length > 0
+      ? [`Planner connector scope: ${params.node.connectorIds.join(", ")}.`]
+      : []),
+    ...(incoming.length > 0 ? [`Receives work from: ${incoming.join("; ")}.`] : []),
+    ...(outgoing.length > 0 ? [`Delegates or routes work to: ${outgoing.join("; ")}.`] : []),
+  ];
+}
+
+function createRuntimeGraphBundleFromBuildSpecNode(params: {
+  node: BuildSpec["graph"]["nodes"][number];
+  graph: BuildSpec["graph"];
+  baseBundle: AgentBlueprintBundle;
+  fallbackTemplateId: string;
+}): AgentBlueprintBundle {
+  const templateId = inferPlannerNodeTemplateId({
+    node: params.node,
+    fallbackTemplateId: params.fallbackTemplateId,
+  });
+  const hasOutgoingEdges = params.graph.edges.some((edge) => edge.fromNodeId === params.node.id);
+  const next = params.node.entry
+    ? structuredClone(params.baseBundle)
+    : structuredClone(getAgentBlueprintTemplate(templateId) ?? params.baseBundle);
+
+  next.agent.agentId = params.node.entry
+    ? normalizeAgentId(params.baseBundle.agent.agentId)
+    : normalizeAgentId(`${params.baseBundle.agent.agentId}-${params.node.id}`);
+  next.agent.name = params.node.entry
+    ? params.baseBundle.agent.name
+    : `${params.baseBundle.agent.name} ${params.node.label}`;
+  if (params.baseBundle.runtime.model?.trim()) {
+    next.runtime.model = params.baseBundle.runtime.model;
+  }
+  next.runtime.subagents =
+    params.graph.nodes.length > 1 && hasOutgoingEdges
+      ? {
+          enabled: true,
+          mode: "inherit",
+        }
+      : { enabled: false };
+
+  next.workspace.notes = [
+    ...(next.workspace.notes ?? []),
+    ...buildPlannerNodeWorkspaceNotes({
+      node: params.node,
+      graph: params.graph,
+      baseAgentName: params.baseBundle.agent.name,
+    }),
+  ];
+  next.validation = {
+    ...next.validation,
+    successCriteria: [
+      ...(next.validation?.successCriteria ?? []),
+      `Node ${params.node.label} satisfies its assigned planner role.`,
+    ],
+  };
+
+  if (!params.node.entry) {
+    next.ingress = {
+      interactionMode: "direct",
+      ...(params.baseBundle.ingress?.sources?.length
+        ? {
+            sources: structuredClone(params.baseBundle.ingress.sources),
+          }
+        : {}),
+    };
+    next.automation = undefined;
+    next.delivery = undefined;
+  }
+
+  return next;
+}
+
+function buildRuntimeGraphDraftFromBuildSpec(params: {
+  buildSpec: BuildSpec;
+  bundle: AgentBlueprintBundle;
+  templateId: string;
+}): AgentBlueprintBuilderRuntimeGraphDraft {
+  const entryNodeId =
+    params.buildSpec.graph.nodes.find((node) => node.entry)?.id ??
+    params.buildSpec.graph.entryNodeId;
+  const nodes = params.buildSpec.graph.nodes.map((node) => {
+    const bundle = createRuntimeGraphBundleFromBuildSpecNode({
+      node: {
+        ...node,
+        entry: node.id === entryNodeId,
+      },
+      graph: {
+        ...params.buildSpec.graph,
+        entryNodeId,
+      },
+      baseBundle: params.bundle,
+      fallbackTemplateId: params.templateId,
+    });
+    return {
+      id: node.id,
+      roleId: node.roleId,
+      label: node.label,
+      templateId: inferPlannerNodeTemplateId({
+        node: {
+          ...node,
+          entry: node.id === entryNodeId,
+        },
+        fallbackTemplateId: params.templateId,
+      }),
+      entry: node.id === entryNodeId,
+      agentId: normalizeAgentId(bundle.agent.agentId),
+      name: bundle.agent.name,
+      interactionMode: bundle.ingress?.interactionMode ?? "direct",
+      connectorIds: [...node.connectorIds],
+      responsibilities: [...node.responsibilities],
+      deliveryTarget: summarizeDeliveryTarget(bundle),
+      schedule: summarizeSchedule(bundle),
+      bundle,
+    } satisfies AgentBlueprintBuilderRuntimeGraphNodeDraft;
+  });
+
+  return {
+    mode: params.buildSpec.graph.mode,
+    entryNodeId,
+    nodes,
+    edges: params.buildSpec.graph.edges.map((edge) => ({
+      id: edge.id,
+      fromNodeId: edge.fromNodeId,
+      toNodeId: edge.toNodeId,
+      kind: edge.kind,
+      label: edge.label,
+    })),
   };
 }
 
@@ -1355,14 +1670,95 @@ async function compileRuntimeGraphPlans(params: {
   );
 }
 
+function buildRuntimeGraphWorkspacePreviews(params: {
+  graph: AgentBlueprintBuilderRuntimeGraphDraft;
+  graphPlans: AgentBlueprintBuilderPlan["graphPlans"];
+  buildSpec?: BuildSpec;
+  workspaceDocEdits?: AgentBlueprintBuilderManagedDocEdit[];
+}): AgentBlueprintBuilderPlan["workspacePreviews"] {
+  const docEditMap = new Map(
+    (params.workspaceDocEdits ?? []).map((entry) => [
+      `${entry.nodeId}:${entry.fileName}`,
+      entry.content,
+    ]),
+  );
+  const plannerManagedSections = new Map(
+    (params.buildSpec?.workspaceArtifacts ?? [])
+      .filter((artifact) => artifact.managedSection?.trim())
+      .map((artifact) => [artifact.fileName, artifact.managedSection?.trim() ?? ""]),
+  );
+
+  return params.graphPlans.map((entry) => ({
+    nodeId: entry.nodeId,
+    roleId: entry.roleId,
+    entry: entry.entry,
+    files: previewAgentBlueprintManagedWorkspaceDocs({
+      bundle:
+        params.graph.nodes.find((node) => node.id === entry.nodeId)?.bundle ??
+        (() => {
+          throw new Error(`Missing runtime graph bundle for node ${entry.nodeId}.`);
+        })(),
+      plan: entry.plan,
+      managedSectionOverrides: Object.fromEntries(
+        entry.plan.workspace.bootstrapFiles
+          .map((file) => {
+            const edited = docEditMap.get(`${entry.nodeId}:${file.name}`)?.trim();
+            if (edited) {
+              return [file.name, edited] as const;
+            }
+            if (entry.entry) {
+              const plannerManagedSection = plannerManagedSections.get(file.name)?.trim();
+              if (plannerManagedSection) {
+                return [file.name, plannerManagedSection] as const;
+              }
+            }
+            return null;
+          })
+          .filter((value): value is readonly [string, string] => Boolean(value)),
+      ),
+    }),
+  }));
+}
+
+function buildRuntimeGraphManagedSectionOverrides(params: {
+  draft: AgentBlueprintBuilderDraft;
+  nodeId: string;
+  workspaceDocEdits?: AgentBlueprintBuilderManagedDocEdit[];
+}): Record<string, string> {
+  const plannerManagedSections =
+    params.draft.runtimeGraph.entryNodeId === params.nodeId
+      ? Object.fromEntries(
+          (params.draft.buildSpec.workspaceArtifacts ?? [])
+            .filter((artifact) => artifact.managedSection?.trim())
+            .map((artifact) => [artifact.fileName, artifact.managedSection?.trim() ?? ""]),
+        )
+      : {};
+  const userEdits = Object.fromEntries(
+    (params.workspaceDocEdits ?? [])
+      .filter((entry) => entry.nodeId === params.nodeId && entry.content.trim())
+      .map((entry) => [entry.fileName, entry.content.trim()]),
+  );
+  return {
+    ...plannerManagedSections,
+    ...userEdits,
+  };
+}
+
 function withDraftPlanning(
   draft: AgentBlueprintBuilderDraft,
   planning: RequirementPlannerResult,
 ): AgentBlueprintBuilderDraft {
+  const buildSpec = synchronizeBuildSpec({
+    buildSpec: draft.buildSpec,
+    requirements: draft.requirements,
+    planning,
+    questions: draft.questions,
+  });
   return {
     ...draft,
     plannerStatus: planning.status,
     ready: planning.status === "ready",
+    buildSpec,
     planning: {
       selections: planning.selections,
       alternatives: planning.alternatives,
@@ -1374,6 +1770,24 @@ function withDraftPlanning(
       graph: summarizeRuntimeGraph(draft.runtimeGraph),
     },
   };
+}
+
+function describeBuilderPlannerBlockers(draft: AgentBlueprintBuilderDraft): string {
+  const blockers = [
+    ...draft.requirements.missingInputs.map((gap) => gap.message),
+    ...draft.requirements.setupGaps.map((gap) => gap.message),
+    ...draft.requirements.policyGaps.map((gap) => gap.message),
+    ...draft.requirements.unsupportedGaps.map((gap) => gap.message),
+    ...draft.planning.integrations.flatMap((integration) => integration.issues),
+    ...draft.planning.verifications
+      .filter(
+        (verification) => verification.status === "failed" || verification.status === "blocked",
+      )
+      .map((verification) => `${verification.connectorLabel}: ${verification.detail}`),
+  ]
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return blockers.join(" ");
 }
 
 async function hydratePersistedPlanningState(
@@ -1392,28 +1806,32 @@ async function hydratePersistedPlanningState(
   return withVerificationState;
 }
 
-function buildAgentBlueprintDraftInternal(params: {
+async function buildAgentBlueprintDraftInternal(params: {
   brief: string;
   templateId?: string;
   modelId?: string;
+  agentName?: string;
   cfg?: OpenClawConfig;
-}): {
+}): Promise<{
   draft: AgentBlueprintBuilderDraft;
   planning: RequirementPlannerResult;
-} {
+}> {
   const brief = params.brief.trim();
   if (!brief) {
     throw new Error("A builder brief is required.");
   }
 
+  const capabilityRegistry = buildOpenClawCapabilityRegistry();
   const extractedRequirements = buildRequirementSet({
     brief,
     cfg: params.cfg,
+    registry: capabilityRegistry,
   });
   const selection = selectTemplate(extractedRequirements, params.templateId);
   const initialPlanning = buildRequirementPlannerResult({
     requirements: extractedRequirements,
     cfg: params.cfg,
+    registry: capabilityRegistry,
   });
   const baseTemplate =
     getAgentBlueprintTemplate(selection.templateId) ??
@@ -1429,7 +1847,9 @@ function buildAgentBlueprintDraftInternal(params: {
   bundle = owned.bundle;
   assumptions.push(...owned.assumptions);
 
-  const renamed = withAgentIdentity(bundle, extractRequestedName(brief));
+  const requestedAgentName =
+    normalizeBuilderAgentName(params.agentName) ?? extractRequestedName(brief);
+  const renamed = withAgentIdentity(bundle, requestedAgentName);
   bundle = renamed.bundle;
   assumptions.push(...renamed.assumptions);
 
@@ -1443,6 +1863,10 @@ function buildAgentBlueprintDraftInternal(params: {
   bundle = customized.bundle;
   assumptions.push(...customized.assumptions);
   questions.push(...customized.questions);
+
+  const documented = ensureManagedWorkspaceBootstrapFiles(bundle);
+  bundle = documented.bundle;
+  assumptions.push(...documented.assumptions);
 
   const explicitModelId = params.modelId?.trim();
   if (explicitModelId) {
@@ -1462,12 +1886,40 @@ function buildAgentBlueprintDraftInternal(params: {
   const planning = buildRequirementPlannerResult({
     requirements,
     cfg: params.cfg,
+    registry: capabilityRegistry,
   });
-  const runtimeGraph = buildRuntimeGraphDraft({
+  const deterministicRuntimeGraph = buildDeterministicRuntimeGraphDraft({
     bundle,
     templateId: selection.templateId,
     planning,
     requirements,
+  });
+  const plannerAgent = await runBuilderPlannerAgent({
+    brief,
+    cfg: params.cfg,
+    bundle,
+    requirements,
+    planning,
+    templateId: selection.templateId,
+    templateDisplayName: bundle.manifest.displayName,
+    templateConfidence: selection.confidence,
+    templateReasons: selection.reasons,
+    assumptions,
+    questions: uniqueQuestions,
+    capabilityRegistry,
+    templateExemplars: listAgentBlueprintCatalog(),
+    runtimeGraph: summarizeRuntimeGraph(deterministicRuntimeGraph),
+  });
+  const buildSpec = synchronizeBuildSpec({
+    buildSpec: plannerAgent.buildSpec,
+    requirements,
+    planning,
+    questions: uniqueQuestions,
+  });
+  const runtimeGraph = buildRuntimeGraphDraftFromBuildSpec({
+    buildSpec,
+    bundle,
+    templateId: selection.templateId,
   });
 
   const draft: AgentBlueprintBuilderDraft = {
@@ -1480,6 +1932,7 @@ function buildAgentBlueprintDraftInternal(params: {
     assumptions,
     questions: uniqueQuestions,
     ready: planning.status === "ready",
+    buildSpec,
     requirements,
     planning: {
       selections: planning.selections,
@@ -1510,9 +1963,10 @@ export function buildAgentBlueprintDraft(params: {
   brief: string;
   templateId?: string;
   modelId?: string;
+  agentName?: string;
   cfg?: OpenClawConfig;
-}): AgentBlueprintBuilderDraft {
-  return buildAgentBlueprintDraftInternal(params).draft;
+}): Promise<AgentBlueprintBuilderDraft> {
+  return buildAgentBlueprintDraftInternal(params).then((result) => result.draft);
 }
 
 function stripBundleFromDraft(
@@ -1526,9 +1980,11 @@ export async function compileAgentBlueprintBuilderPlan(params: {
   brief: string;
   templateId?: string;
   modelId?: string;
+  agentName?: string;
+  workspaceDocEdits?: AgentBlueprintBuilderManagedDocEdit[];
   cfg?: OpenClawConfig;
 }): Promise<AgentBlueprintBuilderPlan> {
-  const built = buildAgentBlueprintDraftInternal({
+  const built = await buildAgentBlueprintDraftInternal({
     ...params,
     cfg: params.cfg,
   });
@@ -1544,6 +2000,12 @@ export async function compileAgentBlueprintBuilderPlan(params: {
     graphPlans.find((node) => node.nodeId === draft.runtimeGraph.entryNodeId);
   return {
     draft: stripBundleFromDraft(draft),
+    workspacePreviews: buildRuntimeGraphWorkspacePreviews({
+      graph: draft.runtimeGraph,
+      graphPlans,
+      buildSpec: draft.buildSpec,
+      workspaceDocEdits: params.workspaceDocEdits,
+    }),
     plan:
       entryGraphPlan?.plan ??
       (() => {
@@ -1557,24 +2019,27 @@ export async function applyAgentBlueprintBuilderPlan(params: {
   brief: string;
   templateId?: string;
   modelId?: string;
+  agentName?: string;
+  workspaceDocEdits?: AgentBlueprintBuilderManagedDocEdit[];
   cfg?: OpenClawConfig;
+  cron?: CronService;
 }): Promise<AgentBlueprintBuilderApplyResult> {
   const cfg = params.cfg ?? loadConfig();
-  const built = buildAgentBlueprintDraftInternal({
+  const built = await buildAgentBlueprintDraftInternal({
     ...params,
     cfg,
   });
-  const draft = withDraftPlanning(built.draft, await hydratePersistedPlanningState(built.planning));
+  const verification = await runRequirementPlannerLiveVerification({
+    planning: built.planning,
+    cfg,
+  });
+  const draft = withDraftPlanning(built.draft, verification.planning);
   if (draft.plannerStatus !== "ready") {
-    const blockers = [
-      ...draft.requirements.missingInputs,
-      ...draft.requirements.setupGaps,
-      ...draft.requirements.policyGaps,
-      ...draft.requirements.unsupportedGaps,
-    ]
-      .map((gap) => gap.message)
-      .join(" ");
+    const blockers = describeBuilderPlannerBlockers(draft);
     throw new Error(`Builder planner is ${draft.plannerStatus}. ${blockers}`.trim());
+  }
+  if (hasBlockingSetupActions(draft.buildSpec)) {
+    throw new Error("Builder setup is still incomplete. Finish the pending setup actions first.");
   }
   const authBlockers = await collectApplyAuthRunnableBlockers({
     draft,
@@ -1610,6 +2075,12 @@ export async function applyAgentBlueprintBuilderPlan(params: {
         format: null,
         bundle: node.bundle,
       },
+      workspaceManagedSections: buildRuntimeGraphManagedSectionOverrides({
+        draft,
+        nodeId: node.id,
+        workspaceDocEdits: params.workspaceDocEdits,
+      }),
+      ...(params.cron ? { cron: params.cron } : {}),
     });
     graphResults.push({
       nodeId: node.id,
@@ -1623,6 +2094,12 @@ export async function applyAgentBlueprintBuilderPlan(params: {
     graphResults[0]?.result ??
     (await applyAgentBlueprint({
       loaded: createBuilderLoadedBlueprint(draft),
+      workspaceManagedSections: buildRuntimeGraphManagedSectionOverrides({
+        draft,
+        nodeId: draft.runtimeGraph.entryNodeId,
+        workspaceDocEdits: params.workspaceDocEdits,
+      }),
+      ...(params.cron ? { cron: params.cron } : {}),
     }));
   return {
     draft: stripBundleFromDraft(draft),
@@ -1635,10 +2112,12 @@ export async function verifyAgentBlueprintBuilderPlan(params: {
   brief: string;
   templateId?: string;
   modelId?: string;
+  agentName?: string;
+  workspaceDocEdits?: AgentBlueprintBuilderManagedDocEdit[];
   cfg?: OpenClawConfig;
 }): Promise<AgentBlueprintBuilderVerifyResult> {
   const cfg = params.cfg ?? loadConfig();
-  const built = buildAgentBlueprintDraftInternal({
+  const built = await buildAgentBlueprintDraftInternal({
     ...params,
     cfg,
   });
@@ -1657,6 +2136,12 @@ export async function verifyAgentBlueprintBuilderPlan(params: {
     graphPlans.find((node) => node.nodeId === draft.runtimeGraph.entryNodeId);
   return {
     draft: stripBundleFromDraft(draft),
+    workspacePreviews: buildRuntimeGraphWorkspacePreviews({
+      graph: draft.runtimeGraph,
+      graphPlans,
+      buildSpec: draft.buildSpec,
+      workspaceDocEdits: params.workspaceDocEdits,
+    }),
     plan:
       entryGraphPlan?.plan ??
       (() => {

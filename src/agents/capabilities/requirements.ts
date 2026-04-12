@@ -309,7 +309,9 @@ function hasFeedLanguage(brief: string): boolean {
 
 function hasEmailSourceLanguage(brief: string): boolean {
   return (
-    /\b(emails|gmail|mailbox|inbox)\b/i.test(brief) || /\bfrom\s+(?:my\s+)?email\b/i.test(brief)
+    /\b(emails|gmail|mailbox|inbox)\b/i.test(brief) ||
+    /\bfrom\s+(?:my\s+)?email\b/i.test(brief) ||
+    /\b(?:read|check|scan|review|summari[sz]e|pull|fetch|get)\s+(?:my\s+)?email\b/i.test(brief)
   );
 }
 
@@ -658,6 +660,7 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
   const researchRequest = hasResearchLanguage(text);
   const emailRequest = hasEmailSourceLanguage(brief);
   const feedRequest = hasFeedLanguage(text);
+  const newsletterViaEmailRequest = emailRequest && feedRequest;
   const fileRequest = hasFileLanguage(text);
   const memoryRequest = hasMemoryLanguage(text);
   const webhookRequest = hasWebhookLanguage(text);
@@ -798,7 +801,7 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     );
   }
 
-  if (feedRequest) {
+  if (feedRequest && !newsletterViaEmailRequest) {
     inputs.push(
       createDescriptor({
         id: "feed-source",

@@ -1,3 +1,6 @@
+import { resolveSlackAccount } from "../../../extensions/slack/src/accounts.js";
+import { createSlackWebClient } from "../../../extensions/slack/src/client.js";
+import { parseSlackTarget } from "../../../extensions/slack/src/targets.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -182,6 +185,123 @@ function failedLiveResult(
   };
 }
 
+function normalizeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function runSlackSendTestResult(params: {
+  result: PlannedVerificationResult;
+  cfg?: OpenClawConfig;
+  timeoutMs: number;
+  checkedAt: string;
+}): Promise<PlannedVerificationResult> {
+  const cfg = params.cfg ?? {};
+  const plugin = getChannelPlugin("slack");
+  if (!plugin) {
+    return failedLiveResult(
+      params.result,
+      "blocked",
+      "Slack is not active in this runtime yet.",
+      params.checkedAt,
+    );
+  }
+
+  const accountIds = plugin.config.listAccountIds(cfg);
+  const defaultAccountId = resolveChannelDefaultAccountId({
+    plugin,
+    cfg,
+    accountIds,
+  });
+  const account = resolveSlackAccount({ cfg, accountId: defaultAccountId });
+  const rawTarget = account.config.defaultTo?.trim();
+  if (!rawTarget) {
+    return failedLiveResult(
+      params.result,
+      "blocked",
+      "Slack default delivery target is not configured yet.",
+      params.checkedAt,
+    );
+  }
+
+  const parsedTarget = parseSlackTarget(rawTarget, { defaultKind: "channel" });
+  if (!parsedTarget) {
+    return failedLiveResult(
+      params.result,
+      "blocked",
+      `Slack default delivery target "${rawTarget}" is invalid.`,
+      params.checkedAt,
+    );
+  }
+
+  // Slack DM/user routes need a stateful send probe to be fully verified.
+  if (
+    parsedTarget.kind !== "channel" ||
+    /^D[A-Z0-9]+$/i.test(parsedTarget.id) ||
+    /^U[A-Z0-9]+$/i.test(parsedTarget.id)
+  ) {
+    return liveCheckUnavailable(
+      params.result,
+      `Slack delivery target ${rawTarget} is configured, but a non-destructive live DM send probe is not implemented yet.`,
+      params.checkedAt,
+    );
+  }
+
+  const botToken = account.botToken?.trim();
+  if (!botToken) {
+    return failedLiveResult(
+      params.result,
+      "blocked",
+      `Slack bot token is missing for account "${account.accountId}".`,
+      params.checkedAt,
+    );
+  }
+
+  const client = createSlackWebClient(botToken, { timeout: params.timeoutMs });
+  const destinationLabel = `channel:${parsedTarget.id}`;
+  try {
+    const response = await client.conversations.info({ channel: parsedTarget.id });
+    const channelName = response.channel?.name?.trim();
+    const label = channelName ? `#${channelName}` : destinationLabel;
+    if (response.channel?.is_member === true) {
+      return passedLiveResult(
+        params.result,
+        `Slack delivery target ${label} is reachable for live delivery.`,
+        params.checkedAt,
+      );
+    }
+    return failedLiveResult(
+      params.result,
+      "failed",
+      `Slack workspace auth is ready, but the bot is not a member of ${label}. Invite the app to that conversation, then rerun verification.`,
+      params.checkedAt,
+    );
+  } catch (error) {
+    const message = normalizeErrorMessage(error);
+    if (message.includes("channel_not_found")) {
+      return failedLiveResult(
+        params.result,
+        "failed",
+        `Slack workspace auth is ready, but delivery target ${destinationLabel} is not visible to the bot. Invite the app to that conversation, then rerun verification.`,
+        params.checkedAt,
+      );
+    }
+    if (message.includes("missing_scope")) {
+      return failedLiveResult(
+        params.result,
+        "failed",
+        `Slack workspace auth is ready, but delivery target ${destinationLabel} cannot be verified because the bot token is missing the required channel-read scopes.`,
+        params.checkedAt,
+      );
+    }
+    return failedLiveResult(
+      params.result,
+      "failed",
+      `Slack delivery target ${destinationLabel} could not be verified: ${message}`,
+      params.checkedAt,
+    );
+  }
+}
+
 async function runChannelProbe(params: {
   integration: PlannedIntegrationInstance;
   cfg?: OpenClawConfig;
@@ -296,6 +416,14 @@ async function runLiveVerificationResult(params: {
     integration.sourceKind === "builtin_channel" ||
     integration.sourceKind === "channel_catalog"
   ) {
+    if (integration.connectorId === "channel:slack" && params.result.probeKind === "send_test") {
+      return await runSlackSendTestResult({
+        result: params.result,
+        cfg: params.cfg,
+        timeoutMs: params.timeoutMs,
+        checkedAt: params.checkedAt,
+      });
+    }
     const probePromise =
       params.channelProbeCache.get(integration.connectorId) ??
       runChannelProbe({

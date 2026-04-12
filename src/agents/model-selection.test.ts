@@ -654,6 +654,73 @@ describe("model-selection", () => {
       }
     });
 
+    it("resolves providerless model IDs to a unique configured provider", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            model: { primary: "gemini-3-flash" },
+          },
+        },
+        models: {
+          providers: {
+            google: {
+              models: [createModelConfigEntry("gemini-3-flash")],
+            },
+            anthropic: {
+              models: [createModelConfigEntry("claude-opus-4-6", { reasoning: true })],
+            },
+          },
+        },
+      };
+
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+
+      expect(result).toEqual({ provider: "google", model: "gemini-3-flash-preview" });
+    });
+
+    it("keeps anthropic fallback for ambiguous providerless model IDs", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "shared-model" },
+            },
+          },
+          models: {
+            providers: {
+              google: {
+                models: [createModelConfigEntry("shared-model")],
+              },
+              openai: {
+                models: [createModelConfigEntry("shared-model")],
+              },
+            },
+          },
+        };
+
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+        });
+
+        expect(result).toEqual({ provider: "anthropic", model: "shared-model" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to "anthropic/shared-model"'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
+
     it("should use default provider/model if config is empty", () => {
       const cfg: Partial<OpenClawConfig> = {};
       const result = resolveConfiguredModelRef({
