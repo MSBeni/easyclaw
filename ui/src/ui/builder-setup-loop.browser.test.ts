@@ -934,6 +934,196 @@ function createSwarmBuilderPlanResult(): BuilderPlanResult {
   };
 }
 
+function createUnsafePolicyBuilderPlanResult(): BuilderPlanResult {
+  const result = createBuilderPlanResult({ setupComplete: true });
+  return {
+    ...result,
+    draft: {
+      ...result.draft,
+      brief: "Open links on X and comment on my behalf.",
+      plannerStatus: "unsafe_without_policy",
+      ready: false,
+      reasons: [
+        "The workflow shape is valid, but Builder still needs an explicit approval posture before activation.",
+      ],
+      buildSpec: {
+        ...result.draft.buildSpec,
+        status: "unsafe_without_policy",
+        goal: {
+          primaryGoal: "operator",
+          executionMode: "direct",
+          confidence: "high",
+        },
+        integrations: [
+          {
+            connectorId: "tools:ui",
+            label: "Browser Tools",
+            status: "verified",
+            kind: "tooling",
+            sourceKind: "core_tool_section",
+            issues: [],
+          },
+          {
+            connectorId: "platform:exec-approvals",
+            label: "Exec Approvals",
+            status: "configured",
+            kind: "integration",
+            sourceKind: "core_platform",
+            issues: [],
+          },
+        ],
+        setupActions: [],
+        policy: {
+          highestRisk: "operator",
+          riskTiers: ["operator"],
+          summary:
+            "Operator risk. Builder still needs an approval route or posture before activation.",
+          riskyContractIds: ["approval.request", "browser.operate"],
+          riskyConnectorIds: ["platform:exec-approvals", "tools:ui"],
+          approval: {
+            required: true,
+            routeStatus: "configured",
+            posture: "unresolved",
+            postureSource: "missing",
+            recommendedPosture: "ask_every_time",
+            unresolved: true,
+            blockers: [
+              "Choose an approval posture in Builder or the brief before apply is allowed.",
+            ],
+          },
+        },
+      },
+      requirements: {
+        ...result.draft.requirements,
+        workflow: {
+          primaryGoal: "operator",
+          executionMode: "direct",
+          triggerKinds: [],
+          sourceKinds: [],
+          transformKinds: [],
+          actionKinds: ["browser-action"],
+          deliveryKinds: [],
+          requiresApproval: true,
+        },
+        intentTags: ["operator", "approval"],
+        actions: [{ detail: "Open links and comment on the user's behalf." }],
+        policies: [{ detail: "Require an explicit approval posture before risky actions run." }],
+        policyGaps: [
+          {
+            code: "approval-posture",
+            message:
+              "Choose an approval posture before allowing this workflow to act on your behalf.",
+          },
+        ],
+      },
+      planning: {
+        ...result.draft.planning,
+        selections: [
+          {
+            requirementId: "browser-action",
+            requirementLabel: "Browser actions",
+            contractIds: ["browser.operate"],
+            connectorId: "tools:ui",
+            connectorLabel: "Browser Tools",
+            source: "explicit",
+          },
+          {
+            requirementId: "approval-policy",
+            requirementLabel: "Approval Gate",
+            contractIds: ["approval.request"],
+            connectorId: "platform:exec-approvals",
+            connectorLabel: "Exec Approvals",
+            source: "explicit",
+          },
+        ],
+        integrations: [
+          {
+            connectorId: "tools:ui",
+            instanceId: "tools:ui",
+            status: "verified",
+            configRefs: ["browser.enabled"],
+            authRefs: [],
+            issues: [],
+            label: "Browser Tools",
+            kind: "tooling",
+            sourceKind: "core_tool_section",
+            contracts: ["browser.operate"],
+            verification: [],
+            onboarding: false,
+            requiresConfig: true,
+            requiresAuth: false,
+            installRequired: false,
+            installStrategy: "none",
+          },
+          {
+            connectorId: "platform:exec-approvals",
+            instanceId: "platform:exec-approvals",
+            status: "configured",
+            configRefs: ["approvals.exec"],
+            authRefs: [],
+            issues: [],
+            label: "Exec Approvals",
+            kind: "integration",
+            sourceKind: "core_platform",
+            contracts: ["approval.request"],
+            verification: [],
+            onboarding: true,
+            requiresConfig: true,
+            requiresAuth: false,
+            installRequired: false,
+            installStrategy: "none",
+          },
+        ],
+        setupTasks: [],
+        verifications: [],
+      },
+    },
+  };
+}
+
+function createResolvedPolicyBuilderPlanResult(posture: "ask_every_time"): BuilderPlanResult {
+  const result = createUnsafePolicyBuilderPlanResult();
+  return {
+    ...result,
+    draft: {
+      ...result.draft,
+      plannerStatus: "ready",
+      ready: true,
+      reasons: ["Builder has an explicit approval posture and the policy gate is resolved."],
+      buildSpec: {
+        ...result.draft.buildSpec,
+        status: "ready",
+        policy: {
+          highestRisk: "operator",
+          riskTiers: ["operator"],
+          summary:
+            "Operator risk. Approval route is configured and Builder selected Ask Every Time.",
+          riskyContractIds: ["approval.request", "browser.operate"],
+          riskyConnectorIds: ["platform:exec-approvals", "tools:ui"],
+          approval: {
+            required: true,
+            routeStatus: "configured",
+            posture,
+            postureSource: "builder",
+            recommendedPosture: "ask_every_time",
+            unresolved: false,
+            blockers: [],
+          },
+        },
+      },
+      requirements: {
+        ...result.draft.requirements,
+        policyGaps: [],
+      },
+    },
+    plan: {
+      ...result.plan,
+      status: "ready",
+      issues: [],
+    },
+  };
+}
+
 function createBuilderVerifyResult(params: {
   setupComplete: boolean;
   fingerprint: string;
@@ -1132,6 +1322,128 @@ describe("Builder setup loop", () => {
     expect(editedText).toContain(
       "4 generated workspace docs ready for review, 1 edited in Builder, 2 still pending generation.",
     );
+  });
+
+  it("shows safety policy review and keeps apply blocked when approval posture is unresolved", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    const request = vi.fn(async (method: string) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createUnsafePolicyBuilderPlanResult();
+        default:
+          throw new Error(`Unhandled unsafe policy builder method: ${method}`);
+      }
+    });
+
+    app.client = {
+      request,
+      stop: vi.fn(),
+    } as unknown as OpenClawApp["client"];
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Open links on X and comment on my behalf.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    const builderText = normalizeText(app.textContent);
+    expect(builderText).toContain("Safety & Policy");
+    expect(builderText).toContain("Highest risk:");
+    expect(builderText).toContain("Operator");
+    expect(builderText).toContain("Approval route:");
+    expect(builderText).toContain("Configured");
+    expect(builderText).toContain("Approval posture:");
+    expect(builderText).toContain("Unresolved");
+    expect(builderText).toContain("Posture source:");
+    expect(builderText).toContain("Missing");
+    expect(builderText).toContain("Recommended posture:");
+    expect(builderText).toContain("Ask Every Time");
+    expect(builderText).toContain(
+      "Supported postures: Always Auto, Ask Once, Ask Every Time, Draft Only, Never.",
+    );
+    expect(builderText).toContain(
+      "Choose an approval posture in Builder or the brief before apply is allowed.",
+    );
+    expect(builderText).toContain("Choose in Builder");
+    expect(builderText).toContain("Use Ask Every Time");
+    expect(builderText).toContain("Safety and action policy");
+    expect(builderText).toContain("Resolve the safety policy blockers before apply.");
+
+    const applyButton = findButtonByText(app, "Apply Builder Plan", { exact: true });
+    expect(applyButton).not.toBeNull();
+    expect(applyButton?.disabled).toBe(true);
+  });
+
+  it("lets Builder choose an approval posture intentionally and rebuild", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return params?.approvalPosture === "ask_every_time"
+            ? createResolvedPolicyBuilderPlanResult("ask_every_time")
+            : createUnsafePolicyBuilderPlanResult();
+        default:
+          throw new Error(`Unhandled builder posture method: ${method}`);
+      }
+    });
+
+    app.client = {
+      request,
+      stop: vi.fn(),
+    } as unknown as OpenClawApp["client"];
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Open links on X and comment on my behalf.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Use Ask Every Time");
+    await settle(app, 4);
+
+    expect(request).toHaveBeenNthCalledWith(2, "agents.builder.plan", {
+      brief: "Open links on X and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+    });
+
+    const rebuiltText = normalizeText(app.textContent);
+    expect(rebuiltText).toContain("Approval posture:");
+    expect(rebuiltText).toContain("Ask Every Time");
+    expect(rebuiltText).toContain("Posture source:");
+    expect(rebuiltText).toContain("Builder");
+    expect(rebuiltText).toContain(
+      "Operator risk. Approval route is configured and Builder selected Ask Every Time.",
+    );
+
+    const applyButton = findButtonByText(app, "Apply Builder Plan", { exact: true });
+    expect(applyButton).not.toBeNull();
+    expect(applyButton?.disabled).toBe(false);
   });
 
   it("keeps apply blocked until guided web setup completes and auto-reruns verification", async () => {

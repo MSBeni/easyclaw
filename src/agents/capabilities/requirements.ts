@@ -1,6 +1,11 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { isChannelConfigured as isConfiguredChannelRef } from "../../config/plugin-auto-enable.js";
 import { hasConfiguredExecApprovalDmRoute } from "../../infra/exec-approval-surface.js";
+import {
+  APPROVAL_POSTURES,
+  resolveApprovalPostureFromText,
+  type ApprovalPosture,
+} from "./approval-posture.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
 import { listConnectorsForContract } from "./registry.js";
 import type { CapabilityRegistry, ConnectorDefinition, PlannerStatus } from "./schema.js";
@@ -27,11 +32,13 @@ export const REQUIREMENT_UNSUPPORTED_KINDS = [
   "delivery",
   "policy",
 ] as const;
+export const REQUIREMENT_APPROVAL_POSTURES = APPROVAL_POSTURES;
 
 export type RequirementConfidence = (typeof REQUIREMENT_CONFIDENCES)[number];
 export type RequirementWorkflowGoal = (typeof REQUIREMENT_WORKFLOW_GOALS)[number];
 export type RequirementExecutionMode = (typeof REQUIREMENT_EXECUTION_MODES)[number];
 export type RequirementUnsupportedKind = (typeof REQUIREMENT_UNSUPPORTED_KINDS)[number];
+export type RequirementApprovalPosture = ApprovalPosture;
 
 export type RequirementDescriptor = {
   id: string;
@@ -89,6 +96,8 @@ export type RequirementWorkflowSummary = {
 
 export type RequirementSet = {
   brief: string;
+  approvalPosture: RequirementApprovalPosture | null;
+  approvalPostureSource: "brief" | "builder" | "missing";
   confidence: RequirementConfidence;
   workflow: RequirementWorkflowSummary;
   intentTags: string[];
@@ -119,6 +128,7 @@ export type RequirementSet = {
 
 type RequirementExtractionParams = {
   brief: string;
+  approvalPosture?: RequirementApprovalPosture;
   cfg?: OpenClawConfig;
   registry?: CapabilityRegistry;
 };
@@ -196,6 +206,10 @@ function createConstraint(params: RequirementConstraint): RequirementConstraint 
     connectorIds: dedupeStrings(params.connectorIds),
     values: dedupeStrings(params.values),
   };
+}
+
+export function resolveExplicitApprovalPosture(brief: string): RequirementApprovalPosture | null {
+  return resolveApprovalPostureFromText(brief);
 }
 
 function normalizeWords(value: string): string {
@@ -485,7 +499,7 @@ function isGmailHookConfigured(cfg: OpenClawConfig | undefined): boolean {
   return Boolean(cfg?.hooks?.token && gmail?.account && gmail?.topic && gmail?.pushToken);
 }
 
-function hasApprovalRoute(cfg: OpenClawConfig | undefined): boolean {
+export function hasApprovalRoute(cfg: OpenClawConfig | undefined): boolean {
   if (!cfg) {
     return false;
   }
@@ -680,6 +694,12 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     hasReportLanguage(brief) ||
     (scheduleRequest && summaryRequest);
   const deliveryChannelMentions = deliveryRequest ? mentionedChannels : [];
+  const explicitApprovalPosture = params.approvalPosture ?? resolveExplicitApprovalPosture(brief);
+  const approvalPostureSource: RequirementSet["approvalPostureSource"] = explicitApprovalPosture
+    ? params.approvalPosture
+      ? "builder"
+      : "brief"
+    : "missing";
 
   if (scheduleRequest) {
     triggers.push(
@@ -1096,9 +1116,19 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
         }),
       );
     }
-    if (!/\b(auto(?:matically)?|approve|ask every time|draft)\b/i.test(brief)) {
+    if (!explicitApprovalPosture) {
       ambiguities.push("Risky on-behalf actions were requested without an explicit approval mode.");
       missingDataFields.push("approval-mode");
+      policyGaps.push(
+        createGap({
+          kind: "policy",
+          code: "approval-posture",
+          message:
+            "Choose an approval posture before allowing this workflow to act on your behalf.",
+          contractIds: ["approval.request"],
+          connectorIds: ["platform:exec-approvals"],
+        }),
+      );
     }
   }
 
@@ -1255,6 +1285,8 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
 
   return {
     brief,
+    approvalPosture: explicitApprovalPosture,
+    approvalPostureSource,
     confidence,
     workflow,
     intentTags,

@@ -99,6 +99,35 @@ export type BuilderDraftSummary = {
       sourceKind: string;
       issues: string[];
     }>;
+    policy?: {
+      highestRisk:
+        | "read_only"
+        | "communicative"
+        | "operator"
+        | "externally_mutating"
+        | "config_mutating";
+      riskTiers: Array<
+        "read_only" | "communicative" | "operator" | "externally_mutating" | "config_mutating"
+      >;
+      summary: string;
+      riskyContractIds: string[];
+      riskyConnectorIds: string[];
+      approval: {
+        required: boolean;
+        routeStatus: "not_required" | "configured" | "missing";
+        posture:
+          | "always_auto"
+          | "ask_once"
+          | "ask_every_time"
+          | "draft_only"
+          | "never"
+          | "unresolved";
+        postureSource: "brief" | "builder" | "defaulted" | "missing";
+        recommendedPosture: "always_auto" | "ask_once" | "ask_every_time" | "draft_only" | "never";
+        unresolved: boolean;
+        blockers: string[];
+      };
+    };
     setupActions: Array<{
       id?: string;
       connectorId: string;
@@ -489,6 +518,13 @@ export type BuilderState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   builderBrief: string;
+  builderApprovalPosture:
+    | ""
+    | "always_auto"
+    | "ask_once"
+    | "ask_every_time"
+    | "draft_only"
+    | "never";
   builderTemplateId: string;
   builderModelId: string;
   builderAgentName: string;
@@ -881,6 +917,7 @@ export async function loadBuilderPlan(state: BuilderState) {
   try {
     const result = await state.client.request<BuilderPlanResult>("agents.builder.plan", {
       brief: state.builderBrief,
+      ...(state.builderApprovalPosture ? { approvalPosture: state.builderApprovalPosture } : {}),
       ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
       ...(state.builderModelId ? { modelId: state.builderModelId } : {}),
       ...(state.builderAgentName ? { agentName: state.builderAgentName } : {}),
@@ -904,6 +941,7 @@ export async function applyBuilderPlan(state: BuilderState) {
     const workspaceDocEdits = buildWorkspaceDocEditsPayload(state);
     const result = await state.client.request<BuilderApplyResult>("agents.builder.apply", {
       brief: state.builderBrief,
+      ...(state.builderApprovalPosture ? { approvalPosture: state.builderApprovalPosture } : {}),
       ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
       ...(state.builderModelId ? { modelId: state.builderModelId } : {}),
       ...(state.builderAgentName ? { agentName: state.builderAgentName } : {}),
@@ -934,6 +972,7 @@ export async function verifyBuilderPlan(state: BuilderState) {
   try {
     const result = await state.client.request<BuilderVerifyResult>("agents.builder.verify", {
       brief: state.builderBrief,
+      ...(state.builderApprovalPosture ? { approvalPosture: state.builderApprovalPosture } : {}),
       ...(state.builderTemplateId ? { templateId: state.builderTemplateId } : {}),
       ...(state.builderModelId ? { modelId: state.builderModelId } : {}),
       ...(state.builderAgentName ? { agentName: state.builderAgentName } : {}),

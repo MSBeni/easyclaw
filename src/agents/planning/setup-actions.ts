@@ -1,13 +1,19 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import { formatApprovalPostureLabel } from "../capabilities/approval-posture.js";
+import { buildOpenClawCapabilityRegistry } from "../capabilities/openclaw.js";
 import type {
   PlannedIntegrationInstance,
   PlannedSetupTaskKind,
   RequirementPlannerResult,
 } from "../capabilities/planner.js";
 import type {
+  RequirementApprovalPosture,
   RequirementGap,
   RequirementQuestion,
   RequirementSet,
 } from "../capabilities/requirements.js";
+import { hasApprovalRoute } from "../capabilities/requirements.js";
+import type { RiskClass } from "../capabilities/schema.js";
 import type { BuildSpec } from "./build-spec.js";
 
 type SetupFieldKind =
@@ -30,6 +36,8 @@ type SetupAction = BuildSpec["setupActions"][number];
 type SetupActionKind = NonNullable<SetupAction["kind"]>;
 type SetupActionSource = NonNullable<SetupAction["source"]>;
 type SetupActionUiVariant = NonNullable<NonNullable<SetupAction["uiSchema"]>["variant"]>;
+type BuildSpecPolicySummary = NonNullable<BuildSpec["policy"]>;
+type BuildSpecApprovalPosture = BuildSpecPolicySummary["approval"]["posture"];
 
 type SetupActionDraft = {
   id: string;
@@ -62,6 +70,13 @@ const ACTION_KIND_PRIORITY: Record<SetupActionKind, number> = {
   question: 5,
   enable: 6,
 };
+const RISK_CLASS_PRIORITY: Record<RiskClass, number> = {
+  read_only: 0,
+  communicative: 1,
+  operator: 2,
+  externally_mutating: 3,
+  config_mutating: 4,
+};
 
 function dedupeStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
@@ -69,6 +84,122 @@ function dedupeStrings(values: string[]): string[] {
 
 function sortStrings(values: Iterable<string>): string[] {
   return Array.from(values).toSorted((left, right) => left.localeCompare(right));
+}
+
+function sortRiskClasses(values: Iterable<RiskClass>): RiskClass[] {
+  return Array.from(new Set(values)).toSorted(
+    (left, right) => RISK_CLASS_PRIORITY[left] - RISK_CLASS_PRIORITY[right],
+  );
+}
+
+function recommendedApprovalPostureForRisk(
+  highestRisk: RiskClass,
+): BuildSpecPolicySummary["approval"]["recommendedPosture"] {
+  switch (highestRisk) {
+    case "config_mutating":
+      return "draft_only";
+    case "operator":
+    case "externally_mutating":
+      return "ask_every_time";
+    case "communicative":
+    case "read_only":
+      return "always_auto";
+  }
+}
+
+function riskClassLabel(value: RiskClass): string {
+  switch (value) {
+    case "read_only":
+      return "Read Only";
+    case "communicative":
+      return "Communication";
+    case "operator":
+      return "Operator";
+    case "externally_mutating":
+      return "Externally Mutating";
+    case "config_mutating":
+      return "Config Mutating";
+  }
+}
+
+function approvalPostureLabel(value: RequirementApprovalPosture): string {
+  return formatApprovalPostureLabel(value);
+}
+
+function summarizeBuildSpecPolicy(params: {
+  requirements: RequirementSet;
+  planning: RequirementPlannerResult;
+  cfg?: OpenClawConfig;
+}): BuildSpecPolicySummary {
+  const registry = buildOpenClawCapabilityRegistry();
+  const riskyContractIds = sortStrings(
+    params.requirements.requestedContractIds.filter((contractId) =>
+      registry.contractsById.has(contractId),
+    ),
+  );
+  const riskyConnectorIds = sortStrings(
+    params.planning.integrations
+      .map((integration) => integration.connectorId)
+      .filter((connectorId) => registry.connectorsById.has(connectorId)),
+  );
+  const riskTiers = sortRiskClasses([
+    ...riskyContractIds.flatMap((contractId) => registry.contractsById.get(contractId)?.risk ?? []),
+    ...riskyConnectorIds.flatMap(
+      (connectorId) => registry.connectorsById.get(connectorId)?.riskClasses ?? [],
+    ),
+  ]);
+  const highestRisk = riskTiers.at(-1) ?? "read_only";
+  const approvalRequired = params.requirements.workflow.requiresApproval;
+  const explicitPosture = approvalRequired ? params.requirements.approvalPosture : null;
+  const routeConfigured = approvalRequired ? hasApprovalRoute(params.cfg) : false;
+  const recommendedPosture = recommendedApprovalPostureForRisk(highestRisk);
+  const blockers: string[] = [];
+
+  if (approvalRequired && !routeConfigured) {
+    blockers.push("Configure an approval route before apply is allowed.");
+  }
+  if (approvalRequired && !explicitPosture) {
+    blockers.push("Choose an approval posture in Builder or the brief before apply is allowed.");
+  }
+
+  const posture: BuildSpecApprovalPosture =
+    explicitPosture ?? (approvalRequired ? "unresolved" : "always_auto");
+  const postureSource: BuildSpecPolicySummary["approval"]["postureSource"] = explicitPosture
+    ? params.requirements.approvalPostureSource === "builder"
+      ? "builder"
+      : "brief"
+    : approvalRequired
+      ? "missing"
+      : "defaulted";
+  const routeStatus: BuildSpecPolicySummary["approval"]["routeStatus"] = approvalRequired
+    ? routeConfigured
+      ? "configured"
+      : "missing"
+    : "not_required";
+  const summary = approvalRequired
+    ? blockers.length > 0
+      ? `${riskClassLabel(highestRisk)} risk. Builder still needs an approval route or posture before activation.`
+      : `${riskClassLabel(highestRisk)} risk. Approval route is configured and ${
+          postureSource === "builder" ? "Builder selected" : "the brief selected"
+        } ${approvalPostureLabel(explicitPosture ?? recommendedPosture)}.`
+    : `${riskClassLabel(highestRisk)} risk. No explicit approval route is required for this plan.`;
+
+  return {
+    highestRisk,
+    riskTiers,
+    summary,
+    riskyContractIds,
+    riskyConnectorIds,
+    approval: {
+      required: approvalRequired,
+      routeStatus,
+      posture,
+      postureSource,
+      recommendedPosture,
+      unresolved: blockers.length > 0,
+      blockers,
+    },
+  };
 }
 
 function normalizePrompt(value: string): string {
@@ -704,6 +835,17 @@ function addQuestionFields(draft: SetupActionDraft, question: RequirementQuestio
 
 function addGapFields(draft: SetupActionDraft, gap: RequirementGap) {
   switch (gap.code) {
+    case "approval-posture":
+      addRequiredField(
+        draft,
+        buildField({
+          key: "approval-posture",
+          label: "Approval posture",
+          kind: "approval",
+          required: true,
+        }),
+      );
+      return;
     case "approval-route":
       addRequiredField(
         draft,
@@ -867,6 +1009,7 @@ export function synchronizeBuildSpec(params: {
   requirements: RequirementSet;
   planning: RequirementPlannerResult;
   questions: RequirementQuestion[];
+  cfg?: OpenClawConfig;
 }): BuildSpec {
   const integrationsById = new Map(
     params.planning.integrations.map(
@@ -1129,6 +1272,11 @@ export function synchronizeBuildSpec(params: {
       sourceKind: integration.sourceKind,
       issues: [...integration.issues],
     })),
+    policy: summarizeBuildSpecPolicy({
+      requirements: params.requirements,
+      planning: params.planning,
+      cfg: params.cfg,
+    }),
     setupActions,
     questions: params.questions.map((question) => question.prompt),
   };

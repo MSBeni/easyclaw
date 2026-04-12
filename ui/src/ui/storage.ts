@@ -30,6 +30,7 @@ export type UiSettings = {
 
 export type BuilderDraftSettings = {
   brief: string;
+  approvalPosture: string;
   templateId: string;
   modelId: string;
   agentName: string;
@@ -161,6 +162,7 @@ function normalizeBuilderSetupResult(value: unknown): BuilderSetupSessionState["
 export function loadBuilderDraft(): BuilderDraftSettings {
   const defaults: BuilderDraftSettings = {
     brief: "",
+    approvalPosture: "",
     templateId: "",
     modelId: "",
     agentName: "",
@@ -177,6 +179,7 @@ export function loadBuilderDraft(): BuilderDraftSettings {
     const parsed = JSON.parse(raw) as Partial<BuilderDraftSettings>;
     return {
       brief: normalizeBuilderDraftField(parsed.brief),
+      approvalPosture: normalizeBuilderDraftField(parsed.approvalPosture),
       templateId: normalizeBuilderDraftField(parsed.templateId),
       modelId: normalizeBuilderDraftField(parsed.modelId),
       agentName: normalizeBuilderDraftField(parsed.agentName),
@@ -196,6 +199,7 @@ export function saveBuilderDraft(next: BuilderDraftSettings) {
       BUILDER_DRAFT_SESSION_KEY,
       JSON.stringify({
         brief: next.brief,
+        approvalPosture: next.approvalPosture,
         templateId: next.templateId,
         modelId: next.modelId,
         agentName: next.agentName,

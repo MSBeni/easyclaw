@@ -167,6 +167,7 @@ export type AppViewState = {
   toolsCatalogResult: ToolsCatalogResult | null;
   agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   builderBrief: string;
+  builderApprovalPosture: string;
   builderTemplateId: string;
   builderModelId: string;
   builderAgentName: string;

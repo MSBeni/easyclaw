@@ -78,7 +78,9 @@ describe("capability requirements", () => {
 
     expect(requirements.actions.map((entry) => entry.id)).toContain("browser-action");
     expect(requirements.policies.map((entry) => entry.id)).toContain("approval-policy");
-    expect(requirements.policyGaps.map((gap) => gap.code)).toContain("approval-route");
+    expect(requirements.policyGaps.map((gap) => gap.code)).toEqual(
+      expect.arrayContaining(["approval-route", "approval-posture"]),
+    );
     expect(requirements.ambiguities).toContain(
       "Risky on-behalf actions were requested without an explicit approval mode.",
     );
@@ -86,7 +88,50 @@ describe("capability requirements", () => {
     expect(requirements.confidence).toBe("medium");
     expect(requirements.workflow.primaryGoal).toBe("operator");
     expect(requirements.workflow.requiresApproval).toBe(true);
+    expect(requirements.approvalPosture).toBeNull();
+    expect(requirements.approvalPostureSource).toBe("missing");
     expect(requirements.plannerStatus).toBe("unsafe_without_policy");
+  });
+
+  it("treats missing approval posture as a policy blocker even when routing is configured", () => {
+    const requirements = buildRequirementSet({
+      brief: "Open the links on X and comment on my behalf.",
+      cfg: {
+        approvals: {
+          exec: {
+            enabled: true,
+            targets: [{ channel: "telegram", to: "123456789" }],
+          },
+        },
+      },
+    });
+
+    expect(requirements.policyGaps.map((gap) => gap.code)).toContain("approval-posture");
+    expect(requirements.policyGaps.map((gap) => gap.code)).not.toContain("approval-route");
+    expect(requirements.workflow.requiresApproval).toBe(true);
+    expect(requirements.approvalPosture).toBeNull();
+    expect(requirements.approvalPostureSource).toBe("missing");
+    expect(requirements.plannerStatus).toBe("unsafe_without_policy");
+  });
+
+  it("uses a builder-selected approval posture as the explicit policy choice", () => {
+    const requirements = buildRequirementSet({
+      brief: "Open the links on X and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+      cfg: {
+        approvals: {
+          exec: {
+            enabled: true,
+            targets: [{ channel: "telegram", to: "123456789" }],
+          },
+        },
+      },
+    });
+
+    expect(requirements.policyGaps.map((gap) => gap.code)).not.toContain("approval-posture");
+    expect(requirements.approvalPosture).toBe("ask_every_time");
+    expect(requirements.approvalPostureSource).toBe("builder");
+    expect(requirements.plannerStatus).toBe("needs_setup");
   });
 
   it("keeps a supported schedule-and-summary request ready when setup is already present", () => {

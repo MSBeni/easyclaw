@@ -1334,6 +1334,7 @@ export function renderApp(state: AppViewState) {
                       state.builderWorkspaceDocEdits = {};
                       saveBuilderDraft({
                         brief: state.builderBrief,
+                        approvalPosture: state.builderApprovalPosture,
                         templateId: state.builderTemplateId,
                         modelId: state.builderModelId,
                         agentName: state.builderAgentName,
@@ -1350,6 +1351,7 @@ export function renderApp(state: AppViewState) {
                       state.builderWorkspaceDocEdits = {};
                       saveBuilderDraft({
                         brief: state.builderBrief,
+                        approvalPosture: state.builderApprovalPosture,
                         templateId: state.builderTemplateId,
                         modelId: state.builderModelId,
                         agentName: state.builderAgentName,
@@ -1366,6 +1368,7 @@ export function renderApp(state: AppViewState) {
                       state.builderWorkspaceDocEdits = {};
                       saveBuilderDraft({
                         brief: state.builderBrief,
+                        approvalPosture: state.builderApprovalPosture,
                         templateId: state.builderTemplateId,
                         modelId: state.builderModelId,
                         agentName: state.builderAgentName,
@@ -1382,6 +1385,24 @@ export function renderApp(state: AppViewState) {
                       state.builderWorkspaceDocEdits = {};
                       saveBuilderDraft({
                         brief: state.builderBrief,
+                        approvalPosture: state.builderApprovalPosture,
+                        templateId: state.builderTemplateId,
+                        modelId: state.builderModelId,
+                        agentName: state.builderAgentName,
+                      });
+                      state.builderPlan = null;
+                      state.builderApplyResult = null;
+                      state.builderApplyError = null;
+                      state.builderVerifyResult = null;
+                      state.builderVerifyError = null;
+                      state.builderConfirmApply = false;
+                    },
+                    onSetApprovalPosture: (approvalPosture) => {
+                      state.builderApprovalPosture = approvalPosture;
+                      state.builderWorkspaceDocEdits = {};
+                      saveBuilderDraft({
+                        brief: state.builderBrief,
+                        approvalPosture: state.builderApprovalPosture,
                         templateId: state.builderTemplateId,
                         modelId: state.builderModelId,
                         agentName: state.builderAgentName,

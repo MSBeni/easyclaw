@@ -24,6 +24,7 @@ function createState(): {
     } as unknown as ControllerState["client"],
     connected: true,
     builderBrief: "",
+    builderApprovalPosture: "",
     builderTemplateId: "",
     builderModelId: "",
     builderAgentName: "",
@@ -148,6 +149,105 @@ describe("builder controller", () => {
       brief: "Create a daily digest",
       agentName: "Podcast Ideas Bot",
     });
+  });
+
+  it("includes the explicit approval posture in builder requests", async () => {
+    const { state, request } = createState();
+    state.builderBrief = "Open links on X and comment on my behalf.";
+    state.builderApprovalPosture = "ask_every_time";
+    request
+      .mockResolvedValueOnce({
+        draft: {
+          templateId: "research-agent",
+        },
+        plan: { status: "ready" },
+      })
+      .mockResolvedValueOnce({
+        draft: {
+          templateId: "research-agent",
+        },
+        verification: {
+          fingerprint: "approval-posture",
+          checkedAt: "2026-04-12T00:00:00.000Z",
+          passedCount: 1,
+          failedCount: 0,
+          blockedCount: 0,
+          unresolvedCount: 0,
+          results: [],
+        },
+        plan: { status: "ready" },
+      })
+      .mockResolvedValueOnce({
+        draft: {
+          templateId: "research-agent",
+        },
+        result: {
+          status: "applied",
+          agent: {
+            agentId: "research-agent",
+            name: "Research Agent",
+            workspaceDir: "/tmp/research-agent",
+            agentDir: "/tmp/research-agent",
+          },
+          workspace: { metadataPath: "/tmp/research-agent/easyclaw-blueprint.json", files: [] },
+          bindings: {
+            added: [],
+            removed: [],
+            updated: [],
+            skipped: [],
+            conflicts: [],
+            ignored: [],
+          },
+          automation: { jobs: [] },
+          warnings: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "per-sender",
+        agents: [{ id: "research-agent", name: "Research Agent" }],
+      })
+      .mockResolvedValueOnce({
+        jobs: [],
+        total: 0,
+        limit: 25,
+        offset: 0,
+        hasMore: false,
+        nextOffset: null,
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        count: 0,
+      });
+
+    await loadBuilderPlan(state);
+    await verifyBuilderPlan(state);
+    await applyBuilderPlan(state);
+
+    expect(request.mock.calls.slice(0, 3)).toEqual([
+      [
+        "agents.builder.plan",
+        {
+          brief: "Open links on X and comment on my behalf.",
+          approvalPosture: "ask_every_time",
+        },
+      ],
+      [
+        "agents.builder.verify",
+        {
+          brief: "Open links on X and comment on my behalf.",
+          approvalPosture: "ask_every_time",
+        },
+      ],
+      [
+        "agents.builder.apply",
+        {
+          brief: "Open links on X and comment on my behalf.",
+          approvalPosture: "ask_every_time",
+        },
+      ],
+    ]);
   });
 
   it("applies the builder plan and refreshes agents and cron state", async () => {

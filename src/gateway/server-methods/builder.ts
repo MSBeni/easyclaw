@@ -31,6 +31,10 @@ import {
   verifyAgentBlueprintBuilderPlan,
 } from "../../agents/blueprints/builder.js";
 import { inspectConnectorSetupState } from "../../agents/capabilities/planner.js";
+import {
+  REQUIREMENT_APPROVAL_POSTURES,
+  type RequirementApprovalPosture,
+} from "../../agents/capabilities/requirements.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { getChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
@@ -77,6 +81,7 @@ async function buildGmailGogLaunchCommand(account: string): Promise<string> {
 
 function parseBuilderParams(raw: unknown): {
   brief: string;
+  approvalPosture?: RequirementApprovalPosture;
   templateId?: string;
   modelId?: string;
   agentName?: string;
@@ -87,6 +92,13 @@ function parseBuilderParams(raw: unknown): {
   }
   const record = raw as Record<string, unknown>;
   const brief = typeof record.brief === "string" ? record.brief.trim() : "";
+  const approvalPostureRaw =
+    typeof record.approvalPosture === "string" ? record.approvalPosture.trim() : "";
+  const approvalPosture = REQUIREMENT_APPROVAL_POSTURES.includes(
+    approvalPostureRaw as RequirementApprovalPosture,
+  )
+    ? (approvalPostureRaw as RequirementApprovalPosture)
+    : undefined;
   const templateId = typeof record.templateId === "string" ? record.templateId.trim() : "";
   const modelId = typeof record.modelId === "string" ? record.modelId.trim() : "";
   const agentName = typeof record.agentName === "string" ? record.agentName.trim() : "";
@@ -113,6 +125,7 @@ function parseBuilderParams(raw: unknown): {
     : [];
   return {
     brief,
+    ...(approvalPosture ? { approvalPosture } : {}),
     ...(templateId ? { templateId } : {}),
     ...(modelId ? { modelId } : {}),
     ...(agentName ? { agentName } : {}),
@@ -1147,6 +1160,7 @@ export const builderHandlers: GatewayRequestHandlers = {
       const modelId = normalizeBuilderModelId(parsed.modelId, cfg);
       const result = await compileAgentBlueprintBuilderPlan({
         brief: parsed.brief,
+        ...(parsed.approvalPosture ? { approvalPosture: parsed.approvalPosture } : {}),
         ...(parsed.templateId ? { templateId: parsed.templateId } : {}),
         ...(modelId ? { modelId } : {}),
         ...(parsed.agentName ? { agentName: parsed.agentName } : {}),
@@ -1178,6 +1192,7 @@ export const builderHandlers: GatewayRequestHandlers = {
       const modelId = normalizeBuilderModelId(parsed.modelId, cfg);
       const result = await applyAgentBlueprintBuilderPlan({
         brief: parsed.brief,
+        ...(parsed.approvalPosture ? { approvalPosture: parsed.approvalPosture } : {}),
         ...(parsed.templateId ? { templateId: parsed.templateId } : {}),
         ...(modelId ? { modelId } : {}),
         ...(parsed.agentName ? { agentName: parsed.agentName } : {}),
@@ -1210,6 +1225,7 @@ export const builderHandlers: GatewayRequestHandlers = {
       const modelId = normalizeBuilderModelId(parsed.modelId, cfg);
       const result = await verifyAgentBlueprintBuilderPlan({
         brief: parsed.brief,
+        ...(parsed.approvalPosture ? { approvalPosture: parsed.approvalPosture } : {}),
         ...(parsed.templateId ? { templateId: parsed.templateId } : {}),
         ...(modelId ? { modelId } : {}),
         ...(parsed.agentName ? { agentName: parsed.agentName } : {}),

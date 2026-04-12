@@ -181,6 +181,7 @@ describe("loadSettings default gateway URL derivation", () => {
     const { loadBuilderDraft, saveBuilderDraft } = await import("./storage.ts");
     saveBuilderDraft({
       brief: "Summarize the AI Daily Brief podcast and send WhatsApp ideas.",
+      approvalPosture: "ask_every_time",
       templateId: "daily-briefing",
       modelId: "google/gemini-2.5-pro",
       agentName: "AI Daily Brief WhatsApp",
@@ -188,6 +189,7 @@ describe("loadSettings default gateway URL derivation", () => {
 
     expect(loadBuilderDraft()).toEqual({
       brief: "Summarize the AI Daily Brief podcast and send WhatsApp ideas.",
+      approvalPosture: "ask_every_time",
       templateId: "daily-briefing",
       modelId: "google/gemini-2.5-pro",
       agentName: "AI Daily Brief WhatsApp",

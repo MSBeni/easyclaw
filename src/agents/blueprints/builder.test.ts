@@ -211,6 +211,63 @@ describe("agent blueprint builder", () => {
     ).rejects.toThrow(/OpenClaw Core Model Runtime auth is not runnable/i);
   });
 
+  it("blocks apply when a risky workflow lacks an explicit approval posture", async () => {
+    await expect(
+      applyAgentBlueprintBuilderPlan({
+        brief:
+          "Create a bot on Telegram that opens links on X, follows the account, and comments on my behalf.",
+        modelId: "openai/gpt-4o",
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-4o",
+            },
+          },
+          channels: {
+            telegram: {
+              botToken: "123:abc",
+            },
+          },
+          approvals: {
+            exec: {
+              enabled: true,
+              targets: [{ channel: "telegram", to: "123456789" }],
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/Builder safety policy is unresolved\./i);
+  });
+
+  it("accepts a builder-selected approval posture for risky workflows", async () => {
+    const draft = await buildAgentBlueprintDraft({
+      brief: "Open the links on X, follow the account, and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+      modelId: "openai/gpt-4o",
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4o",
+          },
+        },
+        approvals: {
+          exec: {
+            enabled: true,
+            targets: [{ channel: "telegram", to: "123456789" }],
+          },
+        },
+      },
+    });
+
+    expect(draft.plannerStatus).toBe("needs_setup");
+    expect(draft.buildSpec.policy?.approval).toMatchObject({
+      posture: "ask_every_time",
+      postureSource: "builder",
+      unresolved: false,
+      blockers: [],
+    });
+  });
+
   it("blocks apply when a required channel is not live-runnable", async () => {
     await expect(
       applyAgentBlueprintBuilderPlan({

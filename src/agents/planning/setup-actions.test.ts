@@ -207,4 +207,134 @@ describe("synchronizeBuildSpec", () => {
       }),
     );
   });
+
+  it("summarizes unresolved approval posture as a first-class policy blocker", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          targets: [{ channel: "telegram", to: "123456789" }],
+        },
+      },
+    };
+    const requirements = buildRequirementSet({
+      brief: "Open the links on X and comment on my behalf.",
+      cfg,
+    });
+    const planning = buildRequirementPlannerResult({
+      requirements,
+      cfg,
+    });
+
+    const synced = synchronizeBuildSpec({
+      buildSpec: createBaseBuildSpec({
+        brief: requirements.brief,
+        status: planning.status,
+      }),
+      requirements,
+      planning,
+      questions: [],
+      cfg,
+    });
+
+    expect(synced.policy).toMatchObject({
+      highestRisk: "operator",
+      riskTiers: expect.arrayContaining(["operator"]),
+      approval: {
+        required: true,
+        routeStatus: "configured",
+        posture: "unresolved",
+        postureSource: "missing",
+        recommendedPosture: "ask_every_time",
+        unresolved: true,
+        blockers: expect.arrayContaining([
+          expect.stringContaining("Choose an approval posture in Builder or the brief"),
+        ]),
+      },
+    });
+  });
+
+  it("records the explicit approval posture when the brief chooses one", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          targets: [{ channel: "telegram", to: "123456789" }],
+        },
+      },
+    };
+    const requirements = buildRequirementSet({
+      brief: "Open the links on X on my behalf, but ask every time before acting.",
+      cfg,
+    });
+    const planning = buildRequirementPlannerResult({
+      requirements,
+      cfg,
+    });
+
+    const synced = synchronizeBuildSpec({
+      buildSpec: createBaseBuildSpec({
+        brief: requirements.brief,
+        status: planning.status,
+      }),
+      requirements,
+      planning,
+      questions: [],
+      cfg,
+    });
+
+    expect(synced.policy).toMatchObject({
+      approval: {
+        required: true,
+        routeStatus: "configured",
+        posture: "ask_every_time",
+        postureSource: "brief",
+        unresolved: false,
+        blockers: [],
+      },
+    });
+  });
+
+  it("records a builder-selected approval posture separately from the brief", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          targets: [{ channel: "telegram", to: "123456789" }],
+        },
+      },
+    };
+    const requirements = buildRequirementSet({
+      brief: "Open the links on X and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+      cfg,
+    });
+    const planning = buildRequirementPlannerResult({
+      requirements,
+      cfg,
+    });
+
+    const synced = synchronizeBuildSpec({
+      buildSpec: createBaseBuildSpec({
+        brief: requirements.brief,
+        status: planning.status,
+      }),
+      requirements,
+      planning,
+      questions: [],
+      cfg,
+    });
+
+    expect(synced.policy).toMatchObject({
+      summary: expect.stringContaining("Builder selected Ask Every Time"),
+      approval: {
+        required: true,
+        routeStatus: "configured",
+        posture: "ask_every_time",
+        postureSource: "builder",
+        unresolved: false,
+        blockers: [],
+      },
+    });
+  });
 });

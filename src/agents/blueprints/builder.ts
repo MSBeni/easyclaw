@@ -19,6 +19,7 @@ import {
   buildRequirementSet,
   type PlannedIntegrationInstance,
   runRequirementPlannerLiveVerification,
+  type RequirementApprovalPosture,
   type RequirementPlannerResult,
   type RequirementPlannerVerificationRun,
   type RequirementPlannerSelection,
@@ -1747,12 +1748,14 @@ function buildRuntimeGraphManagedSectionOverrides(params: {
 function withDraftPlanning(
   draft: AgentBlueprintBuilderDraft,
   planning: RequirementPlannerResult,
+  cfg?: OpenClawConfig,
 ): AgentBlueprintBuilderDraft {
   const buildSpec = synchronizeBuildSpec({
     buildSpec: draft.buildSpec,
     requirements: draft.requirements,
     planning,
     questions: draft.questions,
+    cfg,
   });
   return {
     ...draft,
@@ -1790,6 +1793,10 @@ function describeBuilderPlannerBlockers(draft: AgentBlueprintBuilderDraft): stri
   return blockers.join(" ");
 }
 
+function collectBuildSpecPolicyBlockers(buildSpec: Pick<BuildSpec, "policy">): string[] {
+  return buildSpec.policy?.approval.blockers.filter((value) => value.trim().length > 0) ?? [];
+}
+
 async function hydratePersistedPlanningState(
   planning: RequirementPlannerResult,
   env?: NodeJS.ProcessEnv,
@@ -1808,6 +1815,7 @@ async function hydratePersistedPlanningState(
 
 async function buildAgentBlueprintDraftInternal(params: {
   brief: string;
+  approvalPosture?: RequirementApprovalPosture;
   templateId?: string;
   modelId?: string;
   agentName?: string;
@@ -1824,6 +1832,7 @@ async function buildAgentBlueprintDraftInternal(params: {
   const capabilityRegistry = buildOpenClawCapabilityRegistry();
   const extractedRequirements = buildRequirementSet({
     brief,
+    approvalPosture: params.approvalPosture,
     cfg: params.cfg,
     registry: capabilityRegistry,
   });
@@ -1915,6 +1924,7 @@ async function buildAgentBlueprintDraftInternal(params: {
     requirements,
     planning,
     questions: uniqueQuestions,
+    cfg: params.cfg,
   });
   const runtimeGraph = buildRuntimeGraphDraftFromBuildSpec({
     buildSpec,
@@ -1961,6 +1971,7 @@ async function buildAgentBlueprintDraftInternal(params: {
 
 export function buildAgentBlueprintDraft(params: {
   brief: string;
+  approvalPosture?: RequirementApprovalPosture;
   templateId?: string;
   modelId?: string;
   agentName?: string;
@@ -1978,6 +1989,7 @@ function stripBundleFromDraft(
 
 export async function compileAgentBlueprintBuilderPlan(params: {
   brief: string;
+  approvalPosture?: RequirementApprovalPosture;
   templateId?: string;
   modelId?: string;
   agentName?: string;
@@ -1989,7 +2001,7 @@ export async function compileAgentBlueprintBuilderPlan(params: {
     cfg: params.cfg,
   });
   const planning = await hydratePersistedPlanningState(built.planning);
-  const draft = withDraftPlanning(built.draft, planning);
+  const draft = withDraftPlanning(built.draft, planning, params.cfg);
   const graphPlans = await compileRuntimeGraphPlans({
     graph: draft.runtimeGraph,
     cfg: params.cfg,
@@ -2017,6 +2029,7 @@ export async function compileAgentBlueprintBuilderPlan(params: {
 
 export async function applyAgentBlueprintBuilderPlan(params: {
   brief: string;
+  approvalPosture?: RequirementApprovalPosture;
   templateId?: string;
   modelId?: string;
   agentName?: string;
@@ -2033,7 +2046,14 @@ export async function applyAgentBlueprintBuilderPlan(params: {
     planning: built.planning,
     cfg,
   });
-  const draft = withDraftPlanning(built.draft, verification.planning);
+  const draft = withDraftPlanning(built.draft, verification.planning, cfg);
+  const policyBlockers = collectBuildSpecPolicyBlockers(draft.buildSpec);
+  if (
+    policyBlockers.length > 0 &&
+    (draft.plannerStatus === "unsafe_without_policy" || draft.plannerStatus === "ready")
+  ) {
+    throw new Error(`Builder safety policy is unresolved. ${policyBlockers.join(" ")}`.trim());
+  }
   if (draft.plannerStatus !== "ready") {
     const blockers = describeBuilderPlannerBlockers(draft);
     throw new Error(`Builder planner is ${draft.plannerStatus}. ${blockers}`.trim());
@@ -2110,6 +2130,7 @@ export async function applyAgentBlueprintBuilderPlan(params: {
 
 export async function verifyAgentBlueprintBuilderPlan(params: {
   brief: string;
+  approvalPosture?: RequirementApprovalPosture;
   templateId?: string;
   modelId?: string;
   agentName?: string;
@@ -2125,7 +2146,7 @@ export async function verifyAgentBlueprintBuilderPlan(params: {
     planning: built.planning,
     cfg,
   });
-  const draft = withDraftPlanning(built.draft, verificationResult.planning);
+  const draft = withDraftPlanning(built.draft, verificationResult.planning, cfg);
   const graphPlans = await compileRuntimeGraphPlans({
     graph: draft.runtimeGraph,
     cfg,

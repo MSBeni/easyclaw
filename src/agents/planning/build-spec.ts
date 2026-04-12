@@ -1,5 +1,6 @@
 import { Type, type Static } from "@sinclair/typebox";
-import { PLANNER_STATUSES } from "../capabilities/schema.js";
+import { REQUIREMENT_APPROVAL_POSTURES } from "../capabilities/requirements.js";
+import { PLANNER_STATUSES, RISK_CLASSES } from "../capabilities/schema.js";
 
 const BUILD_SPEC_TOPOLOGY_MODES = ["single-agent", "multi-agent", "swarm"] as const;
 const BUILD_SPEC_WORKSPACE_ARTIFACT_STATUSES = ["planned", "suggested", "generated"] as const;
@@ -48,6 +49,17 @@ const BUILD_SPEC_SETUP_ACTION_COMPLETION_KINDS = [
 ] as const;
 const BUILD_SPEC_PLANNER_KINDS = ["hybrid-deterministic", "model-backed-hybrid"] as const;
 const BUILD_SPEC_PLANNER_MODES = ["model-backed", "fallback-deterministic"] as const;
+const BUILD_SPEC_POLICY_APPROVAL_POSTURES = [
+  ...REQUIREMENT_APPROVAL_POSTURES,
+  "unresolved",
+] as const;
+const BUILD_SPEC_POLICY_APPROVAL_POSTURE_SOURCES = [
+  "brief",
+  "builder",
+  "defaulted",
+  "missing",
+] as const;
+const BUILD_SPEC_POLICY_ROUTE_STATUSES = ["not_required", "configured", "missing"] as const;
 
 function enumString<T extends readonly string[]>(values: T) {
   const enumLike = Object.fromEntries(values.map((value) => [value, value])) as {
@@ -265,6 +277,29 @@ const BuildSpecContextSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const BuildSpecPolicySchema = Type.Object(
+  {
+    highestRisk: enumString(RISK_CLASSES),
+    riskTiers: Type.Array(enumString(RISK_CLASSES)),
+    summary: Type.String(),
+    riskyContractIds: Type.Array(Type.String()),
+    riskyConnectorIds: Type.Array(Type.String()),
+    approval: Type.Object(
+      {
+        required: Type.Boolean(),
+        routeStatus: enumString(BUILD_SPEC_POLICY_ROUTE_STATUSES),
+        posture: enumString(BUILD_SPEC_POLICY_APPROVAL_POSTURES),
+        postureSource: enumString(BUILD_SPEC_POLICY_APPROVAL_POSTURE_SOURCES),
+        recommendedPosture: enumString(REQUIREMENT_APPROVAL_POSTURES),
+        unresolved: Type.Boolean(),
+        blockers: Type.Array(Type.String()),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const BuildSpecSchema = Type.Object(
   {
     version: Type.Literal(1),
@@ -279,6 +314,7 @@ export const BuildSpecSchema = Type.Object(
     graph: BuildSpecGraphSchema,
     integrations: Type.Array(BuildSpecIntegrationSchema),
     setupActions: Type.Array(BuildSpecSetupActionSchema),
+    policy: Type.Optional(BuildSpecPolicySchema),
     workspaceArtifacts: Type.Array(BuildSpecWorkspaceArtifactSchema),
     assumptions: Type.Array(Type.String()),
     questions: Type.Array(Type.String()),

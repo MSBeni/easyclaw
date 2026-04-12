@@ -1,4 +1,9 @@
 import { html, nothing } from "lit";
+import {
+  APPROVAL_POSTURES,
+  formatApprovalPostureLabel,
+  type ApprovalPosture,
+} from "../../../../src/agents/capabilities/approval-posture.js";
 import type { AppViewState } from "../app-view-state.ts";
 import {
   applyBuilderPlan,
@@ -482,6 +487,7 @@ function navigateToConfig(
     state.builderSetupResult = null;
     saveBuilderDraft({
       brief: state.builderBrief,
+      approvalPosture: state.builderApprovalPosture,
       templateId: state.builderTemplateId,
       modelId: state.builderModelId,
       agentName: state.builderAgentName,
@@ -543,6 +549,7 @@ function navigateToConfig(
 export type BuilderProps = {
   state: AppViewState;
   onSetBrief: (brief: string) => void;
+  onSetApprovalPosture: (posture: ApprovalPosture) => void;
   onSetTemplate: (templateId: string) => void;
   onSetModel: (modelId: string) => void;
   onSetAgentName: (agentName: string) => void;
@@ -891,6 +898,27 @@ export function renderBuilder(props: BuilderProps) {
                 </div>
               </section>
 
+              ${
+                draft.buildSpec.policy
+                  ? html`
+                      <section class="card">
+                        <div class="builder-header">
+                          <div class="card-title section-title">Safety &amp; Policy</div>
+                        </div>
+                        ${builderPolicyCard({
+                          policy: draft.buildSpec.policy,
+                          currentBuilderPosture: state.builderApprovalPosture || undefined,
+                          disabled: state.builderPlanLoading || state.builderVerifying,
+                          onChoosePosture: (posture) => {
+                            props.onSetApprovalPosture(posture);
+                            props.onPlan();
+                          },
+                        })}
+                      </section>
+                    `
+                  : nothing
+              }
+
               <section class="card">
                 <div class="builder-header">
                   <div class="card-title section-title">Integrations &amp; Setup</div>
@@ -1142,6 +1170,7 @@ function renderBuilderApplySection(
   const hasPendingBlockingSetupAction = draft.buildSpec.setupActions.some(
     (action) => (action.blocking ?? false) && action.status !== "completed",
   );
+  const policyReady = isBuilderPolicyReady(draft);
   return html`
     <section class="card" style="padding:24px;">
       ${builderPreApplyChecklist(state, draft, planStatus, workspacePreviews, graphPlans)}
@@ -1149,13 +1178,13 @@ function renderBuilderApplySection(
       <button
         type="button"
         class="btn primary"
-        ?disabled=${!canApply || hasPendingBlockingSetupAction}
+        ?disabled=${!canApply || hasPendingBlockingSetupAction || !policyReady}
         @click=${props.onConfirmApply}
       >
         Apply Builder Plan
       </button>
       ${
-        canApply && !hasPendingBlockingSetupAction
+        canApply && !hasPendingBlockingSetupAction && policyReady
           ? html`
               <div class="card-sub" style="margin-top: 8px">Creates the agent from the inferred blueprint.</div>
             `
@@ -1165,11 +1194,15 @@ function renderBuilderApplySection(
                   Finish the pending setup actions and rerun verification before apply.
                 </div>
               `
-            : html`
-                <div class="card-sub" style="margin-top: 8px">
-                  Resolve planner gaps or blueprint issues before apply.
-                </div>
-              `
+            : !policyReady
+              ? html`
+                  <div class="card-sub" style="margin-top: 8px">Resolve the safety policy blockers before apply.</div>
+                `
+              : html`
+                  <div class="card-sub" style="margin-top: 8px">
+                    Resolve planner gaps or blueprint issues before apply.
+                  </div>
+                `
       }
       </div>
     </section>
@@ -1525,6 +1558,137 @@ function builderWorkspacePreviewList(
                   </div>
                 `,
               )}
+            `
+          : nothing
+      }
+    </div>
+  `;
+}
+
+function builderPolicyCard(params: {
+  policy: NonNullable<NonNullable<AppViewState["builderPlan"]>["draft"]["buildSpec"]["policy"]>;
+  currentBuilderPosture?: ApprovalPosture;
+  disabled: boolean;
+  onChoosePosture: (posture: ApprovalPosture) => void;
+}) {
+  const { policy } = params;
+  const selectedPosture =
+    params.currentBuilderPosture ??
+    (policy.approval.posture === "unresolved" ? undefined : policy.approval.posture);
+  return html`
+    <div class="builder-grid builder-grid--2col">
+      <div>
+        <div class="label" style="margin-bottom:8px;">Risk Review</div>
+        <div class="tpl-note">
+          Highest risk:
+          <span class="tpl-pill ${policyRiskPillClass(policy.highestRisk)}">
+            ${formatRiskClass(policy.highestRisk)}
+          </span>
+        </div>
+        <div class="tpl-note">${policy.summary}</div>
+        <div class="tpl-note">
+          Risk tiers:
+          ${policy.riskTiers.map(
+            (tier) => html`
+              <span class="tpl-pill ${policyRiskPillClass(tier)}" style="margin-left:8px;">
+                ${formatRiskClass(tier)}
+              </span>
+            `,
+          )}
+        </div>
+        ${
+          policy.riskyContractIds.length > 0
+            ? html`
+                <div class="tpl-note">
+                  Risky contracts:
+                  <span class="mono">${policy.riskyContractIds.slice(0, 4).join(", ")}</span>
+                </div>
+              `
+            : nothing
+        }
+        ${
+          policy.riskyConnectorIds.length > 0
+            ? html`
+                <div class="tpl-note">
+                  Risky connectors:
+                  <span class="mono">${policy.riskyConnectorIds.slice(0, 4).join(", ")}</span>
+                </div>
+              `
+            : nothing
+        }
+      </div>
+      <div>
+        <div class="label" style="margin-bottom:8px;">Approval Posture</div>
+        <div class="tpl-note">
+          Approval route:
+          <span class="tpl-pill ${policyRoutePillClass(policy.approval.routeStatus)}">
+            ${formatPolicyRouteStatus(policy.approval.routeStatus)}
+          </span>
+        </div>
+        <div class="tpl-note">
+          Approval posture:
+          <span class="tpl-pill ${policyApprovalPillClass(policy.approval.posture)}">
+            ${formatApprovalPosture(policy.approval.posture)}
+          </span>
+        </div>
+        <div class="tpl-note">
+          Posture source:
+          <span class="tpl-pill tpl-pill--muted">
+            ${formatPolicyApprovalPostureSource(policy.approval.postureSource)}
+          </span>
+        </div>
+        <div class="tpl-note">
+          Recommended posture:
+          <span class="tpl-pill tpl-pill--muted">
+            ${formatApprovalPosture(policy.approval.recommendedPosture)}
+          </span>
+        </div>
+        <div class="card-sub" style="margin-top:8px;">
+          Supported postures: Always Auto, Ask Once, Ask Every Time, Draft Only, Never.
+        </div>
+        ${
+          policy.approval.required
+            ? html`
+                <div class="label" style="margin:12px 0 8px;">Choose in Builder</div>
+                <div class="builder-actions__secondary">
+                  ${APPROVAL_POSTURES.map((posture) => {
+                    const selected = selectedPosture === posture;
+                    return html`
+                      <button
+                        type="button"
+                        class=${selected ? "btn btn--sm primary" : "btn btn--sm"}
+                        ?disabled=${params.disabled}
+                        @click=${() => params.onChoosePosture(posture)}
+                      >
+                        Use ${formatApprovalPostureLabel(posture)}
+                      </button>
+                    `;
+                  })}
+                </div>
+                <div class="card-sub" style="margin-top:8px;">
+                  Builder keeps this posture choice across plan, verify, apply, and refresh.
+                </div>
+              `
+            : nothing
+        }
+        ${
+          policy.approval.postureSource === "missing"
+            ? html`
+                <div class="card-sub" style="margin-top: 8px">
+                  Builder still needs an explicit posture choice before risky actions can be activated.
+                </div>
+              `
+            : nothing
+        }
+      </div>
+      ${
+        policy.approval.blockers.length > 0
+          ? html`
+              <div style="grid-column:1 / -1;">
+                ${policy.approval.blockers.map(
+                  (blocker) => html`<div class="callout danger">${blocker}</div>`,
+                )}
+              </div>
             `
           : nothing
       }
@@ -1936,6 +2100,8 @@ function builderPreApplyChecklist(
   const pendingWorkspaceArtifacts = draft.buildSpec.workspaceArtifacts.filter(
     (artifact) => !generatedArtifactNames.has(artifact.fileName),
   ).length;
+  const policyReady = isBuilderPolicyReady(draft);
+  const policy = draft.buildSpec.policy;
 
   const items = [
     {
@@ -1953,6 +2119,15 @@ function builderPreApplyChecklist(
         graphPlans.length > 0
           ? `${readyGraphPlans} node plan${readyGraphPlans === 1 ? "" : "s"} ready for activation review.`
           : `Graph topology is visible in Builder, but node-specific runtime plans are not generated yet.`,
+    },
+    {
+      label: "Safety and action policy",
+      status: policyReady ? "ready" : "blocked",
+      detail: policy
+        ? `${policy.summary}${policy.approval.blockers.length > 0 ? ` ${policy.approval.blockers.join(" ")}` : ""}`
+        : draft.plannerStatus === "unsafe_without_policy"
+          ? "Builder still needs policy choices before apply."
+          : "No additional safety policy blockers were detected.",
     },
     {
       label: "Workspace authoring review",
@@ -2000,6 +2175,86 @@ function builderChecklistPillClass(status: "ready" | "pending" | "blocked") {
     return "tpl-pill--muted";
   }
   return "tpl-pill--error";
+}
+
+function isBuilderPolicyReady(draft: NonNullable<AppViewState["builderPlan"]>["draft"]) {
+  if (draft.plannerStatus === "unsafe_without_policy") {
+    return false;
+  }
+  return !(draft.buildSpec.policy?.approval.unresolved ?? false);
+}
+
+function formatRiskClass(value: string): string {
+  const labels: Record<string, string> = {
+    read_only: "Read Only",
+    communicative: "Communication",
+    operator: "Operator",
+    externally_mutating: "Externally Mutating",
+    config_mutating: "Config Mutating",
+  };
+  return labels[value] ?? value;
+}
+
+function formatApprovalPosture(value: string): string {
+  const labels: Record<string, string> = {
+    always_auto: "Always Auto",
+    ask_once: "Ask Once",
+    ask_every_time: "Ask Every Time",
+    draft_only: "Draft Only",
+    never: "Never",
+    unresolved: "Unresolved",
+  };
+  return labels[value] ?? value;
+}
+
+function formatPolicyRouteStatus(value: string): string {
+  const labels: Record<string, string> = {
+    not_required: "Not Required",
+    configured: "Configured",
+    missing: "Missing",
+  };
+  return labels[value] ?? value;
+}
+
+function formatPolicyApprovalPostureSource(value: string): string {
+  const labels: Record<string, string> = {
+    brief: "Brief",
+    builder: "Builder",
+    defaulted: "Defaulted",
+    missing: "Missing",
+  };
+  return labels[value] ?? value;
+}
+
+function policyRiskPillClass(value: string) {
+  switch (value) {
+    case "read_only":
+      return "tpl-pill--ok";
+    case "communicative":
+      return "tpl-pill--muted";
+    case "operator":
+      return "tpl-pill--warn";
+    case "externally_mutating":
+    case "config_mutating":
+      return "tpl-pill--error";
+    default:
+      return "tpl-pill--muted";
+  }
+}
+
+function policyApprovalPillClass(value: string) {
+  return value === "unresolved" ? "tpl-pill--error" : "tpl-pill--muted";
+}
+
+function policyRoutePillClass(value: string) {
+  switch (value) {
+    case "configured":
+      return "tpl-pill--ok";
+    case "missing":
+      return "tpl-pill--error";
+    default:
+      return "tpl-pill--muted";
+  }
 }
 
 function builderIntegrationList(

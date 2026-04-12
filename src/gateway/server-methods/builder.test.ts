@@ -609,6 +609,29 @@ describe("builder gateway handlers", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("forwards builder approval posture to planning", async () => {
+    mocks.compileAgentBlueprintBuilderPlan.mockResolvedValue({
+      draft: {
+        templateId: "research-agent",
+      },
+      plan: {
+        status: "ready",
+      },
+    });
+
+    const { invoke } = createInvokeParams("agents.builder.plan", {
+      brief: "Open links on X and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+    });
+    await invoke();
+
+    expect(mocks.compileAgentBlueprintBuilderPlan).toHaveBeenCalledWith({
+      brief: "Open links on X and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+      cfg: { agents: { default: "main" } },
+    });
+  });
+
   it("forwards an explicit modelId to builder planning", async () => {
     mocks.compileAgentBlueprintBuilderPlan.mockResolvedValue({
       draft: {
@@ -990,6 +1013,34 @@ describe("builder gateway handlers", () => {
         }),
       }),
     );
+  });
+
+  it("forwards builder approval posture to apply", async () => {
+    mocks.applyAgentBlueprintBuilderPlan.mockResolvedValue({
+      draft: {
+        templateId: "research-agent",
+      },
+      result: {
+        status: "applied",
+        agent: {
+          agentId: "research-agent",
+          name: "Research Agent",
+        },
+      },
+    });
+
+    const { context, invoke } = createInvokeParams("agents.builder.apply", {
+      brief: "Open links on X and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+    });
+    await invoke();
+
+    expect(mocks.applyAgentBlueprintBuilderPlan).toHaveBeenCalledWith({
+      brief: "Open links on X and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+      cfg: { agents: { default: "main" } },
+      cron: context.cron,
+    });
   });
 
   it("forwards edited managed workspace docs when applying a builder plan", async () => {
@@ -3139,5 +3190,37 @@ describe("builder gateway handlers", () => {
         }),
       }),
     );
+  });
+
+  it("forwards builder approval posture to verify", async () => {
+    mocks.verifyAgentBlueprintBuilderPlan.mockResolvedValue({
+      draft: {
+        templateId: "research-agent",
+      },
+      verification: {
+        fingerprint: "approval-posture",
+        checkedAt: "2026-03-18T12:00:00.000Z",
+        passedCount: 1,
+        failedCount: 0,
+        blockedCount: 0,
+        unresolvedCount: 0,
+        results: [],
+      },
+      plan: {
+        status: "ready",
+      },
+    });
+
+    const { invoke } = createInvokeParams("agents.builder.verify", {
+      brief: "Open links on X and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+    });
+    await invoke();
+
+    expect(mocks.verifyAgentBlueprintBuilderPlan).toHaveBeenCalledWith({
+      brief: "Open links on X and comment on my behalf.",
+      approvalPosture: "ask_every_time",
+      cfg: { agents: { default: "main" } },
+    });
   });
 });

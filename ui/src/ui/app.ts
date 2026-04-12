@@ -270,6 +270,7 @@ export class OpenClawApp extends LitElement {
   @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
     "overview";
   @state() builderBrief = this.bootBuilderDraft.brief;
+  @state() builderApprovalPosture = this.bootBuilderDraft.approvalPosture;
   @state() builderTemplateId = this.bootBuilderDraft.templateId;
   @state() builderModelId = this.bootBuilderDraft.modelId;
   @state() builderAgentName = this.bootBuilderDraft.agentName;
