@@ -92,7 +92,11 @@ export default defineConfig([
     entry: "src/index.ts",
   }),
   nodeBuildConfig({
+    // The CLI and gateway bootstrap through dist/entry.js, so keep its shared
+    // chunk names stable across rebuilds to avoid breaking long-lived gateway
+    // processes after a clean `pnpm build` rotates hashed filenames.
     entry: "src/entry.ts",
+    hash: false,
   }),
   nodeBuildConfig({
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
@@ -109,6 +113,11 @@ export default defineConfig([
       "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
       "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
       "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
+      "agents/pi-tools.before-tool-call.runtime": "src/agents/pi-tools.before-tool-call.runtime.ts",
+      "plugins/runtime/runtime-whatsapp-outbound.runtime":
+        "src/plugins/runtime/runtime-whatsapp-outbound.runtime.ts",
+      "plugins/runtime/runtime-whatsapp-login.runtime":
+        "src/plugins/runtime/runtime-whatsapp-login.runtime.ts",
       "telegram/audit": "extensions/telegram/src/audit.ts",
       "telegram/token": "extensions/telegram/src/token.ts",
       "line/accounts": "src/line/accounts.ts",
