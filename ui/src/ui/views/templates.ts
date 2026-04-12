@@ -677,7 +677,7 @@ function renderApplySection(
         ${
           applyResult.automation.jobs.length > 0
             ? html`
-              <div class="label" style="margin-top:12px;">Cron Jobs</div>
+              <div class="label" style="margin-top:12px;">Scheduled Tasks</div>
               ${applyResult.automation.jobs.map(
                 (j) => html`
                   <div class="tpl-plan-file">
@@ -734,8 +734,8 @@ function renderApplySection(
         <div class="card-title" style="font-size:14px;">Confirm Apply</div>
         <div class="card-sub" style="margin-bottom:12px;">
           This will create or update the agent <strong>${entry.displayName}</strong>,
-          write workspace files, configure routing bindings, and set up cron jobs.
-          Existing agent config will be modified.
+          write files, configure messaging, and set up scheduled tasks.
+          Existing agent settings will be updated.
         </div>
         <div style="display:flex; gap:8px;">
           <button

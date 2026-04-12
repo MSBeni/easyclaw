@@ -60,7 +60,9 @@ export function renderInstances(props: InstancesProps) {
         ${
           props.entries.length === 0
             ? html`
-                <div class="muted">No instances reported yet.</div>
+                <div class="muted">
+                  No connected devices yet. Devices will appear here when they connect to your gateway.
+                </div>
               `
             : props.entries.map((entry) => renderEntry(entry, masked))
         }

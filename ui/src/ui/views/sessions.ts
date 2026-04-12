@@ -48,13 +48,13 @@ export type SessionsProps = {
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const BINARY_THINK_LEVELS = ["", "off", "on"] as const;
 const VERBOSE_LEVELS = [
-  { value: "", label: "inherit" },
-  { value: "off", label: "off (explicit)" },
+  { value: "", label: "default" },
+  { value: "off", label: "off" },
   { value: "on", label: "on" },
-  { value: "full", label: "full" },
+  { value: "full", label: "detailed" },
 ] as const;
 const FAST_LEVELS = [
-  { value: "", label: "inherit" },
+  { value: "", label: "default" },
   { value: "on", label: "on" },
   { value: "off", label: "off" },
 ] as const;
@@ -311,10 +311,10 @@ export function renderSessions(props: SessionsProps) {
                 ${sortHeader("kind", "Kind")}
                 ${sortHeader("updated", "Updated")}
                 ${sortHeader("tokens", "Tokens")}
-                <th>Thinking</th>
-                <th>Fast</th>
-                <th>Verbose</th>
-                <th>Reasoning</th>
+                <th title="How much the AI reasons before responding">Thinking</th>
+                <th title="Speed mode \u2014 faster responses, less detail">Fast</th>
+                <th title="How much detail the AI includes in responses">Verbose</th>
+                <th title="Whether the AI shows its step-by-step reasoning">Reasoning</th>
                 <th style="width: 60px;"></th>
               </tr>
             </thead>
@@ -469,7 +469,7 @@ function renderRow(
           ${thinkLevels.map(
             (level) =>
               html`<option value=${level} ?selected=${thinking === level}>
-                ${level || "inherit"}
+                ${level || "default"}
               </option>`,
           )}
         </select>
@@ -520,7 +520,7 @@ function renderRow(
           ${reasoningLevels.map(
             (level) =>
               html`<option value=${level} ?selected=${reasoning === level}>
-                ${level || "inherit"}
+                ${level || "default"}
               </option>`,
           )}
         </select>

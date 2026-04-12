@@ -80,10 +80,13 @@ export function renderOverview(props: OverviewProps) {
     return html`
       <div class="muted" style="margin-top: 8px">
         ${t("overview.pairing.hint")}
-        <div style="margin-top: 6px">
-          <span class="mono">openclaw devices list</span><br />
-          <span class="mono">openclaw devices approve &lt;requestId&gt;</span>
-        </div>
+        <details style="margin-top: 6px">
+          <summary style="cursor: pointer; font-size: 12px; color: var(--accent);">Show terminal commands</summary>
+          <div style="margin-top: 4px">
+            <span class="mono">openclaw devices list</span><br />
+            <span class="mono">openclaw devices approve &lt;requestId&gt;</span>
+          </div>
+        </details>
         <div style="margin-top: 6px; font-size: 12px;">
           ${t("overview.pairing.mobileHint")}
         </div>
@@ -116,10 +119,13 @@ export function renderOverview(props: OverviewProps) {
       return html`
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
-          <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
-          </div>
+          <details style="margin-top: 6px">
+            <summary style="cursor: pointer; font-size: 12px; color: var(--accent);">Show terminal commands</summary>
+            <div style="margin-top: 4px">
+              <span class="mono">openclaw dashboard --no-open</span> &rarr; get tokenized URL<br />
+              <span class="mono">openclaw doctor --generate-gateway-token</span> &rarr; generate token
+            </div>
+          </details>
           <div style="margin-top: 6px">
             <a
               class="session-link"

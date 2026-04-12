@@ -103,7 +103,7 @@ export async function deleteSession(state: SessionsState, key: string): Promise<
     return false;
   }
   const confirmed = window.confirm(
-    `Delete session "${key}"?\n\nDeletes the session entry and archives its transcript.`,
+    `Delete session "${key}"?\n\nThis will remove the session and its conversation history. This cannot be undone.`,
   );
   if (!confirmed) {
     return false;

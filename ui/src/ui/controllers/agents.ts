@@ -112,15 +112,14 @@ export async function deleteAgentWithFullCleanup(
     typeof globalThis.confirm === "function" ? globalThis.confirm.bind(globalThis) : () => true;
   const confirmed = confirmDelete(
     [
-      `Delete agent "${normalizedAgentId}" with full cleanup?`,
+      `Delete agent "${normalizedAgentId}"?`,
       "",
-      "This will remove:",
-      "- agent config, bindings, workspace, and session transcripts",
-      "- all cron jobs targeting this agent",
+      "This will permanently remove:",
+      "\u2022 Agent settings, files, and conversation history",
+      "\u2022 All scheduled tasks for this agent" +
+        (relatedCronJobs > 0 ? ` (${relatedCronJobs} found)` : ""),
       "",
-      `Currently loaded cron jobs targeting this agent: ${relatedCronJobs}`,
-      "",
-      "Global integrations, channels, and provider auth remain unchanged.",
+      "Your messaging channels, AI provider keys, and other integrations will not be affected.",
     ].join("\n"),
   );
   if (!confirmed) {

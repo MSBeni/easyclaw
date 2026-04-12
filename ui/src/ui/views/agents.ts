@@ -380,7 +380,7 @@ function renderAgentTabs(
     { id: "tools", label: "Tools" },
     { id: "skills", label: "Skills" },
     { id: "channels", label: "Channels" },
-    { id: "cron", label: "Cron Jobs" },
+    { id: "cron", label: "Scheduled Tasks" },
   ];
   return html`
     <div class="agent-tabs">

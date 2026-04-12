@@ -148,8 +148,8 @@ export function renderAgentTools(params: {
         <div>
           <div class="card-title">Tool Access</div>
           <div class="card-sub">
-            Profile + per-tool overrides for this agent.
-            <span class="mono">${enabledCount}/${toolIds.length}</span> enabled.
+            Manage which tools this agent can use.
+            ${enabledCount} of ${toolIds.length} enabled.
           </div>
         </div>
         <div class="row" style="gap: 8px;">
@@ -176,7 +176,7 @@ export function renderAgentTools(params: {
         !params.configForm
           ? html`
               <div class="callout info" style="margin-top: 12px">
-                Load the gateway config to adjust tool profiles.
+                Click Reload Config to manage tool access settings.
               </div>
             `
           : nothing
@@ -185,7 +185,8 @@ export function renderAgentTools(params: {
         hasAgentAllow
           ? html`
               <div class="callout info" style="margin-top: 12px">
-                This agent is using an explicit allowlist in config. Tool overrides are managed in the Config tab.
+                This agent has custom tool permissions set in the configuration. Changes can be made in the Config
+                tab.
               </div>
             `
           : nothing
@@ -194,7 +195,8 @@ export function renderAgentTools(params: {
         hasGlobalAllow
           ? html`
               <div class="callout info" style="margin-top: 12px">
-                Global tools.allow is set. Agent overrides cannot enable tools that are globally blocked.
+                Some tools are restricted at the system level. This agent cannot enable tools that are globally
+                disabled.
               </div>
             `
           : nothing
@@ -350,7 +352,7 @@ export function renderAgentSkills(params: {
         <div>
           <div class="card-title">Skills</div>
           <div class="card-sub">
-            Per-agent skill allowlist and workspace skills.
+            Manage which skills this agent can use.
             ${
               totalCount > 0
                 ? html`<span class="mono">${enabledCount}/${totalCount}</span>`
@@ -399,7 +401,7 @@ export function renderAgentSkills(params: {
         !params.configForm
           ? html`
               <div class="callout info" style="margin-top: 12px">
-                Load the gateway config to set per-agent skills.
+                Click Reload Config to manage skill settings for this agent.
               </div>
             `
           : nothing
@@ -407,11 +409,13 @@ export function renderAgentSkills(params: {
       ${
         usingAllowlist
           ? html`
-              <div class="callout info" style="margin-top: 12px">This agent uses a custom skill allowlist.</div>
+              <div class="callout info" style="margin-top: 12px">
+                This agent has a custom set of enabled skills.
+              </div>
             `
           : html`
               <div class="callout info" style="margin-top: 12px">
-                All skills are enabled. Disabling any skill will create a per-agent allowlist.
+                All skills are currently enabled. Disabling a skill will save your preference for this agent.
               </div>
             `
       }
@@ -419,7 +423,7 @@ export function renderAgentSkills(params: {
         !reportReady && !params.loading
           ? html`
               <div class="callout info" style="margin-top: 12px">
-                Load skills for this agent to view workspace-specific entries.
+                Click Refresh to load skills available for this agent.
               </div>
             `
           : nothing

@@ -201,11 +201,11 @@ describe("renderAgents", () => {
     await Promise.resolve();
 
     expect(container.textContent).toContain(
-      "No jobs assigned. Create one from Cron Jobs, then run it on demand.",
+      "No scheduled tasks yet. Create one in Scheduled Tasks to automate this agent.",
     );
 
     const openCronButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Open Cron Jobs",
+      (button) => button.textContent?.trim() === "Open Scheduled Tasks",
     );
     expect(openCronButton).toBeTruthy();
 

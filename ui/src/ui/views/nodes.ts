@@ -56,8 +56,8 @@ export function renderNodes(props: NodesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Nodes</div>
-          <div class="card-sub">Paired devices and live links.</div>
+          <div class="card-title">Devices</div>
+          <div class="card-sub">Your paired devices and remote connections.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
@@ -67,7 +67,7 @@ export function renderNodes(props: NodesProps) {
         ${
           props.nodes.length === 0
             ? html`
-                <div class="muted">No nodes found.</div>
+                <div class="muted">No devices connected yet. Pair a device to get started.</div>
               `
             : props.nodes.map((n) => renderNode(n))
         }
@@ -85,7 +85,7 @@ function renderDevices(props: NodesProps) {
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Devices</div>
-          <div class="card-sub">Pairing requests + role tokens.</div>
+          <div class="card-sub">Pending pairing requests and approved devices.</div>
         </div>
         <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
           ${props.devicesLoading ? "Loading…" : "Refresh"}
@@ -116,7 +116,9 @@ function renderDevices(props: NodesProps) {
         ${
           pending.length === 0 && paired.length === 0
             ? html`
-                <div class="muted">No paired devices.</div>
+                <div class="muted">
+                  No paired devices yet. Devices will appear here after you approve a pairing request.
+                </div>
               `
             : nothing
         }

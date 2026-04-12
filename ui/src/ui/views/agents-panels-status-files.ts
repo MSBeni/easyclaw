@@ -152,7 +152,7 @@ export function renderAgentChannels(params: {
         <div class="row" style="justify-content: space-between;">
           <div>
             <div class="card-title">Channels</div>
-            <div class="card-sub">Gateway-wide channel status snapshot.</div>
+            <div class="card-sub">Connection status for all messaging channels.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
             ${params.loading ? "Refreshing…" : "Refresh"}
@@ -258,7 +258,7 @@ export function renderAgentCron(params: {
         <div class="row" style="justify-content: space-between;">
           <div>
             <div class="card-title">Scheduler</div>
-            <div class="card-sub">Gateway cron status.</div>
+            <div class="card-sub">Scheduled task status for this agent.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
             ${params.loading ? "Refreshing…" : "Refresh"}
@@ -293,18 +293,17 @@ export function renderAgentCron(params: {
       </section>
     </section>
     <section class="card">
-      <div class="card-title">Agent Cron Jobs</div>
-      <div class="card-sub">Scheduled jobs targeting this agent.</div>
+      <div class="card-title">Scheduled Tasks</div>
+      <div class="card-sub">Tasks that run automatically for this agent.</div>
       ${
         jobs.length === 0
           ? html`
               <div class="muted" style="margin-top: 16px">
-                No jobs assigned. Create one from Cron Jobs, then run it on demand. Builder plans
-                are previews until you click Apply Builder Plan.
+                No scheduled tasks yet. Create one in Scheduled Tasks to automate this agent.
               </div>
               <div class="row" style="margin-top: 10px; gap: 8px;">
                 <button class="btn btn--sm" type="button" @click=${params.onOpenCronTab}>
-                  Open Cron Jobs
+                  Open Scheduled Tasks
                 </button>
                 <button
                   class="btn btn--sm"
@@ -472,7 +471,7 @@ export function renderAgentFiles(params: {
                             activeEntry.missing
                               ? html`
                                   <div class="callout info" style="margin-top: 10px">
-                                    This file is missing. Saving will create it in the agent workspace.
+                                    This is a new file. Click Save to create it.
                                   </div>
                                 `
                               : nothing
