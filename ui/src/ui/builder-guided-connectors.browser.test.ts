@@ -136,11 +136,175 @@ function findFieldByLabel<T extends HTMLInputElement | HTMLTextAreaElement | HTM
   return null;
 }
 
+function setLabeledFieldValues(app: OpenClawApp, values: Record<string, string>): boolean {
+  for (const [label, value] of Object.entries(values)) {
+    const field = findFieldByLabel<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+      app,
+      label,
+    );
+    expect(field).not.toBeNull();
+    if (!field) {
+      return false;
+    }
+    changeValue(field, value);
+  }
+  return true;
+}
+
 function attachMockClient(app: OpenClawApp, request: ReturnType<typeof vi.fn>) {
   app.client = {
     request,
     stop: vi.fn(),
   } as unknown as OpenClawApp["client"];
+}
+
+function nextConfigStateFromSetParams(params: unknown): Record<string, unknown> {
+  const record =
+    params && typeof params === "object" && !Array.isArray(params)
+      ? (params as Record<string, unknown>)
+      : {};
+  const raw = typeof record.raw === "string" ? record.raw : "{}";
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
+async function exerciseRetryableGuidedVerificationFlow(params: {
+  planFactory: (setupComplete: boolean) => BuilderPlanResult;
+  brief: string;
+  initialConfigState: Record<string, unknown>;
+  openSetupLabel: string;
+  openSetupIndex?: number;
+  verifyButtonLabel: string;
+  retryButtonLabel?: string;
+  actionId: string;
+  connectorId: string;
+  initialFields: Record<string, string>;
+  repairedFields: Record<string, string>;
+  expectedVisibleText?: string;
+  failureMessage: string;
+  failureResumeLabel: string;
+  failureResumeDetail: string;
+  failureSummary?: Record<string, unknown>;
+  successMessage: string;
+  successUpdatedRefs: string[];
+  successSummary?: Record<string, unknown>;
+  fingerprint: string;
+}) {
+  const app = mountApp("/builder");
+  await settle(app, 3);
+
+  let setupAttempts = 0;
+  let verifyRuns = 0;
+  let configState = params.initialConfigState;
+
+  const request = vi.fn(async (method: string, rpcParams: unknown) => {
+    switch (method) {
+      case "agents.builder.plan":
+        return params.planFactory(false);
+      case "config.get":
+        return createConfigSnapshot(configState, `${params.connectorId}-retry-${verifyRuns}`);
+      case "config.set":
+        configState = nextConfigStateFromSetParams(rpcParams);
+        return { ok: true };
+      case "agents.builder.setup.run":
+        setupAttempts += 1;
+        if (setupAttempts === 1) {
+          return {
+            actionId: params.actionId,
+            connectorId: params.connectorId,
+            status: "needs_setup" as const,
+            message: params.failureMessage,
+            updatedRefs: [],
+            summary: params.failureSummary,
+            resume: {
+              actionId: params.actionId,
+              connectorId: params.connectorId,
+              label: params.failureResumeLabel,
+              detail: params.failureResumeDetail,
+              inputs: {},
+            },
+          };
+        }
+        return {
+          actionId: params.actionId,
+          connectorId: params.connectorId,
+          status: "configured" as const,
+          message: params.successMessage,
+          updatedRefs: params.successUpdatedRefs,
+          summary: params.successSummary,
+        };
+      case "agents.builder.verify":
+        verifyRuns += 1;
+        return createVerifyResult(params.planFactory(true), params.fingerprint);
+      default:
+        throw new Error(`Unhandled guided retry method: ${method}`);
+    }
+  });
+
+  attachMockClient(app, request);
+
+  const briefInput = await waitForElement<HTMLTextAreaElement>(
+    app,
+    ".builder-brief-field textarea",
+    {
+      frames: 12,
+    },
+  );
+  expect(briefInput).not.toBeNull();
+  if (!briefInput) {
+    return;
+  }
+  changeValue(briefInput, params.brief);
+  await settle(app);
+
+  clickButton(app, "Build Plan", { exact: true });
+  await settle(app, 4);
+
+  clickButton(app, params.openSetupLabel, { index: params.openSetupIndex ?? 1 });
+  await settle(app, 3);
+
+  if (params.expectedVisibleText) {
+    expect(app.textContent).toContain(params.expectedVisibleText);
+  }
+
+  expect(setLabeledFieldValues(app, params.initialFields)).toBe(true);
+  await settle(app);
+
+  clickButton(app, "Save", { exact: true });
+  await settle(app, 4);
+
+  clickButton(app, params.verifyButtonLabel, { exact: true });
+  await settle(app, 4);
+
+  expect(app.builderSetupResult).toEqual(
+    expect.objectContaining({
+      actionId: params.actionId,
+      connectorId: params.connectorId,
+      status: "needs_setup",
+    }),
+  );
+  expect(app.builderVerifyResult).toBeNull();
+  expect(app.textContent).toContain(params.failureMessage);
+  expect(app.textContent).toContain(params.failureResumeLabel);
+  expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+
+  expect(setLabeledFieldValues(app, params.repairedFields)).toBe(true);
+  await settle(app);
+
+  clickButton(app, "Save", { exact: true });
+  await settle(app, 4);
+
+  clickButton(app, params.retryButtonLabel ?? params.verifyButtonLabel, { exact: true });
+  await settle(app, 4);
+
+  expect(app.builderSetupResult).toEqual(
+    expect.objectContaining({
+      actionId: params.actionId,
+      connectorId: params.connectorId,
+      status: "configured",
+    }),
+  );
+  expect(app.builderVerifyResult?.verification.fingerprint).toBe(params.fingerprint);
+  expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(false);
 }
 
 function createSingleConnectorPlanResult(params: {
@@ -572,6 +736,564 @@ function createTelegramPlanResult(setupComplete: boolean): BuilderPlanResult {
     verificationProbeLabel: "Telegram delivery readiness",
     blockedVerificationDetail: "Telegram still needs a verified default delivery target.",
     passedVerificationDetail: "Telegram delivery is configured and ready.",
+  });
+}
+
+function createSlackVerifyPlanResult(setupComplete: boolean): BuilderPlanResult {
+  return createSingleConnectorPlanResult({
+    brief: "Send my daily ops summary to Slack.",
+    displayName: "Ops Summary Agent",
+    templateId: "daily-briefing",
+    primaryGoal: "briefing",
+    executionMode: "scheduled",
+    connectorId: "channel:slack",
+    connectorLabel: "Slack",
+    connectorKind: "channel",
+    connectorSourceKind: "core_channel_section",
+    docsPath: "/channels/slack",
+    sourceChannels: [],
+    ingressChannels: ["slack"],
+    readyIntegrationCount: setupComplete ? 1 : 0,
+    unresolvedIntegrationCount: setupComplete ? 0 : 1,
+    integrationStatus: setupComplete ? "verified" : "configured",
+    integrationIssues: setupComplete ? [] : ["Slack still needs verified credentials."],
+    configRefs: ["channels.slack"],
+    authRefs: ["channels.slack"],
+    requiresConfig: true,
+    requiresAuth: true,
+    onboarding: false,
+    selectionLabel: "Slack",
+    detailLabel: "Slack credentials verification",
+    setupActions: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:slack:verify-credentials",
+            connectorId: "channel:slack",
+            connectorLabel: "Slack",
+            title: "Verify Slack credentials",
+            detail: "Confirm the saved Slack tokens before delivery is enabled.",
+            status: "pending",
+            kind: "verify",
+            source: "verification",
+            blocking: true,
+            refs: ["channels.slack"],
+            requiredFields: [
+              {
+                key: "bot-token",
+                label: "Bot token",
+                kind: "auth",
+                required: true,
+                inputKey: "slack.botToken",
+                configPath: "channels.slack.botToken",
+                inputType: "secret",
+              },
+              {
+                key: "app-token",
+                label: "App token",
+                kind: "auth",
+                required: false,
+                inputKey: "slack.appToken",
+                configPath: "channels.slack.appToken",
+                inputType: "secret",
+              },
+            ],
+            workflowRoles: ["Primary Worker"],
+            uiSchema: {
+              variant: "guided-setup",
+              section: "channels.slack",
+              fieldKeys: ["bot-token", "app-token"],
+            },
+            completionSignal: {
+              kind: "verification",
+              target: "channel:slack:builder-check",
+              detail: "Pass Slack credential readiness before apply is allowed.",
+            },
+          },
+        ],
+    setupTasks: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:slack:verify",
+            connectorId: "channel:slack",
+            connectorLabel: "Slack",
+            kind: "verify",
+            status: "pending",
+            title: "Verify Slack credentials",
+            detail: "Check the Slack tokens before enabling delivery.",
+            refs: ["channels.slack"],
+          },
+        ],
+    verificationProbeLabel: "Slack credential readiness",
+    blockedVerificationDetail: "Slack still needs verified credentials before delivery can run.",
+    passedVerificationDetail: "Slack credentials are configured and ready.",
+  });
+}
+
+function createSignalVerifyPlanResult(setupComplete: boolean): BuilderPlanResult {
+  return createSingleConnectorPlanResult({
+    brief: "Send alerts through Signal.",
+    displayName: "Alerting Agent",
+    templateId: "support-responder",
+    primaryGoal: "support",
+    executionMode: "hybrid",
+    connectorId: "channel:signal",
+    connectorLabel: "Signal",
+    connectorKind: "channel",
+    connectorSourceKind: "core_channel_section",
+    docsPath: "/channels/signal",
+    sourceChannels: [],
+    ingressChannels: ["signal"],
+    readyIntegrationCount: setupComplete ? 1 : 0,
+    unresolvedIntegrationCount: setupComplete ? 0 : 1,
+    integrationStatus: setupComplete ? "verified" : "configured",
+    integrationIssues: setupComplete ? [] : ["Signal transport still needs verification."],
+    configRefs: ["channels.signal"],
+    authRefs: ["channels.signal"],
+    requiresConfig: true,
+    requiresAuth: true,
+    onboarding: false,
+    selectionLabel: "Signal",
+    detailLabel: "Signal transport verification",
+    setupActions: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:signal:verify-transport",
+            connectorId: "channel:signal",
+            connectorLabel: "Signal",
+            title: "Verify Signal transport",
+            detail: "Confirm the Signal transport endpoint before delivery is enabled.",
+            status: "pending",
+            kind: "verify",
+            source: "verification",
+            blocking: true,
+            refs: ["channels.signal"],
+            requiredFields: [
+              {
+                key: "signal-account",
+                label: "Signal account",
+                kind: "account",
+                required: true,
+                inputKey: "signal.account",
+                configPath: "channels.signal.account",
+                inputType: "text",
+              },
+              {
+                key: "signal-http-url",
+                label: "Signal HTTP URL",
+                kind: "destination",
+                required: false,
+                inputKey: "signal.httpUrl",
+                configPath: "channels.signal.httpUrl",
+                inputType: "text",
+                placeholder: "http://127.0.0.1:8080",
+              },
+            ],
+            workflowRoles: ["Primary Worker"],
+            uiSchema: {
+              variant: "guided-setup",
+              section: "channels.signal",
+              fieldKeys: ["signal-account", "signal-http-url"],
+            },
+            completionSignal: {
+              kind: "verification",
+              target: "channel:signal:builder-check",
+              detail: "Pass Signal transport readiness before apply is allowed.",
+            },
+          },
+        ],
+    setupTasks: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:signal:verify",
+            connectorId: "channel:signal",
+            connectorLabel: "Signal",
+            kind: "verify",
+            status: "pending",
+            title: "Verify Signal transport",
+            detail: "Check the saved Signal transport details.",
+            refs: ["channels.signal"],
+          },
+        ],
+    verificationProbeLabel: "Signal transport readiness",
+    blockedVerificationDetail: "Signal transport still needs verification before delivery can run.",
+    passedVerificationDetail: "Signal transport is configured and ready.",
+  });
+}
+
+function createDiscordVerifyPlanResult(setupComplete: boolean): BuilderPlanResult {
+  return createSingleConnectorPlanResult({
+    brief: "Send release notes to Discord.",
+    displayName: "Release Notes Agent",
+    templateId: "daily-briefing",
+    primaryGoal: "briefing",
+    executionMode: "scheduled",
+    connectorId: "channel:discord",
+    connectorLabel: "Discord",
+    connectorKind: "channel",
+    connectorSourceKind: "core_channel_section",
+    docsPath: "/channels/discord",
+    sourceChannels: [],
+    ingressChannels: ["discord"],
+    readyIntegrationCount: setupComplete ? 1 : 0,
+    unresolvedIntegrationCount: setupComplete ? 0 : 1,
+    integrationStatus: setupComplete ? "verified" : "configured",
+    integrationIssues: setupComplete ? [] : ["Discord still needs a verified bot token."],
+    configRefs: ["channels.discord"],
+    authRefs: ["channels.discord"],
+    requiresConfig: true,
+    requiresAuth: true,
+    onboarding: false,
+    selectionLabel: "Discord",
+    detailLabel: "Discord token verification",
+    setupActions: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:discord:verify-token",
+            connectorId: "channel:discord",
+            connectorLabel: "Discord",
+            title: "Verify Discord token",
+            detail: "Confirm the saved Discord bot token before delivery is enabled.",
+            status: "pending",
+            kind: "verify",
+            source: "verification",
+            blocking: true,
+            refs: ["channels.discord"],
+            requiredFields: [
+              {
+                key: "token",
+                label: "Bot token",
+                kind: "auth",
+                required: true,
+                inputKey: "discord.token",
+                configPath: "channels.discord.token",
+                inputType: "secret",
+              },
+            ],
+            workflowRoles: ["Primary Worker"],
+            uiSchema: {
+              variant: "guided-setup",
+              section: "channels.discord",
+              fieldKeys: ["token"],
+            },
+            completionSignal: {
+              kind: "verification",
+              target: "channel:discord:builder-check",
+              detail: "Pass Discord token readiness before apply is allowed.",
+            },
+          },
+        ],
+    setupTasks: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:discord:verify",
+            connectorId: "channel:discord",
+            connectorLabel: "Discord",
+            kind: "verify",
+            status: "pending",
+            title: "Verify Discord token",
+            detail: "Check the Discord bot token before enabling delivery.",
+            refs: ["channels.discord"],
+          },
+        ],
+    verificationProbeLabel: "Discord token readiness",
+    blockedVerificationDetail: "Discord still needs a verified bot token before delivery can run.",
+    passedVerificationDetail: "Discord credentials are configured and ready.",
+  });
+}
+
+function createGoogleChatVerifyPlanResult(setupComplete: boolean): BuilderPlanResult {
+  return createSingleConnectorPlanResult({
+    brief: "Send deployment updates to Google Chat.",
+    displayName: "Deployment Updates Agent",
+    templateId: "support-responder",
+    primaryGoal: "support",
+    executionMode: "hybrid",
+    connectorId: "channel:googlechat",
+    connectorLabel: "Google Chat",
+    connectorKind: "channel",
+    connectorSourceKind: "core_channel_section",
+    docsPath: "/channels/googlechat",
+    sourceChannels: [],
+    ingressChannels: ["googlechat"],
+    readyIntegrationCount: setupComplete ? 1 : 0,
+    unresolvedIntegrationCount: setupComplete ? 0 : 1,
+    integrationStatus: setupComplete ? "verified" : "configured",
+    integrationIssues: setupComplete ? [] : ["Google Chat still needs verified auth."],
+    configRefs: ["channels.googlechat"],
+    authRefs: ["channels.googlechat"],
+    requiresConfig: true,
+    requiresAuth: true,
+    onboarding: false,
+    selectionLabel: "Google Chat",
+    detailLabel: "Service-account auth verification",
+    setupActions: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:googlechat:verify-auth",
+            connectorId: "channel:googlechat",
+            connectorLabel: "Google Chat",
+            title: "Verify Google Chat auth",
+            detail: "Confirm service-account and webhook auth settings before delivery is enabled.",
+            status: "pending",
+            kind: "verify",
+            source: "verification",
+            blocking: true,
+            refs: ["channels.googlechat"],
+            workflowRoles: ["Primary Worker"],
+            uiSchema: {
+              variant: "guided-setup",
+              section: "channels.googlechat",
+              fieldKeys: [],
+            },
+            completionSignal: {
+              kind: "verification",
+              target: "channel:googlechat:builder-check",
+              detail: "Pass Google Chat auth readiness before apply is allowed.",
+            },
+          },
+        ],
+    setupTasks: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:googlechat:verify",
+            connectorId: "channel:googlechat",
+            connectorLabel: "Google Chat",
+            kind: "verify",
+            status: "pending",
+            title: "Verify Google Chat auth",
+            detail: "Check service-account and audience settings before enabling delivery.",
+            refs: ["channels.googlechat"],
+          },
+        ],
+    verificationProbeLabel: "Google Chat auth readiness",
+    blockedVerificationDetail: "Google Chat still needs verified auth before delivery can run.",
+    passedVerificationDetail: "Google Chat auth is configured and ready.",
+  });
+}
+
+function createMatrixVerifyPlanResult(setupComplete: boolean): BuilderPlanResult {
+  return createSingleConnectorPlanResult({
+    brief: "Send deployment updates to Matrix.",
+    displayName: "Deployment Updates Agent",
+    templateId: "support-responder",
+    primaryGoal: "support",
+    executionMode: "hybrid",
+    connectorId: "channel:matrix",
+    connectorLabel: "Matrix",
+    connectorKind: "channel",
+    connectorSourceKind: "channel_catalog",
+    docsPath: "/channels/matrix",
+    sourceChannels: [],
+    ingressChannels: ["matrix"],
+    readyIntegrationCount: setupComplete ? 1 : 0,
+    unresolvedIntegrationCount: setupComplete ? 0 : 1,
+    integrationStatus: setupComplete ? "verified" : "configured",
+    integrationIssues: setupComplete ? [] : ["Matrix still needs verified credentials."],
+    configRefs: ["channels.matrix"],
+    authRefs: ["channels.matrix"],
+    requiresConfig: true,
+    requiresAuth: true,
+    onboarding: false,
+    selectionLabel: "Matrix",
+    detailLabel: "Matrix auth verification",
+    setupActions: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:matrix:verify-credentials",
+            connectorId: "channel:matrix",
+            connectorLabel: "Matrix",
+            title: "Verify Matrix credentials",
+            detail: "Confirm the saved Matrix homeserver and token before delivery is enabled.",
+            status: "pending",
+            kind: "verify",
+            source: "verification",
+            blocking: true,
+            refs: ["channels.matrix"],
+            workflowRoles: ["Primary Worker"],
+            uiSchema: {
+              variant: "guided-setup",
+              section: "channels.matrix",
+              fieldKeys: [],
+            },
+            completionSignal: {
+              kind: "verification",
+              target: "channel:matrix:builder-check",
+              detail: "Pass Matrix credential readiness before apply is allowed.",
+            },
+          },
+        ],
+    setupTasks: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:matrix:verify",
+            connectorId: "channel:matrix",
+            connectorLabel: "Matrix",
+            kind: "verify",
+            status: "pending",
+            title: "Verify Matrix credentials",
+            detail: "Check the Matrix homeserver and token before enabling delivery.",
+            refs: ["channels.matrix"],
+          },
+        ],
+    verificationProbeLabel: "Matrix credential readiness",
+    blockedVerificationDetail: "Matrix still needs verified credentials before delivery can run.",
+    passedVerificationDetail: "Matrix credentials are configured and ready.",
+  });
+}
+
+function createMSTeamsVerifyPlanResult(setupComplete: boolean): BuilderPlanResult {
+  return createSingleConnectorPlanResult({
+    brief: "Send deployment updates to Microsoft Teams.",
+    displayName: "Deployment Updates Agent",
+    templateId: "support-responder",
+    primaryGoal: "support",
+    executionMode: "hybrid",
+    connectorId: "channel:msteams",
+    connectorLabel: "Microsoft Teams",
+    connectorKind: "channel",
+    connectorSourceKind: "channel_catalog",
+    docsPath: "/channels/msteams",
+    sourceChannels: [],
+    ingressChannels: ["msteams"],
+    readyIntegrationCount: setupComplete ? 1 : 0,
+    unresolvedIntegrationCount: setupComplete ? 0 : 1,
+    integrationStatus: setupComplete ? "verified" : "configured",
+    integrationIssues: setupComplete ? [] : ["Microsoft Teams still needs verified credentials."],
+    configRefs: ["channels.msteams"],
+    authRefs: ["channels.msteams"],
+    requiresConfig: true,
+    requiresAuth: true,
+    onboarding: false,
+    selectionLabel: "Microsoft Teams",
+    detailLabel: "Bot Framework credential verification",
+    setupActions: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:msteams:verify-credentials",
+            connectorId: "channel:msteams",
+            connectorLabel: "Microsoft Teams",
+            title: "Verify Teams credentials",
+            detail: "Confirm the saved Bot Framework credentials before delivery is enabled.",
+            status: "pending",
+            kind: "verify",
+            source: "verification",
+            blocking: true,
+            refs: ["channels.msteams"],
+            workflowRoles: ["Primary Worker"],
+            uiSchema: {
+              variant: "guided-setup",
+              section: "channels.msteams",
+              fieldKeys: [],
+            },
+            completionSignal: {
+              kind: "verification",
+              target: "channel:msteams:builder-check",
+              detail: "Pass Teams credential readiness before apply is allowed.",
+            },
+          },
+        ],
+    setupTasks: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:msteams:verify",
+            connectorId: "channel:msteams",
+            connectorLabel: "Microsoft Teams",
+            kind: "verify",
+            status: "pending",
+            title: "Verify Teams credentials",
+            detail: "Check Bot Framework credentials before enabling delivery.",
+            refs: ["channels.msteams"],
+          },
+        ],
+    verificationProbeLabel: "Teams credential readiness",
+    blockedVerificationDetail:
+      "Microsoft Teams still needs verified credentials before delivery can run.",
+    passedVerificationDetail: "Microsoft Teams credentials are configured and ready.",
+  });
+}
+
+function createIMessageVerifyPlanResult(setupComplete: boolean): BuilderPlanResult {
+  return createSingleConnectorPlanResult({
+    brief: "Send deployment updates to iMessage.",
+    displayName: "Deployment Updates Agent",
+    templateId: "support-responder",
+    primaryGoal: "support",
+    executionMode: "hybrid",
+    connectorId: "channel:imessage",
+    connectorLabel: "iMessage",
+    connectorKind: "channel",
+    connectorSourceKind: "core_channel_section",
+    docsPath: "/channels/imessage",
+    sourceChannels: [],
+    ingressChannels: ["imessage"],
+    readyIntegrationCount: setupComplete ? 1 : 0,
+    unresolvedIntegrationCount: setupComplete ? 0 : 1,
+    integrationStatus: setupComplete ? "verified" : "configured",
+    integrationIssues: setupComplete ? [] : ["iMessage transport still needs verification."],
+    configRefs: ["channels.imessage"],
+    authRefs: ["channels.imessage"],
+    requiresConfig: true,
+    requiresAuth: true,
+    onboarding: false,
+    selectionLabel: "iMessage",
+    detailLabel: "iMessage transport verification",
+    setupActions: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:imessage:verify-transport",
+            connectorId: "channel:imessage",
+            connectorLabel: "iMessage",
+            title: "Verify iMessage transport",
+            detail: "Confirm local iMessage transport access before delivery is enabled.",
+            status: "pending",
+            kind: "verify",
+            source: "verification",
+            blocking: true,
+            refs: ["channels.imessage"],
+            workflowRoles: ["Primary Worker"],
+            uiSchema: {
+              variant: "guided-setup",
+              section: "channels.imessage",
+              fieldKeys: [],
+            },
+            completionSignal: {
+              kind: "verification",
+              target: "channel:imessage:builder-check",
+              detail: "Pass iMessage transport readiness before apply is allowed.",
+            },
+          },
+        ],
+    setupTasks: setupComplete
+      ? []
+      : [
+          {
+            id: "channel:imessage:verify",
+            connectorId: "channel:imessage",
+            connectorLabel: "iMessage",
+            kind: "verify",
+            status: "pending",
+            title: "Verify iMessage transport",
+            detail: "Check local imsg transport before enabling delivery.",
+            refs: ["channels.imessage"],
+          },
+        ],
+    verificationProbeLabel: "iMessage transport readiness",
+    blockedVerificationDetail:
+      "iMessage transport still needs verification before delivery can run.",
+    passedVerificationDetail: "iMessage transport is configured and ready.",
   });
 }
 
@@ -1335,6 +2057,1596 @@ describe("Builder guided connector flows", () => {
     expect(app.textContent).toContain("Confirm Apply");
   });
 
+  it("retries Telegram delivery setup after saving a manual default target", async () => {
+    await exerciseRetryableGuidedVerificationFlow({
+      planFactory: createTelegramPlanResult,
+      brief: "Deliver a daily briefing to my Telegram chat.",
+      initialConfigState: {
+        channels: {
+          telegram: {
+            botToken: "",
+            dmPolicy: "pairing",
+            defaultTo: "",
+          },
+        },
+      },
+      openSetupLabel: "Open Telegram setup",
+      openSetupIndex: 0,
+      verifyButtonLabel: "Auto-detect default target",
+      retryButtonLabel: "Retry Telegram target detection",
+      actionId: "channel:telegram:auto-default-target",
+      connectorId: "channel:telegram",
+      initialFields: {
+        "Bot Token": "telegram-token",
+      },
+      repairedFields: {
+        "Default Target": "-1002003004005",
+      },
+      expectedVisibleText: "Auto-detect Telegram default target",
+      failureMessage:
+        "Telegram auto-detect found no recent chat updates. Send the bot a message or enter a default target manually.",
+      failureResumeLabel: "Retry Telegram target detection",
+      failureResumeDetail: "Send a message to the bot or save a default target, then retry.",
+      failureSummary: {
+        command: "getUpdates",
+      },
+      successMessage: "Telegram default target set to -1002003004005.",
+      successUpdatedRefs: ["channels.telegram.defaultTo"],
+      successSummary: {
+        command: "getUpdates",
+      },
+      fingerprint: "telegram-retry-verify-1",
+    });
+  });
+
+  it("uses the focused Slack credential verification flow until Builder unblocks apply", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let verifyRuns = 0;
+    let configState: Record<string, unknown> = {
+      channels: {
+        slack: {
+          botToken: "",
+          appToken: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createSlackVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, `slack-config-${verifyRuns}`);
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:slack:verify-credentials",
+            connectorId: "channel:slack",
+            status: "configured" as const,
+            message: "Slack credentials are valid for the configured workspace.",
+            updatedRefs: ["channels.slack"],
+            summary: {
+              command: "auth.test + apps.connections.open",
+            },
+          };
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createVerifyResult(
+            createSlackVerifyPlanResult(true),
+            `slack-verify-${verifyRuns}`,
+          );
+        default:
+          throw new Error(`Unhandled Slack credential method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send my daily ops summary to Slack.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Slack setup", { index: 1 });
+    await settle(app, 3);
+
+    expect(app.textContent).toContain("Verify Slack credentials");
+    expect(app.textContent).not.toContain("Auto-detect Slack default target");
+
+    const botTokenField = findFieldByLabel<HTMLInputElement>(app, "Bot token");
+    const appTokenField = findFieldByLabel<HTMLInputElement>(app, "App token");
+    expect(botTokenField).not.toBeNull();
+    expect(appTokenField).not.toBeNull();
+    if (!botTokenField || !appTokenField) {
+      return;
+    }
+
+    changeValue(botTokenField, "xoxb-test-token");
+    changeValue(appTokenField, "xapp-test-token");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Configure and Verify", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:slack:verify-credentials",
+        connectorId: "channel:slack",
+        status: "configured",
+      }),
+    );
+    expect(app.builderVerifyResult?.verification.fingerprint).toBe("slack-verify-1");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(false);
+  });
+
+  it("retries Slack credential verification after fixing the saved tokens", async () => {
+    await exerciseRetryableGuidedVerificationFlow({
+      planFactory: createSlackVerifyPlanResult,
+      brief: "Send my daily ops summary to Slack.",
+      initialConfigState: {
+        channels: {
+          slack: {
+            botToken: "",
+            appToken: "",
+          },
+        },
+      },
+      openSetupLabel: "Open Slack setup",
+      verifyButtonLabel: "Configure and Verify",
+      retryButtonLabel: "Verify Slack credentials",
+      actionId: "channel:slack:verify-credentials",
+      connectorId: "channel:slack",
+      initialFields: {
+        "Bot token": "xoxb-bad-token",
+        "App token": "xapp-bad-token",
+      },
+      repairedFields: {
+        "Bot token": "xoxb-test-token",
+        "App token": "xapp-test-token",
+      },
+      expectedVisibleText: "Verify Slack credentials",
+      failureMessage: "Slack credential verification failed: invalid_auth",
+      failureResumeLabel: "Verify Slack credentials",
+      failureResumeDetail: "Fix the Slack bot or app token and run verification again.",
+      failureSummary: {
+        command: "auth.test + apps.connections.open",
+      },
+      successMessage: "Slack credentials are valid for the configured workspace.",
+      successUpdatedRefs: ["channels.slack"],
+      successSummary: {
+        command: "auth.test + apps.connections.open",
+      },
+      fingerprint: "slack-retry-verify-1",
+    });
+  });
+
+  it("uses the focused Signal transport verification flow until Builder unblocks apply", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let verifyRuns = 0;
+    let configState: Record<string, unknown> = {
+      channels: {
+        signal: {
+          account: "",
+          httpUrl: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createSignalVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, `signal-config-${verifyRuns}`);
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:signal:verify-transport",
+            connectorId: "channel:signal",
+            status: "configured" as const,
+            message: "Signal transport is reachable for the configured account.",
+            updatedRefs: ["channels.signal"],
+            summary: {
+              command: "signal-cli version",
+            },
+          };
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createVerifyResult(
+            createSignalVerifyPlanResult(true),
+            `signal-verify-${verifyRuns}`,
+          );
+        default:
+          throw new Error(`Unhandled Signal transport method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send alerts through Signal.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Signal setup", { index: 1 });
+    await settle(app, 3);
+
+    expect(app.textContent).toContain("Verify Signal transport");
+    expect(app.textContent).not.toContain("Auto-detect Signal URL");
+
+    const accountField = findFieldByLabel<HTMLInputElement>(app, "Signal account");
+    const httpUrlField = findFieldByLabel<HTMLInputElement>(app, "Signal HTTP URL");
+    expect(accountField).not.toBeNull();
+    expect(httpUrlField).not.toBeNull();
+    if (!accountField || !httpUrlField) {
+      return;
+    }
+
+    changeValue(accountField, "+15551234567");
+    changeValue(httpUrlField, "http://127.0.0.1:8080");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Configure and Verify", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:signal:verify-transport",
+        connectorId: "channel:signal",
+        status: "configured",
+      }),
+    );
+    expect(app.builderVerifyResult?.verification.fingerprint).toBe("signal-verify-1");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(false);
+  });
+
+  it("retries Signal transport verification after fixing the HTTP endpoint", async () => {
+    await exerciseRetryableGuidedVerificationFlow({
+      planFactory: createSignalVerifyPlanResult,
+      brief: "Send alerts through Signal.",
+      initialConfigState: {
+        channels: {
+          signal: {
+            account: "",
+            httpUrl: "",
+          },
+        },
+      },
+      openSetupLabel: "Open Signal setup",
+      verifyButtonLabel: "Configure and Verify",
+      retryButtonLabel: "Verify Signal transport",
+      actionId: "channel:signal:verify-transport",
+      connectorId: "channel:signal",
+      initialFields: {
+        "Signal account": "+15551234567",
+        "Signal HTTP URL": "http://127.0.0.1:9999",
+      },
+      repairedFields: {
+        "Signal HTTP URL": "http://127.0.0.1:8080",
+      },
+      expectedVisibleText: "Verify Signal transport",
+      failureMessage: "Signal transport verification failed: ECONNREFUSED http://127.0.0.1:9999",
+      failureResumeLabel: "Verify Signal transport",
+      failureResumeDetail: "Fix the Signal account or HTTP URL and run verification again.",
+      failureSummary: {
+        command: "signal-cli version",
+      },
+      successMessage: "Signal transport is reachable for the configured account.",
+      successUpdatedRefs: ["channels.signal"],
+      successSummary: {
+        command: "signal-cli version",
+      },
+      fingerprint: "signal-retry-verify-1",
+    });
+  });
+
+  it("uses the focused Discord token verification flow until Builder unblocks apply", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let verifyRuns = 0;
+    let configState: Record<string, unknown> = {
+      channels: {
+        discord: {
+          token: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createDiscordVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, `discord-config-${verifyRuns}`);
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:discord:verify-token",
+            connectorId: "channel:discord",
+            status: "configured" as const,
+            message: "Discord token is valid for the configured bot.",
+            updatedRefs: ["channels.discord"],
+            summary: {
+              command: "GET /users/@me",
+            },
+          };
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createVerifyResult(
+            createDiscordVerifyPlanResult(true),
+            `discord-verify-${verifyRuns}`,
+          );
+        default:
+          throw new Error(`Unhandled Discord verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send release notes to Discord.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Discord setup", { index: 1 });
+    await settle(app, 3);
+
+    expect(app.textContent).toContain("Verify Discord token");
+    expect(app.textContent).not.toContain("Auto-detect Discord default target");
+
+    const tokenField = findFieldByLabel<HTMLInputElement>(app, "Bot token");
+    expect(tokenField).not.toBeNull();
+    if (!tokenField) {
+      return;
+    }
+
+    changeValue(tokenField, "discord-bot-token");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Configure and Verify", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:discord:verify-token",
+        connectorId: "channel:discord",
+        status: "configured",
+      }),
+    );
+    expect(app.builderVerifyResult?.verification.fingerprint).toBe("discord-verify-1");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(false);
+  });
+
+  it("keeps Builder blocked when Discord token verification fails", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let configState: Record<string, unknown> = {
+      channels: {
+        discord: {
+          token: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createDiscordVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, "discord-negative");
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:discord:verify-token",
+            connectorId: "channel:discord",
+            status: "needs_setup" as const,
+            message: "Discord token verification failed: unauthorized",
+            updatedRefs: [],
+            resume: {
+              actionId: "channel:discord:verify-token",
+              connectorId: "channel:discord",
+              label: "Verify Discord token",
+              detail: "Fix the Discord bot token and run verification again.",
+              inputs: {},
+            },
+          };
+        case "agents.builder.verify":
+          throw new Error("Discord verify should not rerun after a failed token check");
+        default:
+          throw new Error(`Unhandled Discord negative verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send release notes to Discord.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Discord setup", { index: 1 });
+    await settle(app, 3);
+
+    const tokenField = findFieldByLabel<HTMLInputElement>(app, "Bot token");
+    expect(tokenField).not.toBeNull();
+    if (!tokenField) {
+      return;
+    }
+
+    changeValue(tokenField, "bad-discord-token");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Configure and Verify", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:discord:verify-token",
+        connectorId: "channel:discord",
+        status: "needs_setup",
+      }),
+    );
+    expect(app.builderVerifyResult).toBeNull();
+    expect(app.textContent).toContain("Discord token verification failed: unauthorized");
+    expect(app.textContent).toContain("Verify Discord token");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+  });
+
+  it("retries Discord token verification after fixing the bot token", async () => {
+    await exerciseRetryableGuidedVerificationFlow({
+      planFactory: createDiscordVerifyPlanResult,
+      brief: "Send release notes to Discord.",
+      initialConfigState: {
+        channels: {
+          discord: {
+            token: "",
+          },
+        },
+      },
+      openSetupLabel: "Open Discord setup",
+      verifyButtonLabel: "Configure and Verify",
+      actionId: "channel:discord:verify-token",
+      connectorId: "channel:discord",
+      initialFields: {
+        "Bot token": "bad-discord-token",
+      },
+      repairedFields: {
+        "Bot token": "discord-bot-token",
+      },
+      expectedVisibleText: "Verify Discord token",
+      failureMessage: "Discord token verification failed: unauthorized",
+      failureResumeLabel: "Verify Discord token",
+      failureResumeDetail: "Fix the Discord bot token and run verification again.",
+      failureSummary: {
+        command: "GET /users/@me",
+      },
+      successMessage: "Discord credentials are valid for the configured bot.",
+      successUpdatedRefs: ["channels.discord"],
+      successSummary: {
+        command: "GET /users/@me",
+      },
+      fingerprint: "discord-retry-verify-1",
+    });
+  });
+
+  it("uses the guided Google Chat auth verification flow until Builder unblocks apply", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let verifyRuns = 0;
+    let configState: Record<string, unknown> = {
+      channels: {
+        googlechat: {
+          serviceAccount: "",
+          audienceType: "",
+          audience: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createGoogleChatVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, `googlechat-config-${verifyRuns}`);
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:googlechat:verify-auth",
+            connectorId: "channel:googlechat",
+            status: "configured" as const,
+            message: "Google Chat credentials are valid for the configured account.",
+            updatedRefs: ["channels.googlechat"],
+            summary: {
+              command: "GET /v1/spaces?pageSize=1",
+            },
+          };
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createVerifyResult(
+            createGoogleChatVerifyPlanResult(true),
+            `googlechat-verify-${verifyRuns}`,
+          );
+        default:
+          throw new Error(`Unhandled Google Chat verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send deployment updates to Google Chat.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Google Chat setup", { index: 1 });
+    await settle(app, 3);
+
+    expect(app.textContent).toContain("Verify Google Chat auth");
+
+    const serviceAccountField = findFieldByLabel<HTMLInputElement>(app, "Service Account JSON");
+    const audienceTypeField = findFieldByLabel<HTMLSelectElement>(app, "Audience Type");
+    const audienceField = findFieldByLabel<HTMLInputElement>(app, "Audience");
+    expect(serviceAccountField).not.toBeNull();
+    expect(audienceTypeField).not.toBeNull();
+    expect(audienceField).not.toBeNull();
+    if (!serviceAccountField || !audienceTypeField || !audienceField) {
+      return;
+    }
+
+    changeValue(
+      serviceAccountField,
+      '{"type":"service_account","client_email":"bot@example.iam.gserviceaccount.com"}',
+    );
+    changeValue(audienceTypeField, "app-url");
+    changeValue(audienceField, "https://chat.googleapis.com/");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Verify Google Chat auth", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:googlechat:verify-auth",
+        connectorId: "channel:googlechat",
+        status: "configured",
+      }),
+    );
+    expect(app.builderVerifyResult?.verification.fingerprint).toBe("googlechat-verify-1");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(false);
+  });
+
+  it("keeps Builder blocked when Google Chat webhook auth is incomplete", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let configState: Record<string, unknown> = {
+      channels: {
+        googlechat: {
+          serviceAccount: "",
+          audienceType: "",
+          audience: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createGoogleChatVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, "googlechat-negative");
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:googlechat:verify-auth",
+            connectorId: "channel:googlechat",
+            status: "needs_setup" as const,
+            message: "Google Chat API auth is valid, but webhook auth fields are incomplete.",
+            updatedRefs: [],
+            resume: {
+              actionId: "channel:googlechat:verify-auth",
+              connectorId: "channel:googlechat",
+              label: "Verify Google Chat auth",
+              detail: "After setting audienceType and audience, run verification again.",
+              inputs: {},
+            },
+          };
+        case "agents.builder.verify":
+          throw new Error("Google Chat verify should not rerun after incomplete webhook auth");
+        default:
+          throw new Error(`Unhandled Google Chat negative verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send deployment updates to Google Chat.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Google Chat setup", { index: 1 });
+    await settle(app, 3);
+
+    const serviceAccountField = findFieldByLabel<HTMLInputElement>(app, "Service Account JSON");
+    expect(serviceAccountField).not.toBeNull();
+    if (!serviceAccountField) {
+      return;
+    }
+
+    changeValue(
+      serviceAccountField,
+      '{"type":"service_account","client_email":"bot@example.iam.gserviceaccount.com"}',
+    );
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Verify Google Chat auth", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:googlechat:verify-auth",
+        connectorId: "channel:googlechat",
+        status: "needs_setup",
+      }),
+    );
+    expect(app.builderVerifyResult).toBeNull();
+    expect(app.textContent).toContain(
+      "Google Chat API auth is valid, but webhook auth fields are incomplete.",
+    );
+    expect(app.textContent).toContain("Verify Google Chat auth");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+  });
+
+  it("retries Google Chat auth verification after completing webhook auth", async () => {
+    await exerciseRetryableGuidedVerificationFlow({
+      planFactory: createGoogleChatVerifyPlanResult,
+      brief: "Send deployment updates to Google Chat.",
+      initialConfigState: {
+        channels: {
+          googlechat: {
+            serviceAccount: "",
+            audienceType: "",
+            audience: "",
+          },
+        },
+      },
+      openSetupLabel: "Open Google Chat setup",
+      verifyButtonLabel: "Verify Google Chat auth",
+      actionId: "channel:googlechat:verify-auth",
+      connectorId: "channel:googlechat",
+      initialFields: {
+        "Service Account JSON":
+          '{"type":"service_account","client_email":"bot@example.iam.gserviceaccount.com"}',
+      },
+      repairedFields: {
+        "Audience Type": "app-url",
+        Audience: "https://chat.googleapis.com/",
+      },
+      expectedVisibleText: "Verify Google Chat auth",
+      failureMessage: "Google Chat API auth is valid, but webhook auth fields are incomplete.",
+      failureResumeLabel: "Verify Google Chat auth",
+      failureResumeDetail: "After setting audienceType and audience, run verification again.",
+      failureSummary: {
+        command: "GET /v1/spaces?pageSize=1",
+      },
+      successMessage: "Google Chat credentials are valid for the configured account.",
+      successUpdatedRefs: ["channels.googlechat"],
+      successSummary: {
+        command: "GET /v1/spaces?pageSize=1",
+      },
+      fingerprint: "googlechat-retry-verify-1",
+    });
+  });
+
+  it("uses the guided Matrix credential verification flow until Builder unblocks apply", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let verifyRuns = 0;
+    let configState: Record<string, unknown> = {
+      channels: {
+        matrix: {
+          homeserver: "",
+          userId: "",
+          accessToken: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createMatrixVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, `matrix-config-${verifyRuns}`);
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:matrix:verify-credentials",
+            connectorId: "channel:matrix",
+            status: "configured" as const,
+            message: "Matrix credentials are valid for the configured account.",
+            updatedRefs: ["channels.matrix"],
+            summary: {
+              command: "whoami",
+            },
+          };
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createVerifyResult(
+            createMatrixVerifyPlanResult(true),
+            `matrix-verify-${verifyRuns}`,
+          );
+        default:
+          throw new Error(`Unhandled Matrix verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send deployment updates to Matrix.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Matrix setup", { index: 1 });
+    await settle(app, 3);
+
+    expect(app.textContent).toContain("Verify Matrix credentials");
+
+    const homeserverField = findFieldByLabel<HTMLInputElement>(app, "Homeserver");
+    const userIdField = findFieldByLabel<HTMLInputElement>(app, "User ID");
+    const accessTokenField = findFieldByLabel<HTMLInputElement>(app, "Access Token");
+    expect(homeserverField).not.toBeNull();
+    expect(userIdField).not.toBeNull();
+    expect(accessTokenField).not.toBeNull();
+    if (!homeserverField || !userIdField || !accessTokenField) {
+      return;
+    }
+
+    changeValue(homeserverField, "https://matrix.org");
+    changeValue(userIdField, "@bot:matrix.org");
+    changeValue(accessTokenField, "syt_test_token");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Verify Matrix credentials", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:matrix:verify-credentials",
+        connectorId: "channel:matrix",
+        status: "configured",
+      }),
+    );
+    expect(app.builderVerifyResult?.verification.fingerprint).toBe("matrix-verify-1");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(false);
+  });
+
+  it("keeps Builder blocked when Matrix credential verification fails", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let configState: Record<string, unknown> = {
+      channels: {
+        matrix: {
+          homeserver: "",
+          userId: "",
+          accessToken: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createMatrixVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, "matrix-negative");
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:matrix:verify-credentials",
+            connectorId: "channel:matrix",
+            status: "needs_setup" as const,
+            message: "Matrix credential verification failed: M_FORBIDDEN",
+            updatedRefs: [],
+            resume: {
+              actionId: "channel:matrix:verify-credentials",
+              connectorId: "channel:matrix",
+              label: "Verify Matrix credentials",
+              detail: "Fix the Matrix homeserver or token and run verification again.",
+              inputs: {},
+            },
+          };
+        case "agents.builder.verify":
+          throw new Error("Matrix verify should not rerun after invalid credentials");
+        default:
+          throw new Error(`Unhandled Matrix negative verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send deployment updates to Matrix.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Matrix setup", { index: 1 });
+    await settle(app, 3);
+
+    const homeserverField = findFieldByLabel<HTMLInputElement>(app, "Homeserver");
+    const userIdField = findFieldByLabel<HTMLInputElement>(app, "User ID");
+    const accessTokenField = findFieldByLabel<HTMLInputElement>(app, "Access Token");
+    expect(homeserverField).not.toBeNull();
+    expect(userIdField).not.toBeNull();
+    expect(accessTokenField).not.toBeNull();
+    if (!homeserverField || !userIdField || !accessTokenField) {
+      return;
+    }
+
+    changeValue(homeserverField, "https://matrix.org");
+    changeValue(userIdField, "@bot:matrix.org");
+    changeValue(accessTokenField, "bad-matrix-token");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Verify Matrix credentials", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:matrix:verify-credentials",
+        connectorId: "channel:matrix",
+        status: "needs_setup",
+      }),
+    );
+    expect(app.builderVerifyResult).toBeNull();
+    expect(app.textContent).toContain("Matrix credential verification failed: M_FORBIDDEN");
+    expect(app.textContent).toContain("Verify Matrix credentials");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+  });
+
+  it("retries Matrix credential verification after fixing the access token", async () => {
+    await exerciseRetryableGuidedVerificationFlow({
+      planFactory: createMatrixVerifyPlanResult,
+      brief: "Send deployment updates to Matrix.",
+      initialConfigState: {
+        channels: {
+          matrix: {
+            homeserver: "",
+            userId: "",
+            accessToken: "",
+          },
+        },
+      },
+      openSetupLabel: "Open Matrix setup",
+      verifyButtonLabel: "Verify Matrix credentials",
+      actionId: "channel:matrix:verify-credentials",
+      connectorId: "channel:matrix",
+      initialFields: {
+        Homeserver: "https://matrix.org",
+        "User ID": "@bot:matrix.org",
+        "Access Token": "bad-matrix-token",
+      },
+      repairedFields: {
+        "Access Token": "syt_test_token",
+      },
+      expectedVisibleText: "Verify Matrix credentials",
+      failureMessage: "Matrix credential verification failed: M_FORBIDDEN",
+      failureResumeLabel: "Verify Matrix credentials",
+      failureResumeDetail: "Fix the Matrix homeserver or token and run verification again.",
+      failureSummary: {
+        command: "whoami",
+      },
+      successMessage: "Matrix credentials are valid for the configured account.",
+      successUpdatedRefs: ["channels.matrix"],
+      successSummary: {
+        command: "whoami",
+      },
+      fingerprint: "matrix-retry-verify-1",
+    });
+  });
+
+  it("uses the guided Teams credential verification flow until Builder unblocks apply", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let verifyRuns = 0;
+    let configState: Record<string, unknown> = {
+      channels: {
+        msteams: {
+          appId: "",
+          appPassword: "",
+          tenantId: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createMSTeamsVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, `msteams-config-${verifyRuns}`);
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:msteams:verify-credentials",
+            connectorId: "channel:msteams",
+            status: "configured" as const,
+            message: "Microsoft Teams credentials are valid for the configured bot.",
+            updatedRefs: ["channels.msteams"],
+            summary: {
+              command: "Bot Framework token + Graph token",
+            },
+          };
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createVerifyResult(
+            createMSTeamsVerifyPlanResult(true),
+            `msteams-verify-${verifyRuns}`,
+          );
+        default:
+          throw new Error(`Unhandled Teams verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send deployment updates to Microsoft Teams.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Microsoft Teams setup", { index: 1 });
+    await settle(app, 3);
+
+    expect(app.textContent).toContain("Verify Teams credentials");
+
+    const appIdField = findFieldByLabel<HTMLInputElement>(app, "App ID");
+    const appPasswordField = findFieldByLabel<HTMLInputElement>(app, "App Password");
+    const tenantIdField = findFieldByLabel<HTMLInputElement>(app, "Tenant ID");
+    expect(appIdField).not.toBeNull();
+    expect(appPasswordField).not.toBeNull();
+    expect(tenantIdField).not.toBeNull();
+    if (!appIdField || !appPasswordField || !tenantIdField) {
+      return;
+    }
+
+    changeValue(appIdField, "00000000-0000-0000-0000-000000000000");
+    changeValue(appPasswordField, "teams-secret");
+    changeValue(tenantIdField, "common");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Verify Teams credentials", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:msteams:verify-credentials",
+        connectorId: "channel:msteams",
+        status: "configured",
+      }),
+    );
+    expect(app.builderVerifyResult?.verification.fingerprint).toBe("msteams-verify-1");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(false);
+  });
+
+  it("keeps Builder blocked when Teams credential verification fails", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let configState: Record<string, unknown> = {
+      channels: {
+        msteams: {
+          appId: "",
+          appPassword: "",
+          tenantId: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createMSTeamsVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, "msteams-negative");
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:msteams:verify-credentials",
+            connectorId: "channel:msteams",
+            status: "needs_setup" as const,
+            message: "Microsoft Teams credential verification failed: AADSTS7000215",
+            updatedRefs: [],
+            resume: {
+              actionId: "channel:msteams:verify-credentials",
+              connectorId: "channel:msteams",
+              label: "Verify Teams credentials",
+              detail: "Fix appId, appPassword, or tenantId and run verification again.",
+              inputs: {},
+            },
+          };
+        case "agents.builder.verify":
+          throw new Error("Teams verify should not rerun after invalid credentials");
+        default:
+          throw new Error(`Unhandled Teams negative verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send deployment updates to Microsoft Teams.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open Microsoft Teams setup", { index: 1 });
+    await settle(app, 3);
+
+    const appIdField = findFieldByLabel<HTMLInputElement>(app, "App ID");
+    const appPasswordField = findFieldByLabel<HTMLInputElement>(app, "App Password");
+    const tenantIdField = findFieldByLabel<HTMLInputElement>(app, "Tenant ID");
+    expect(appIdField).not.toBeNull();
+    expect(appPasswordField).not.toBeNull();
+    expect(tenantIdField).not.toBeNull();
+    if (!appIdField || !appPasswordField || !tenantIdField) {
+      return;
+    }
+
+    changeValue(appIdField, "00000000-0000-0000-0000-000000000000");
+    changeValue(appPasswordField, "bad-secret");
+    changeValue(tenantIdField, "common");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Verify Teams credentials", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:msteams:verify-credentials",
+        connectorId: "channel:msteams",
+        status: "needs_setup",
+      }),
+    );
+    expect(app.builderVerifyResult).toBeNull();
+    expect(app.textContent).toContain(
+      "Microsoft Teams credential verification failed: AADSTS7000215",
+    );
+    expect(app.textContent).toContain("Verify Teams credentials");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+  });
+
+  it("retries Teams credential verification after fixing the app password", async () => {
+    await exerciseRetryableGuidedVerificationFlow({
+      planFactory: createMSTeamsVerifyPlanResult,
+      brief: "Send deployment updates to Microsoft Teams.",
+      initialConfigState: {
+        channels: {
+          msteams: {
+            appId: "",
+            appPassword: "",
+            tenantId: "",
+          },
+        },
+      },
+      openSetupLabel: "Open Microsoft Teams setup",
+      verifyButtonLabel: "Verify Teams credentials",
+      actionId: "channel:msteams:verify-credentials",
+      connectorId: "channel:msteams",
+      initialFields: {
+        "App ID": "00000000-0000-0000-0000-000000000000",
+        "App Password": "bad-secret",
+        "Tenant ID": "common",
+      },
+      repairedFields: {
+        "App Password": "teams-secret",
+      },
+      expectedVisibleText: "Verify Teams credentials",
+      failureMessage: "Microsoft Teams credential verification failed: AADSTS7000215",
+      failureResumeLabel: "Verify Teams credentials",
+      failureResumeDetail: "Fix appId, appPassword, or tenantId and run verification again.",
+      failureSummary: {
+        command: "Bot Framework token + Graph token",
+      },
+      successMessage: "Microsoft Teams credentials are valid for the configured bot.",
+      successUpdatedRefs: ["channels.msteams"],
+      successSummary: {
+        command: "Bot Framework token + Graph token",
+      },
+      fingerprint: "msteams-retry-verify-1",
+    });
+  });
+
+  it("uses the guided iMessage transport verification flow until Builder unblocks apply", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let verifyRuns = 0;
+    let configState: Record<string, unknown> = {
+      channels: {
+        imessage: {
+          enabled: false,
+          cliPath: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createIMessageVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, `imessage-config-${verifyRuns}`);
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:imessage:verify-transport",
+            connectorId: "channel:imessage",
+            status: "configured" as const,
+            message: "iMessage transport is reachable on this macOS host.",
+            updatedRefs: ["channels.imessage"],
+            summary: {
+              command: "imsg rpc --help + chats.list",
+            },
+          };
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createVerifyResult(
+            createIMessageVerifyPlanResult(true),
+            `imessage-verify-${verifyRuns}`,
+          );
+        default:
+          throw new Error(`Unhandled iMessage verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send deployment updates to iMessage.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open iMessage setup", { index: 1 });
+    await settle(app, 3);
+
+    expect(app.textContent).toContain("Verify iMessage transport");
+
+    const enabledField = findFieldByLabel<HTMLSelectElement>(app, "Enabled");
+    const cliPathField = findFieldByLabel<HTMLInputElement>(app, "imsg CLI Path");
+    expect(enabledField).not.toBeNull();
+    expect(cliPathField).not.toBeNull();
+    if (!enabledField || !cliPathField) {
+      return;
+    }
+
+    changeValue(enabledField, "true");
+    changeValue(cliPathField, "imsg");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Verify iMessage transport", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:imessage:verify-transport",
+        connectorId: "channel:imessage",
+        status: "configured",
+      }),
+    );
+    expect(app.builderVerifyResult?.verification.fingerprint).toBe("imessage-verify-1");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(false);
+  });
+
+  it("keeps Builder blocked when iMessage transport verification fails", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let configState: Record<string, unknown> = {
+      channels: {
+        imessage: {
+          enabled: false,
+          cliPath: "",
+        },
+      },
+    };
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createIMessageVerifyPlanResult(false);
+        case "config.get":
+          return createConfigSnapshot(configState, "imessage-negative");
+        case "config.set": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const raw = typeof record.raw === "string" ? record.raw : "{}";
+          configState = JSON.parse(raw) as Record<string, unknown>;
+          return { ok: true };
+        }
+        case "agents.builder.setup.run":
+          return {
+            actionId: "channel:imessage:verify-transport",
+            connectorId: "channel:imessage",
+            status: "needs_setup" as const,
+            message: "iMessage transport verification failed: imsg rpc unavailable",
+            updatedRefs: [],
+            resume: {
+              actionId: "channel:imessage:verify-transport",
+              connectorId: "channel:imessage",
+              label: "Verify iMessage transport",
+              detail: "Fix local imsg access and run verification again.",
+              inputs: {},
+            },
+          };
+        case "agents.builder.verify":
+          throw new Error("iMessage verify should not rerun after transport failure");
+        default:
+          throw new Error(`Unhandled iMessage negative verification method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send deployment updates to iMessage.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open iMessage setup", { index: 1 });
+    await settle(app, 3);
+
+    const enabledField = findFieldByLabel<HTMLSelectElement>(app, "Enabled");
+    const cliPathField = findFieldByLabel<HTMLInputElement>(app, "imsg CLI Path");
+    expect(enabledField).not.toBeNull();
+    expect(cliPathField).not.toBeNull();
+    if (!enabledField || !cliPathField) {
+      return;
+    }
+
+    changeValue(enabledField, "true");
+    changeValue(cliPathField, "imsg");
+    await settle(app);
+
+    clickButton(app, "Save", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Verify iMessage transport", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:imessage:verify-transport",
+        connectorId: "channel:imessage",
+        status: "needs_setup",
+      }),
+    );
+    expect(app.builderVerifyResult).toBeNull();
+    expect(app.textContent).toContain(
+      "iMessage transport verification failed: imsg rpc unavailable",
+    );
+    expect(app.textContent).toContain("Verify iMessage transport");
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+  });
+
+  it("retries iMessage transport verification after fixing the CLI path", async () => {
+    await exerciseRetryableGuidedVerificationFlow({
+      planFactory: createIMessageVerifyPlanResult,
+      brief: "Send deployment updates to iMessage.",
+      initialConfigState: {
+        channels: {
+          imessage: {
+            enabled: false,
+            cliPath: "",
+          },
+        },
+      },
+      openSetupLabel: "Open iMessage setup",
+      verifyButtonLabel: "Verify iMessage transport",
+      actionId: "channel:imessage:verify-transport",
+      connectorId: "channel:imessage",
+      initialFields: {
+        Enabled: "true",
+        "imsg CLI Path": "missing-imsg",
+      },
+      repairedFields: {
+        "imsg CLI Path": "imsg",
+      },
+      expectedVisibleText: "Verify iMessage transport",
+      failureMessage: "iMessage transport verification failed: imsg rpc unavailable",
+      failureResumeLabel: "Verify iMessage transport",
+      failureResumeDetail: "Fix local imsg access and run verification again.",
+      failureSummary: {
+        command: "imsg rpc --help + chats.list",
+      },
+      successMessage: "iMessage transport is reachable on this macOS host.",
+      successUpdatedRefs: ["channels.imessage"],
+      successSummary: {
+        command: "imsg rpc --help + chats.list",
+      },
+      fingerprint: "imessage-retry-verify-1",
+    });
+  });
+
   it("drives WhatsApp pairing and destination setup until Builder unblocks apply", async () => {
     const app = mountApp("/builder");
     await settle(app, 3);
@@ -1498,6 +3810,224 @@ describe("Builder guided connector flows", () => {
     clickButton(app, "Apply Builder Plan", { exact: true });
     await settle(app, 2);
     expect(app.textContent).toContain("Confirm Apply");
+  });
+
+  it("restores a WhatsApp destination retry after recreating the app and unblocks apply", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let whatsappConnected = false;
+    let destinationAttempts = 0;
+    let verifyRuns = 0;
+    let currentTarget = "";
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createWhatsAppPlanResult(false);
+        case "web.login.start":
+          return {
+            message: "Scan this QR code with WhatsApp.",
+            qrDataUrl: "data:image/png;base64,whatsapp-qr",
+          };
+        case "web.login.wait":
+          whatsappConnected = true;
+          return {
+            message: "Linked.",
+            connected: true,
+          };
+        case "channels.status":
+          return {
+            channelAccounts: {
+              whatsapp: [
+                {
+                  connected: whatsappConnected,
+                  linked: whatsappConnected,
+                  lastError: null,
+                },
+              ],
+            },
+          };
+        case "agents.builder.setup.run": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const hasActionId = typeof record.actionId === "string";
+          const inputs =
+            record.inputs && typeof record.inputs === "object" && !Array.isArray(record.inputs)
+              ? (record.inputs as Record<string, unknown>)
+              : {};
+          const manualTarget =
+            typeof inputs["whatsapp.target"] === "string" ? inputs["whatsapp.target"] : "";
+          if (!hasActionId) {
+            return {
+              connectorId: "channel:whatsapp:auto-default-target",
+              status: "configured" as const,
+              message: "WhatsApp default target set to +15551234567.",
+              updatedRefs: [],
+            };
+          }
+          destinationAttempts += 1;
+          if (destinationAttempts === 1) {
+            return {
+              actionId: "channel:whatsapp:auto-default-target",
+              connectorId: "channel:whatsapp",
+              status: "needs_setup" as const,
+              message:
+                "WhatsApp destination is invalid or unreachable. Enter a phone number or group JID and retry.",
+              updatedRefs: [],
+              resume: {
+                actionId: "channel:whatsapp:auto-default-target",
+                connectorId: "channel:whatsapp",
+                label: "Retry WhatsApp destination",
+                detail: "Set a reachable WhatsApp number or group JID, then retry.",
+                inputs: {},
+              },
+            };
+          }
+          currentTarget = manualTarget || "+14155551234";
+          return {
+            actionId: "channel:whatsapp:auto-default-target",
+            connectorId: "channel:whatsapp",
+            status: "configured" as const,
+            message: `WhatsApp default target set to ${currentTarget}.`,
+            updatedRefs: ["channels.whatsapp.defaultTo"],
+          };
+        }
+        case "config.get":
+          return createConfigSnapshot(
+            {
+              channels: {
+                whatsapp: {
+                  defaultTo: currentTarget,
+                },
+              },
+            },
+            `whatsapp-retry-${verifyRuns}`,
+          );
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createVerifyResult(
+            createWhatsAppPlanResult(true),
+            `whatsapp-retry-verify-${verifyRuns}`,
+          );
+        default:
+          throw new Error(`Unhandled WhatsApp retry gateway method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send a daily briefing to my WhatsApp account.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open WhatsApp setup");
+    await settle(app, 3);
+
+    clickButton(app, "Show QR", { exact: true });
+    await settle(app, 5);
+
+    expect(app.textContent).toContain(
+      "WhatsApp is connected. Return to Builder and continue setup.",
+    );
+
+    const destinationInput = Array.from(
+      app.querySelectorAll<HTMLInputElement>('.quick-setup__fields input[type="text"]'),
+    ).find((entry) => {
+      const label = entry.closest("label")?.querySelector(".quick-setup__field-label")?.textContent;
+      return normalizeText(label).includes("Default destination");
+    });
+    expect(destinationInput).not.toBeNull();
+    if (!destinationInput) {
+      return;
+    }
+
+    changeValue(destinationInput, "invalid-whatsapp-target");
+    await settle(app);
+
+    clickButton(app, "Set Destination", { exact: true });
+    await settle(app, 4);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:whatsapp:auto-default-target",
+        connectorId: "channel:whatsapp",
+        status: "needs_setup",
+      }),
+    );
+    expect(app.builderVerifyResult).toBeNull();
+    expect(app.textContent).toContain(
+      "WhatsApp destination is invalid or unreachable. Enter a phone number or group JID and retry.",
+    );
+    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+
+    app.remove();
+    await nextFrame();
+
+    const restoredApp = mountApp("/builder");
+    await settle(restoredApp, 3);
+    attachMockClient(restoredApp, request);
+    await settle(restoredApp, 2);
+
+    expect(restoredApp.builderSetupFocus).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:whatsapp",
+      }),
+    );
+    expect(restoredApp.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:whatsapp:auto-default-target",
+        connectorId: "channel:whatsapp",
+        status: "needs_setup",
+      }),
+    );
+
+    const restoredDestinationInput = Array.from(
+      restoredApp.querySelectorAll<HTMLInputElement>('.quick-setup__fields input[type="text"]'),
+    ).find((entry) => {
+      const label = entry.closest("label")?.querySelector(".quick-setup__field-label")?.textContent;
+      return normalizeText(label).includes("Default destination");
+    });
+    expect(restoredDestinationInput).not.toBeNull();
+    if (!restoredDestinationInput) {
+      return;
+    }
+    expect(restoredDestinationInput.value).toBe("invalid-whatsapp-target");
+
+    changeValue(restoredDestinationInput, "+14155551234");
+    await settle(restoredApp);
+
+    clickButton(restoredApp, "Set Destination", { exact: true });
+    await settle(restoredApp, 4);
+
+    expect(restoredApp.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "channel:whatsapp:auto-default-target",
+        connectorId: "channel:whatsapp",
+        status: "configured",
+      }),
+    );
+    expect(restoredApp.builderVerifyResult?.verification.fingerprint).toBe(
+      "whatsapp-retry-verify-1",
+    );
+    expect(findButtonByText(restoredApp, "Apply Builder Plan", { exact: true })?.disabled).toBe(
+      false,
+    );
   });
 
   it("drives exec approvals setup until Builder unblocks apply", async () => {
@@ -1728,6 +4258,50 @@ describe("Builder guided connector flows", () => {
     );
     expect(app.textContent).toContain("Re-check approvals");
     expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+  });
+
+  it("retries exec approvals routing after adding an explicit target", async () => {
+    await exerciseRetryableGuidedVerificationFlow({
+      planFactory: createExecApprovalsPlanResult,
+      brief: "Open websites for me and ask for approval before changing anything.",
+      initialConfigState: {
+        approvals: {
+          exec: {
+            enabled: false,
+            mode: "session",
+            targets: [],
+          },
+        },
+      },
+      openSetupLabel: "Open approvals setup",
+      openSetupIndex: 0,
+      verifyButtonLabel: "Check approvals",
+      retryButtonLabel: "Re-check approvals",
+      actionId: "platform:exec-approvals:configure",
+      connectorId: "platform:exec-approvals",
+      initialFields: {
+        "Forward exec approvals": "true",
+        "Approval forwarding mode": "targets",
+      },
+      repairedFields: {
+        "Approval target channel": "telegram",
+        "Approval target destination": "123456789",
+      },
+      expectedVisibleText: "Check approval routing",
+      failureMessage:
+        'Approval forwarding mode "targets" needs both a target channel and destination.',
+      failureResumeLabel: "Re-check approvals",
+      failureResumeDetail:
+        "Save both an approval target channel and destination, then run the check again.",
+      successMessage: "Exec approvals are configured and ready.",
+      successUpdatedRefs: [
+        "approvals.exec.enabled",
+        "approvals.exec.mode",
+        "approvals.exec.targets.0.channel",
+        "approvals.exec.targets.0.to",
+      ],
+      fingerprint: "approvals-retry-verify-1",
+    });
   });
 
   it("drives plugin install setup until Builder unblocks apply", async () => {

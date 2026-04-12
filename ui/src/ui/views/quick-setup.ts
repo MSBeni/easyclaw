@@ -75,6 +75,13 @@ type QuickSetupDef = {
 type BuilderSetupFocus = NonNullable<AppViewState["builderSetupFocus"]>;
 type BuilderSetupActionField = NonNullable<BuilderSetupFocus["requiredFields"]>[number];
 
+const ACTION_BACKED_CUSTOM_GUIDE_ACTION_IDS = new Set([
+  "channel:telegram:verify-token",
+  "channel:slack:verify-credentials",
+  "channel:discord:verify-token",
+  "channel:signal:verify-transport",
+]);
+
 function docsUrlFromPath(path: string | null | undefined): string | undefined {
   if (!path) {
     return undefined;
@@ -378,11 +385,14 @@ function buildGenericConnectorQuickSetup(focus: BuilderSetupFocus): QuickSetupDe
 
 /** Map connector metadata and config refs to a quick-setup definition. */
 export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupDef | null {
-  if (focus.actionKind === "install") {
-    const installBacked = buildActionBackedQuickSetup(focus);
-    if (installBacked) {
-      return installBacked;
-    }
+  const actionBacked = buildActionBackedQuickSetup(focus);
+  if (focus.actionKind === "install" && actionBacked) {
+    return actionBacked;
+  }
+
+  const actionId = focus.actionId?.trim() ?? "";
+  if (ACTION_BACKED_CUSTOM_GUIDE_ACTION_IDS.has(actionId) && actionBacked) {
+    return actionBacked;
   }
 
   const refKey = focus.refs[0] ?? "";
@@ -1168,7 +1178,6 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
   }
 
   if (!prefersCustomGuide) {
-    const actionBacked = buildActionBackedQuickSetup(focus);
     if (actionBacked) {
       return actionBacked;
     }
