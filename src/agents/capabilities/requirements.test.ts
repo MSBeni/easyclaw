@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
@@ -278,6 +281,54 @@ describe("capability requirements", () => {
       requirements.outputs.find((entry) => entry.id === "message-output")?.connectorIds,
     ).toContain("channel:zalo");
     expect(requirements.setupGaps.map((gap) => gap.code)).toContain("channel:zalo");
+  });
+
+  it("matches external planner-hint aliases from catalog metadata", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-requirement-catalog-"));
+    const catalogPath = path.join(dir, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/voice-delivery",
+            openclaw: {
+              channel: {
+                id: "voice-delivery",
+                label: "Voice Delivery",
+                selectionLabel: "Voice Delivery",
+                docsPath: "/channels/voice-delivery",
+                blurb: "Voice delivery entry",
+              },
+              install: {
+                npmSpec: "@openclaw/voice-delivery",
+              },
+              builder: {
+                channelConnector: {
+                  contracts: ["delivery.chat", "message.send"],
+                  plannerHints: {
+                    aliases: ["phone call"],
+                  },
+                },
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const registry = buildOpenClawCapabilityRegistry({ catalogPaths: [catalogPath] });
+    const requirements = buildRequirementSet({
+      brief: "Create a daily summary bot that sends the result to phone call.",
+      cfg: {},
+      registry,
+    });
+
+    expect(
+      requirements.outputs.find((entry) => entry.id === "message-output")?.connectorIds,
+    ).toContain("channel:voice-delivery");
+    expect(requirements.recommendedConnectorIds).toContain("channel:voice-delivery");
+    expect(requirements.setupGaps.map((gap) => gap.code)).toContain("channel:voice-delivery");
   });
 
   it("surfaces ambiguous and missing requirement data explicitly", () => {

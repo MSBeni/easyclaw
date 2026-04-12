@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { listCoreToolSections } from "../tool-catalog.js";
 import { buildOpenClawCapabilityRegistry } from "./openclaw.js";
@@ -149,5 +152,104 @@ describe("openclaw capability substrate", () => {
         "transform.transcribe",
       ]),
     );
+  });
+
+  it("loads external capability contracts and connector overrides from the catalog", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-capability-catalog-"));
+    const catalogPath = path.join(dir, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/voice-call",
+            openclaw: {
+              channel: {
+                id: "voice-call",
+                label: "Voice Call",
+                selectionLabel: "Voice Call",
+                docsPath: "/channels/voice-call",
+                blurb: "Voice call delivery",
+              },
+              install: {
+                npmSpec: "@openclaw/voice-call",
+              },
+              builder: {
+                capabilityContracts: [
+                  {
+                    id: "delivery.voice_call",
+                    label: "Voice Call Delivery",
+                    summary: "Deliver a result over a scoped voice call.",
+                    family: "delivery",
+                    semanticVerbs: ["call", "voice"],
+                    requiredInputs: ["call target", "message payload"],
+                    producedOutputs: ["voice delivery"],
+                    requiresTools: [],
+                    requiresToolSections: [],
+                    configRequirements: ["call target"],
+                    authRequirements: ["authenticated voice connector"],
+                    setupHints: ["Connect the voice surface before activation."],
+                    risk: "communicative",
+                    verification: [
+                      {
+                        kind: "custom",
+                        label: "Voice Probe",
+                        successDescription: "The connector can place a scoped voice test.",
+                      },
+                    ],
+                  },
+                ],
+                channelConnector: {
+                  contracts: ["delivery.voice_call"],
+                  riskClasses: ["communicative"],
+                  setup: {
+                    onboarding: false,
+                    requiresConfig: true,
+                    requiresAuth: false,
+                  },
+                  verification: {
+                    supported: true,
+                    probes: [
+                      {
+                        kind: "custom",
+                        label: "Voice Probe",
+                        successDescription: "The connector can place a scoped voice test.",
+                      },
+                    ],
+                  },
+                  plannerHints: {
+                    aliases: ["phone call"],
+                  },
+                },
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const registry = buildOpenClawCapabilityRegistry({ catalogPaths: [catalogPath] });
+    const connector = registry.connectorsById.get("channel:voice-call");
+
+    expect(getCapabilityContract(registry, "delivery.voice_call")?.label).toBe(
+      "Voice Call Delivery",
+    );
+    expect(connector?.contracts).toEqual(["delivery.voice_call"]);
+    expect(connector?.setup).toEqual({
+      onboarding: false,
+      requiresConfig: true,
+      requiresAuth: false,
+    });
+    expect(connector?.verification).toEqual({
+      supported: true,
+      probes: [
+        {
+          kind: "custom",
+          label: "Voice Probe",
+          successDescription: "The connector can place a scoped voice test.",
+        },
+      ],
+    });
+    expect(connector?.metadata.aliases).toContain("phone call");
   });
 });

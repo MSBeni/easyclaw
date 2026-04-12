@@ -31,6 +31,7 @@ export type ChannelPluginCatalogEntry = {
     localPath?: string;
     defaultChoice?: "npm" | "local";
   };
+  builder?: OpenClawPackageManifest["builder"];
 };
 
 type CatalogOptions = {
@@ -223,7 +224,12 @@ function buildCatalogEntry(candidate: {
   if (!install) {
     return null;
   }
-  return { id, meta, install };
+  return {
+    id,
+    meta,
+    install,
+    ...(manifest.builder ? { builder: manifest.builder } : {}),
+  };
 }
 
 function buildExternalCatalogEntry(entry: ExternalCatalogEntry): ChannelPluginCatalogEntry | null {

@@ -13,6 +13,8 @@ import type {
 type OpenClawCapabilityRegistryOptions = {
   includeCatalog?: boolean;
   workspaceDir?: string;
+  catalogPaths?: string[];
+  env?: NodeJS.ProcessEnv;
   extraContracts?: CapabilityContract[];
   extraConnectors?: ConnectorDefinition[];
 };
@@ -694,14 +696,22 @@ function buildChannelConnectorDefinition(params: {
   installStrategy: "none" | "bundled" | "npm" | "local" | "external";
   defaultChoice?: "npm" | "local";
   sourceKind: ConnectorDefinition["source"]["kind"];
+  contracts?: string[];
+  riskClasses?: ConnectorDefinition["riskClasses"];
+  setup?: Partial<ConnectorDefinition["setup"]>;
+  verification?: Partial<ConnectorDefinition["verification"]>;
+  plannerAliases?: string[];
 }): ConnectorDefinition {
+  const aliases = Array.from(
+    new Set([...(params.aliases ?? []), ...(params.plannerAliases ?? [])].filter(Boolean)),
+  );
   return {
     id: `channel:${params.id}`,
     label: params.label,
     kind: "channel",
     summary: params.summary,
-    contracts: ["ingress.chat", "delivery.chat", "message.send"],
-    riskClasses: ["communicative"],
+    contracts: params.contracts ?? ["ingress.chat", "delivery.chat", "message.send"],
+    riskClasses: params.riskClasses ?? ["communicative"],
     source: {
       kind: params.sourceKind,
       id: params.id,
@@ -712,19 +722,19 @@ function buildChannelConnectorDefinition(params: {
       ...(params.defaultChoice ? { defaultChoice: params.defaultChoice } : {}),
     },
     setup: {
-      onboarding: params.onboarding,
-      requiresConfig: true,
-      requiresAuth: true,
+      onboarding: params.setup?.onboarding ?? params.onboarding,
+      requiresConfig: params.setup?.requiresConfig ?? true,
+      requiresAuth: params.setup?.requiresAuth ?? true,
     },
     verification: {
-      supported: true,
-      probes: [STATUS_PROBE, SEND_TEST_PROBE],
+      supported: params.verification?.supported ?? true,
+      probes: params.verification?.probes ?? [STATUS_PROBE, SEND_TEST_PROBE],
     },
     metadata: {
       ...(params.docsPath ? { docsPath: params.docsPath } : {}),
       ...(params.selectionLabel ? { selectionLabel: params.selectionLabel } : {}),
       ...(params.detailLabel ? { detailLabel: params.detailLabel } : {}),
-      ...(params.aliases?.length ? { aliases: params.aliases } : {}),
+      ...(aliases.length ? { aliases } : {}),
       ...(params.systemImage ? { systemImage: params.systemImage } : {}),
     },
   };
@@ -750,9 +760,13 @@ function listBuiltInChannelConnectorDefinitions(): ConnectorDefinition[] {
 }
 
 function listCatalogChannelConnectorDefinitions(
-  options: Pick<OpenClawCapabilityRegistryOptions, "workspaceDir">,
+  options: Pick<OpenClawCapabilityRegistryOptions, "workspaceDir" | "catalogPaths" | "env">,
 ): ConnectorDefinition[] {
-  return listChannelPluginCatalogEntries({ workspaceDir: options.workspaceDir }).map((entry) =>
+  return listChannelPluginCatalogEntries({
+    workspaceDir: options.workspaceDir,
+    catalogPaths: options.catalogPaths,
+    env: options.env,
+  }).map((entry) =>
     buildChannelConnectorDefinition({
       id: entry.id,
       label: entry.meta.label,
@@ -767,14 +781,33 @@ function listCatalogChannelConnectorDefinitions(
       installStrategy: entry.install.localPath ? "bundled" : "npm",
       defaultChoice: entry.install.defaultChoice,
       sourceKind: "channel_catalog",
+      contracts: entry.builder?.channelConnector?.contracts,
+      riskClasses: entry.builder?.channelConnector?.riskClasses,
+      setup: entry.builder?.channelConnector?.setup,
+      verification: entry.builder?.channelConnector?.verification,
+      plannerAliases: entry.builder?.channelConnector?.plannerHints?.aliases,
     }),
   );
 }
 
 export function listOpenClawCapabilityContracts(
-  extraContracts: CapabilityContract[] = [],
+  options: OpenClawCapabilityRegistryOptions = {},
 ): CapabilityContract[] {
-  return [...OPENCLAW_CAPABILITY_CONTRACTS, ...extraContracts];
+  const catalogContracts =
+    options.includeCatalog === false
+      ? []
+      : Array.from(
+          new Map(
+            listChannelPluginCatalogEntries({
+              workspaceDir: options.workspaceDir,
+              catalogPaths: options.catalogPaths,
+              env: options.env,
+            })
+              .flatMap((entry) => entry.builder?.capabilityContracts ?? [])
+              .map((contract) => [contract.id, contract] as const),
+          ).values(),
+        );
+  return [...OPENCLAW_CAPABILITY_CONTRACTS, ...catalogContracts, ...(options.extraContracts ?? [])];
 }
 
 export function listOpenClawConnectorDefinitions(
@@ -787,7 +820,11 @@ export function listOpenClawConnectorDefinitions(
     ...listBuiltInChannelConnectorDefinitions(),
     ...(options.includeCatalog === false
       ? []
-      : listCatalogChannelConnectorDefinitions({ workspaceDir: options.workspaceDir })),
+      : listCatalogChannelConnectorDefinitions({
+          workspaceDir: options.workspaceDir,
+          catalogPaths: options.catalogPaths,
+          env: options.env,
+        })),
     ...(options.extraConnectors ?? []),
   ];
 
@@ -804,7 +841,7 @@ export function buildOpenClawCapabilityRegistry(
   options: OpenClawCapabilityRegistryOptions = {},
 ): CapabilityRegistry {
   return buildCapabilityRegistry({
-    contracts: listOpenClawCapabilityContracts(options.extraContracts),
+    contracts: listOpenClawCapabilityContracts(options),
     connectors: listOpenClawConnectorDefinitions(options),
   });
 }

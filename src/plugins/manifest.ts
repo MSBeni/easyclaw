@@ -1,5 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import type {
+  CapabilityContract,
+  RiskClass,
+  VerificationProbe,
+} from "../agents/capabilities/schema.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
@@ -146,10 +151,39 @@ export type PluginPackageInstall = {
   defaultChoice?: "npm" | "local";
 };
 
+export type PluginPackageChannelConnectorSetup = {
+  onboarding?: boolean;
+  requiresConfig?: boolean;
+  requiresAuth?: boolean;
+};
+
+export type PluginPackageChannelConnectorVerification = {
+  supported?: boolean;
+  probes?: VerificationProbe[];
+};
+
+export type PluginPackageChannelConnectorPlannerHints = {
+  aliases?: string[];
+};
+
+export type PluginPackageChannelConnector = {
+  contracts?: string[];
+  riskClasses?: RiskClass[];
+  setup?: PluginPackageChannelConnectorSetup;
+  verification?: PluginPackageChannelConnectorVerification;
+  plannerHints?: PluginPackageChannelConnectorPlannerHints;
+};
+
+export type PluginPackageBuilder = {
+  capabilityContracts?: CapabilityContract[];
+  channelConnector?: PluginPackageChannelConnector;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
+  builder?: PluginPackageBuilder;
 };
 
 export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [

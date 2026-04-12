@@ -142,16 +142,25 @@ describe("channel plugin catalog", () => {
               install: {
                 npmSpec: "@openclaw/demo-channel",
               },
+              builder: {
+                channelConnector: {
+                  contracts: ["delivery.chat", "message.send"],
+                  plannerHints: {
+                    aliases: ["demo dm"],
+                  },
+                },
+              },
             },
           },
         ],
       }),
     );
 
-    const ids = listChannelPluginCatalogEntries({ catalogPaths: [catalogPath] }).map(
-      (entry) => entry.id,
+    const entry = listChannelPluginCatalogEntries({ catalogPaths: [catalogPath] }).find(
+      (candidate) => candidate.id === "demo-channel",
     );
-    expect(ids).toContain("demo-channel");
+    expect(entry?.id).toBe("demo-channel");
+    expect(entry?.builder?.channelConnector?.plannerHints?.aliases).toContain("demo dm");
   });
 
   it("uses the provided env for external catalog path resolution", () => {
