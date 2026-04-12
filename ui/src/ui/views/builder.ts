@@ -883,7 +883,11 @@ export function renderBuilder(props: BuilderProps) {
                 </div>
                 <div class="builder-grid builder-grid--2col">
                   ${builderBuildSpecCard(draft.buildSpec)}
-                  ${builderWorkspacePreviewList(state, workspacePreviews)}
+                  ${builderWorkspacePreviewList(
+                    state,
+                    workspacePreviews,
+                    draft.buildSpec.workspaceArtifacts,
+                  )}
                 </div>
               </section>
 
@@ -999,10 +1003,17 @@ export function renderBuilder(props: BuilderProps) {
                         <div class="card-sub">No blueprint compilation issues were detected.</div>
                       `
                 }
-                ${builderGraphPlanList(planResult?.graphPlans ?? [])}
+                ${builderGraphPlanList(planResult?.graphPlans ?? [], workspacePreviews)}
               </section>
 
-              ${renderBuilderApplySection(props, state, draft, blueprintStatus)}
+              ${renderBuilderApplySection(
+                props,
+                state,
+                draft,
+                blueprintStatus,
+                workspacePreviews,
+                planResult?.graphPlans ?? [],
+              )}
             `
           : nothing
       }
@@ -1015,6 +1026,8 @@ function renderBuilderApplySection(
   state: AppViewState,
   draft: NonNullable<AppViewState["builderPlan"]>["draft"],
   planStatus: string,
+  workspacePreviews: NonNullable<AppViewState["builderPlan"]>["workspacePreviews"],
+  graphPlans: NonNullable<AppViewState["builderPlan"]>["graphPlans"],
 ) {
   if (state.builderApplyResult) {
     const result = state.builderApplyResult.result;
@@ -1130,7 +1143,9 @@ function renderBuilderApplySection(
     (action) => (action.blocking ?? false) && action.status !== "completed",
   );
   return html`
-    <section class="card" style="text-align:center; padding:24px;">
+    <section class="card" style="padding:24px;">
+      ${builderPreApplyChecklist(state, draft, planStatus, workspacePreviews, graphPlans)}
+      <div style="text-align:center; margin-top:16px;">
       <button
         type="button"
         class="btn primary"
@@ -1156,6 +1171,7 @@ function renderBuilderApplySection(
                 </div>
               `
       }
+      </div>
     </section>
   `;
 }
@@ -1322,23 +1338,119 @@ function builderBuildSpecCard(
 function builderWorkspacePreviewList(
   state: AppViewState,
   previews: NonNullable<AppViewState["builderPlan"]>["workspacePreviews"],
+  workspaceArtifacts: NonNullable<
+    AppViewState["builderPlan"]
+  >["draft"]["buildSpec"]["workspaceArtifacts"],
 ) {
-  if (previews.length === 0) {
+  if (previews.length === 0 && workspaceArtifacts.length === 0) {
     return nothing;
   }
+  const artifactByName = new Map(
+    workspaceArtifacts.map((artifact) => [artifact.fileName, artifact]),
+  );
+  const previewFileNames = new Set(
+    previews.flatMap((preview) => preview.files.map((file) => file.name)),
+  );
+  const pendingArtifacts = workspaceArtifacts.filter(
+    (artifact) => !previewFileNames.has(artifact.fileName),
+  );
+  const totalPreviewFiles = previews.reduce((total, preview) => total + preview.files.length, 0);
+  const totalEditedFiles = previews.reduce(
+    (total, preview) =>
+      total +
+      preview.files.filter((file) =>
+        Object.prototype.hasOwnProperty.call(
+          state.builderWorkspaceDocEdits,
+          `${preview.nodeId}:${file.name}`,
+        ),
+      ).length,
+    0,
+  );
   return html`
     <div>
-      <div class="label" style="margin-bottom:8px;">Managed Workspace Docs</div>
+      <div class="label" style="margin-bottom:8px;">Workspace Authoring Review</div>
+      <div class="tpl-note" style="margin-bottom:8px;">
+        ${totalPreviewFiles} reviewable file${totalPreviewFiles === 1 ? "" : "s"} across
+        ${previews.length} runtime node${previews.length === 1 ? "" : "s"}.
+        ${
+          totalEditedFiles > 0
+            ? html`
+                <span class="tpl-pill tpl-pill--muted" style="margin-left:8px;">
+                  ${totalEditedFiles} edited in Builder
+                </span>
+              `
+            : nothing
+        }
+      </div>
       ${previews.map(
         (preview) => html`
           <div class="tpl-plan-file">
-            <span>${preview.roleId}${preview.entry ? " [entry]" : ""}</span>
+            <span>${preview.entry ? "Entry" : "Worker"} ${preview.roleId}</span>
             <span class="tpl-pill tpl-pill--muted">${preview.files.length} files</span>
           </div>
           ${preview.files.map(
             (file) => html`
               <details class="tpl-note" style="margin-bottom:8px;">
-                <summary>${file.name}</summary>
+                <summary>
+                  ${file.name}
+                  ${(() => {
+                    const meta = artifactByName.get(file.name);
+                    const edited = Object.prototype.hasOwnProperty.call(
+                      state.builderWorkspaceDocEdits,
+                      `${preview.nodeId}:${file.name}`,
+                    );
+                    return html`
+                      ${
+                        meta
+                          ? html`
+                              <span
+                                class="tpl-pill ${workspaceArtifactStatusPillClass(meta.status)}"
+                                style="margin-left:8px;"
+                              >
+                                ${meta.status}
+                              </span>
+                            `
+                          : nothing
+                      }
+                      ${
+                        edited
+                          ? html`
+                              <span class="tpl-pill tpl-pill--muted" style="margin-left: 8px"> edited in Builder </span>
+                            `
+                          : nothing
+                      }
+                    `;
+                  })()}
+                </summary>
+                ${(() => {
+                  const meta = artifactByName.get(file.name);
+                  const key = `${preview.nodeId}:${file.name}`;
+                  const edited = Object.prototype.hasOwnProperty.call(
+                    state.builderWorkspaceDocEdits,
+                    key,
+                  );
+                  const currentValue = edited
+                    ? (state.builderWorkspaceDocEdits[key] ?? "")
+                    : file.content;
+                  return meta
+                    ? html`
+                        <div class="card-sub" style="margin-top:8px;">
+                          <strong>Purpose:</strong> ${meta.purpose}
+                        </div>
+                        <div class="card-sub" style="margin-top:6px; margin-bottom:8px;">
+                          ${meta.previewSummary}
+                        </div>
+                        <div class="card-sub" style="margin-top:6px; margin-bottom:8px;">
+                          Review summary:
+                          ${
+                            edited
+                              ? `Edited in Builder. ${countTextLines(file.content)} generated lines, ${countTextLines(currentValue)} current lines.`
+                              : `Generated preview ready for review with ${countTextLines(file.content)} lines.`
+                          }
+                        </div>
+                      `
+                    : nothing;
+                })()}
                 <div class="card-sub" style="margin-top:8px; margin-bottom:8px;">
                   Review or edit this managed section before apply. Your edits stay local to Builder
                   until you apply the plan.
@@ -1388,6 +1500,34 @@ function builderWorkspacePreviewList(
           )}
         `,
       )}
+      ${
+        pendingArtifacts.length > 0
+          ? html`
+              <div class="label" style="margin:12px 0 8px;">Planned Workspace Docs</div>
+              <div class="card-sub" style="margin-bottom:8px;">
+                These docs are already part of the BuildSpec, but their generated review text is
+                not available in Builder yet.
+              </div>
+              ${pendingArtifacts.map(
+                (artifact) => html`
+                  <div class="tpl-note">
+                    <div>
+                      <strong>${artifact.fileName}</strong>
+                      <span
+                        class="tpl-pill ${workspaceArtifactStatusPillClass(artifact.status)}"
+                        style="margin-left:8px;"
+                      >
+                        ${artifact.status}
+                      </span>
+                    </div>
+                    <div style="margin-top:6px;">${artifact.purpose}</div>
+                    <div class="card-sub" style="margin-top:6px;">${artifact.previewSummary}</div>
+                  </div>
+                `,
+              )}
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -1691,16 +1831,22 @@ function builderGraphPlanList(
     templateId: string;
     plan: Record<string, unknown>;
   }>,
+  workspacePreviews: NonNullable<AppViewState["builderPlan"]>["workspacePreviews"],
 ) {
   if (graphPlans.length === 0) {
     return nothing;
   }
+  const workspacePreviewByNodeId = new Map(
+    workspacePreviews.map((preview) => [preview.nodeId, preview] as const),
+  );
   return html`
     <div class="builder-grid" style="margin-top:12px;">
       <div>
-        <div class="label" style="margin-bottom:8px;">Node Plans</div>
+        <div class="label" style="margin-bottom:8px;">Runtime Node Plans</div>
         ${graphPlans.map((node) => {
           const status = readString(asObject(node.plan), "status", "ready");
+          const preview = workspacePreviewByNodeId.get(node.nodeId) ?? null;
+          const issues = readObjectArray(asObject(node.plan), "issues");
           return html`
             <div class="tpl-plan-file">
               <span>
@@ -1709,11 +1855,151 @@ function builderGraphPlanList(
               </span>
               <span class="tpl-pill ${status === "ready" ? "tpl-pill--ok" : "tpl-pill--error"}">${status}</span>
             </div>
+            ${
+              preview
+                ? html`
+                    <div class="tpl-note">
+                      ${preview.files.length} workspace doc${preview.files.length === 1 ? "" : "s"}
+                      ready for review before apply.
+                    </div>
+                  `
+                : html`
+                    <div class="tpl-note">Workspace docs are not generated for review yet for this node.</div>
+                  `
+            }
+            ${
+              issues.length > 0
+                ? html`
+                    <div class="tpl-note">
+                      ${issues.length} node issue${issues.length === 1 ? "" : "s"} still need
+                      review before apply.
+                    </div>
+                  `
+                : nothing
+            }
           `;
         })}
       </div>
     </div>
   `;
+}
+
+function workspaceArtifactStatusPillClass(status: "planned" | "suggested" | "generated") {
+  if (status === "generated") {
+    return "tpl-pill--ok";
+  }
+  return "tpl-pill--muted";
+}
+
+function countTextLines(value: string): number {
+  if (value.length === 0) {
+    return 0;
+  }
+  return value.split(/\r?\n/).length;
+}
+
+function builderPreApplyChecklist(
+  state: AppViewState,
+  draft: NonNullable<AppViewState["builderPlan"]>["draft"],
+  planStatus: string,
+  workspacePreviews: NonNullable<AppViewState["builderPlan"]>["workspacePreviews"],
+  graphPlans: NonNullable<AppViewState["builderPlan"]>["graphPlans"],
+) {
+  const blockingSetupActions = draft.buildSpec.setupActions.filter(
+    (action) => (action.blocking ?? false) && action.status !== "completed",
+  ).length;
+  const blockedVerifications = draft.planning.verifications.filter((entry) =>
+    ["blocked", "failed", "needs_live_check"].includes(entry.status),
+  ).length;
+  const readyGraphPlans = graphPlans.filter(
+    (entry) => readString(asObject(entry.plan), "status", "ready") === "ready",
+  ).length;
+  const pendingGraphPlans = graphPlans.length - readyGraphPlans;
+  const totalWorkspaceFiles = workspacePreviews.reduce(
+    (total, preview) => total + preview.files.length,
+    0,
+  );
+  const editedWorkspaceFiles = workspacePreviews.reduce(
+    (total, preview) =>
+      total +
+      preview.files.filter((file) =>
+        Object.prototype.hasOwnProperty.call(
+          state.builderWorkspaceDocEdits,
+          `${preview.nodeId}:${file.name}`,
+        ),
+      ).length,
+    0,
+  );
+  const generatedArtifactNames = new Set(
+    workspacePreviews.flatMap((preview) => preview.files.map((file) => file.name)),
+  );
+  const pendingWorkspaceArtifacts = draft.buildSpec.workspaceArtifacts.filter(
+    (artifact) => !generatedArtifactNames.has(artifact.fileName),
+  ).length;
+
+  const items = [
+    {
+      label: "Setup and verification",
+      status: blockingSetupActions === 0 && blockedVerifications === 0 ? "ready" : "blocked",
+      detail:
+        blockingSetupActions === 0 && blockedVerifications === 0
+          ? "All blocking setup actions are cleared and live verification is clean."
+          : `${blockingSetupActions} blocking setup action${blockingSetupActions === 1 ? "" : "s"} and ${blockedVerifications} verification item${blockedVerifications === 1 ? "" : "s"} still need attention.`,
+    },
+    {
+      label: "Runtime graph review",
+      status: graphPlans.length > 0 && pendingGraphPlans === 0 ? "ready" : "pending",
+      detail:
+        graphPlans.length > 0
+          ? `${readyGraphPlans} node plan${readyGraphPlans === 1 ? "" : "s"} ready for activation review.`
+          : `Graph topology is visible in Builder, but node-specific runtime plans are not generated yet.`,
+    },
+    {
+      label: "Workspace authoring review",
+      status: totalWorkspaceFiles > 0 && pendingWorkspaceArtifacts === 0 ? "ready" : "pending",
+      detail:
+        totalWorkspaceFiles > 0
+          ? `${totalWorkspaceFiles} generated workspace doc${totalWorkspaceFiles === 1 ? "" : "s"} ready for review, ${editedWorkspaceFiles} edited in Builder, ${pendingWorkspaceArtifacts} still pending generation.`
+          : draft.buildSpec.workspaceArtifacts.length > 0
+            ? `${draft.buildSpec.workspaceArtifacts.length} workspace doc${draft.buildSpec.workspaceArtifacts.length === 1 ? "" : "s"} planned, but generated review text is still pending.`
+            : "No managed workspace docs are attached to this Builder draft yet.",
+    },
+    {
+      label: "Blueprint apply readiness",
+      status: draft.plannerStatus === "ready" && planStatus === "ready" ? "ready" : "blocked",
+      detail:
+        draft.plannerStatus === "ready" && planStatus === "ready"
+          ? "Planner and blueprint compilation are both ready for apply."
+          : `Planner is ${titleCaseWords(draft.plannerStatus)} and blueprint status is ${titleCaseWords(planStatus)}.`,
+    },
+  ] as const;
+
+  return html`
+    <div style="text-align:left;">
+      <div class="label" style="margin-bottom:8px;">Pre-Apply Checklist</div>
+      ${items.map(
+        (item) => html`
+          <div class="tpl-plan-file">
+            <span>${item.label}</span>
+            <span class="tpl-pill ${builderChecklistPillClass(item.status)}">
+              ${titleCaseWords(item.status)}
+            </span>
+          </div>
+          <div class="tpl-note" style="margin-bottom:8px;">${item.detail}</div>
+        `,
+      )}
+    </div>
+  `;
+}
+
+function builderChecklistPillClass(status: "ready" | "pending" | "blocked") {
+  if (status === "ready") {
+    return "tpl-pill--ok";
+  }
+  if (status === "pending") {
+    return "tpl-pill--muted";
+  }
+  return "tpl-pill--error";
 }
 
 function builderIntegrationList(

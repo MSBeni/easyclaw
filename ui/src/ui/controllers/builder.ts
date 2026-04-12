@@ -358,7 +358,7 @@ export type BuilderDraftSummary = {
         id: string;
         fromNodeId: string;
         toNodeId: string;
-        kind: "delegates" | "reports";
+        kind: string;
         label: string;
       }>;
     };
