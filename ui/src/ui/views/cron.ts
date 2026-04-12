@@ -1650,6 +1650,8 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
 
 function renderJobState(job: CronJob) {
   const rawStatus = job.state?.lastStatus;
+  const deliveryStatus = job.state?.lastDeliveryStatus;
+  const deliveryError = job.state?.lastDeliveryError;
   const statusClass =
     rawStatus === "ok"
       ? "cron-job-status-ok"
@@ -1687,6 +1689,22 @@ function renderJobState(job: CronJob) {
           ${formatStateRelative(lastRunAtMs)}
         </span>
       </div>
+      ${
+        deliveryStatus
+          ? html`<div class="cron-job-state-row">
+              <span class="cron-job-state-key">${t("cron.jobDetail.delivery")}</span>
+              <span class="cron-job-state-value">${runDeliveryLabel(deliveryStatus)}</span>
+            </div>`
+          : nothing
+      }
+      ${
+        deliveryError
+          ? html`<div class="cron-job-state-row">
+              <span class="cron-job-state-key">Delivery issue</span>
+              <span class="cron-job-state-value">${deliveryError}</span>
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }

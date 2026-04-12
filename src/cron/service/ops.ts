@@ -482,6 +482,7 @@ async function finishPreparedManualRun(
       {
         status: coreResult.status,
         error: coreResult.error,
+        deliveryError: coreResult.deliveryError,
         delivered: coreResult.delivered,
         startedAt,
         endedAt,

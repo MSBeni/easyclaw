@@ -53,6 +53,11 @@ export type RecoverySummary = {
   deferredBackoff: number;
 };
 
+export type DeliveryRecoveryLoop = {
+  stop: () => void;
+  runNow: () => Promise<RecoverySummary>;
+};
+
 function resolveQueueDir(stateDir?: string): string {
   const base = stateDir ?? resolveStateDir();
   return path.join(base, QUEUE_DIRNAME);
@@ -415,6 +420,57 @@ export async function recoverPendingDeliveries(opts: {
     `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff)`,
   );
   return { recovered, failed, skippedMaxRetries, deferredBackoff };
+}
+
+export function startDeliveryRecoveryLoop(opts: {
+  deliver: DeliverFn;
+  log: RecoveryLogger;
+  cfg: OpenClawConfig;
+  stateDir?: string;
+  intervalMs?: number;
+  maxRecoveryMs?: number;
+}): DeliveryRecoveryLoop {
+  const intervalMs =
+    typeof opts.intervalMs === "number" && Number.isFinite(opts.intervalMs) && opts.intervalMs > 0
+      ? Math.floor(opts.intervalMs)
+      : process.env.OPENCLAW_TEST_FAST === "1"
+        ? 1_000
+        : 60_000;
+  let timer: NodeJS.Timeout | null = null;
+  let inFlight: Promise<RecoverySummary> | null = null;
+
+  const runNow = async (): Promise<RecoverySummary> => {
+    if (inFlight) {
+      return await inFlight;
+    }
+    inFlight = recoverPendingDeliveries({
+      deliver: opts.deliver,
+      log: opts.log,
+      cfg: opts.cfg,
+      stateDir: opts.stateDir,
+      maxRecoveryMs: opts.maxRecoveryMs,
+    }).finally(() => {
+      inFlight = null;
+    });
+    return await inFlight;
+  };
+
+  timer = setInterval(() => {
+    void runNow().catch((err) => {
+      opts.log.error(`Delivery recovery sweep failed: ${String(err)}`);
+    });
+  }, intervalMs);
+  timer.unref?.();
+
+  return {
+    stop: () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    },
+    runNow,
+  };
 }
 
 export { MAX_RETRIES };

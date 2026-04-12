@@ -298,6 +298,7 @@ export function applyJobResult(
   result: {
     status: CronRunStatus;
     error?: string;
+    deliveryError?: string;
     delivered?: boolean;
     startedAt: number;
     endedAt: number;
@@ -331,7 +332,7 @@ export function applyJobResult(
   const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
   job.state.lastDeliveryStatus = deliveryStatus;
   job.state.lastDeliveryError =
-    deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+    deliveryStatus === "not-delivered" ? (result.deliveryError ?? result.error) : undefined;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
@@ -1143,6 +1144,7 @@ export async function executeJobCore(
   return {
     status: res.status,
     error: res.error,
+    deliveryError: res.deliveryError,
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
@@ -1174,6 +1176,7 @@ export async function executeJob(
 
   let coreResult: {
     status: CronRunStatus;
+    deliveryError?: string;
     delivered?: boolean;
   } & CronRunOutcome &
     CronRunTelemetry;
@@ -1187,6 +1190,7 @@ export async function executeJob(
   const shouldDelete = applyJobResult(state, job, {
     status: coreResult.status,
     error: coreResult.error,
+    deliveryError: coreResult.deliveryError,
     delivered: coreResult.delivered,
     startedAt,
     endedAt,
@@ -1205,6 +1209,7 @@ function emitJobFinished(
   job: CronJob,
   result: {
     status: CronRunStatus;
+    deliveryError?: string;
     delivered?: boolean;
   } & CronRunOutcome &
     CronRunTelemetry,

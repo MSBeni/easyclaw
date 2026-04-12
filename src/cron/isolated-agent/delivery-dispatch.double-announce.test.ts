@@ -22,6 +22,10 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue([{ ok: true }]),
 }));
 
+vi.mock("../../infra/outbound/delivery-queue.js", () => ({
+  enqueueDelivery: vi.fn().mockResolvedValue("queued-delivery-1"),
+}));
+
 vi.mock("../../infra/outbound/identity.js", () => ({
   resolveAgentOutboundIdentity: vi.fn().mockReturnValue({}),
 }));
@@ -48,6 +52,7 @@ vi.mock("./subagent-followup.js", () => ({
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { enqueueDelivery } from "../../infra/outbound/delivery-queue.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import {
   dispatchCronDelivery,
@@ -92,8 +97,9 @@ function makeBaseParams(overrides: {
   synthesizedText?: string;
   deliveryRequested?: boolean;
   runSessionId?: string;
+  resolvedDelivery?: Extract<DeliveryTargetResolution, { ok: true }>;
 }) {
-  const resolvedDelivery = makeResolvedDelivery();
+  const resolvedDelivery = overrides.resolvedDelivery ?? makeResolvedDelivery();
   return {
     cfg: {} as never,
     cfgWithAgentDefaults: {} as never,
@@ -334,6 +340,44 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         status: "error",
         error: "Error: chat not found",
         deliveryAttempted: true,
+      }),
+    );
+  });
+
+  it("queues WhatsApp delivery for retry when the listener is unavailable", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(
+      new Error("No active WhatsApp Web listener (account: default)"),
+    );
+
+    const state = await dispatchCronDelivery(
+      makeBaseParams({
+        synthesizedText: "Queue me if WhatsApp is down.",
+        resolvedDelivery: {
+          ok: true,
+          channel: "whatsapp",
+          to: "+15551234567",
+          accountId: "default",
+          threadId: undefined,
+          mode: "explicit",
+        },
+      }),
+    );
+
+    expect(vi.mocked(enqueueDelivery)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+15551234567",
+        accountId: "default",
+      }),
+    );
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+        deliveryError: expect.stringContaining("queued this run for automatic retry"),
       }),
     );
   });

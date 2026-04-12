@@ -763,6 +763,7 @@ export async function startGatewayServer(
         channelManager,
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
       });
+  let deliveryRecoveryLoop: { stop: () => void } | null = null;
 
   if (!minimalTestGateway) {
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
@@ -771,10 +772,16 @@ export async function startGatewayServer(
   // Recover pending outbound deliveries from previous crash/restart.
   if (!minimalTestGateway) {
     void (async () => {
-      const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
+      const { recoverPendingDeliveries, startDeliveryRecoveryLoop } =
+        await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
       const logRecovery = log.child("delivery-recovery");
       await recoverPendingDeliveries({
+        deliver: deliverOutboundPayloads,
+        log: logRecovery,
+        cfg: cfgAtStart,
+      });
+      deliveryRecoveryLoop = startDeliveryRecoveryLoop({
         deliver: deliverOutboundPayloads,
         log: logRecovery,
         cfg: cfgAtStart,
@@ -1062,6 +1069,7 @@ export async function startGatewayServer(
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
+      deliveryRecoveryLoop?.stop();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);

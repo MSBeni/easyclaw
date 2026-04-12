@@ -9,6 +9,7 @@ import {
   deliverOutboundPayloads,
   type OutboundDeliveryResult,
 } from "../../infra/outbound/deliver.js";
+import { enqueueDelivery } from "../../infra/outbound/delivery-queue.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
@@ -121,6 +122,11 @@ const TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway closed \(1006/i,
   /gateway timeout/i,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
+];
+
+const QUEUEABLE_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
+  /no active .* listener/i,
+  /gateway not connected/i,
 ];
 
 const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -244,6 +250,14 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
   return TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
 }
 
+function isQueueableDirectCronDeliveryError(error: unknown): boolean {
+  const message = summarizeDirectCronDeliveryError(error);
+  if (!message) {
+    return false;
+  }
+  return QUEUEABLE_DIRECT_CRON_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
+}
+
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
   return process.env.NODE_ENV === "test" && process.env.OPENCLAW_TEST_FAST === "1"
     ? [8, 16, 32]
@@ -313,13 +327,40 @@ export async function dispatchCronDelivery(
       runSessionId: params.runSessionId,
       delivery,
     });
+    const payloadsForDelivery =
+      deliveryPayloads.length > 0
+        ? deliveryPayloads
+        : synthesizedText
+          ? [{ text: synthesizedText }]
+          : [];
+    const queueDeferredDelivery = async (
+      error: unknown,
+    ): Promise<RunCronAgentTurnResult | null> => {
+      if (!isQueueableDirectCronDeliveryError(error) || payloadsForDelivery.length === 0) {
+        return null;
+      }
+      await enqueueDelivery({
+        channel: delivery.channel,
+        to: delivery.to,
+        accountId: delivery.accountId,
+        payloads: payloadsForDelivery,
+        threadId: delivery.threadId,
+        bestEffort: params.deliveryBestEffort,
+      });
+      delivered = false;
+      const deliveryError = `Direct ${delivery.channel} delivery is temporarily unavailable, so EasyClaw queued this run for automatic retry. ${summarizeDirectCronDeliveryError(error)}`;
+      logWarn(`[cron:${params.job.id}] ${deliveryError}`);
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        delivered: false,
+        deliveryAttempted,
+        deliveryError,
+        ...params.telemetry,
+      });
+    };
     try {
-      const payloadsForDelivery =
-        deliveryPayloads.length > 0
-          ? deliveryPayloads
-          : synthesizedText
-            ? [{ text: synthesizedText }]
-            : [];
       if (payloadsForDelivery.length === 0) {
         return null;
       }
@@ -376,6 +417,10 @@ export async function dispatchCronDelivery(
       }
       return null;
     } catch (err) {
+      const queued = await queueDeferredDelivery(err).catch(() => null);
+      if (queued) {
+        return queued;
+      }
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
           status: "error",

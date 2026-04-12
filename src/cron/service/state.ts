@@ -89,6 +89,8 @@ export type CronServiceDeps = {
       summary?: string;
       /** Last non-empty agent text output (not truncated). */
       outputText?: string;
+      /** Delivery-specific error when the run succeeded but delivery did not. */
+      deliveryError?: string;
       /**
        * `true` when the isolated run already delivered its output to the target
        * channel (including matching messaging-tool sends). See:
