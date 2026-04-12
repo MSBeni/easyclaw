@@ -19,6 +19,7 @@ const WHATSAPP_ALREADY_LINKED = "whatsapp is already linked";
 const WHATSAPP_LOGIN_RETRY_DELAYS_MS = [300, 700, 1200];
 const WHATSAPP_CONNECTED_CONVERGENCE_DELAYS_MS = [400, 800, 1200, 1600];
 const WHATSAPP_AUTH_FAILURE_HINTS = ["401", "unauthorized", "logged out", "connection failure"];
+const WHATSAPP_AUTO_TARGET_CONNECTOR_ID = "channel:whatsapp:auto-default-target";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -146,6 +147,28 @@ function waitMs(ms: number): Promise<void> {
   });
 }
 
+type BuilderSetupRunResult = {
+  status?: string;
+  message?: string;
+};
+
+async function autoConfigureWhatsAppDefaultTarget(host: OpenClawApp): Promise<void> {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  try {
+    const result = await host.client.request<BuilderSetupRunResult>("agents.builder.setup.run", {
+      connectorId: WHATSAPP_AUTO_TARGET_CONNECTOR_ID,
+      inputs: {},
+    });
+    if (result?.status === "configured" && result.message?.trim()) {
+      host.whatsappLoginMessage = result.message.trim();
+    }
+  } catch {
+    // Keep login flow resilient even if auto-target setup fails.
+  }
+}
+
 async function ensureWhatsAppProviderConfigured(host: OpenClawApp): Promise<boolean> {
   await loadConfig(host);
   const form = asRecord(host.configForm);
@@ -241,6 +264,9 @@ export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
       await convergeWhatsAppConnectedState(host);
     }
   }
+  if (host.whatsappLoginConnected === true || isWhatsAppConnectedInSnapshot(host)) {
+    await autoConfigureWhatsAppDefaultTarget(host);
+  }
 }
 
 export async function handleWhatsAppWait(host: OpenClawApp) {
@@ -250,6 +276,9 @@ export async function handleWhatsAppWait(host: OpenClawApp) {
   syncWhatsAppConnectedFromSnapshot(host);
   if (waitReportedConnected) {
     await convergeWhatsAppConnectedState(host);
+  }
+  if (host.whatsappLoginConnected === true || isWhatsAppConnectedInSnapshot(host)) {
+    await autoConfigureWhatsAppDefaultTarget(host);
   }
 }
 

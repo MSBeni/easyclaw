@@ -36,6 +36,7 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import { getActiveWebListener } from "./active-listener.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 import { whatsappOnboardingAdapter } from "./onboarding.js";
 import { getWhatsAppRuntime } from "./runtime.js";
@@ -371,7 +372,29 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         lastError: snapshot.lastError ?? null,
       };
     },
-    buildAccountSnapshot: async ({ account, runtime }) => {
+    probeAccount: async ({ account }) => {
+      const linked = await getWhatsAppRuntime().channel.whatsapp.webAuthExists(account.authDir);
+      if (!linked) {
+        return {
+          ok: false,
+          error: "WhatsApp Web is not linked for this account yet.",
+        };
+      }
+      const listenerActive = Boolean(getActiveWebListener(account.accountId));
+      if (!listenerActive) {
+        return {
+          ok: false,
+          error: "WhatsApp Web is linked, but no active listener is running for this account.",
+        };
+      }
+      const self = getWhatsAppRuntime().channel.whatsapp.readWebSelfId(account.authDir);
+      const identity = self.e164 ?? self.jid ?? account.accountId;
+      return {
+        ok: true,
+        detail: `WhatsApp Web listener is active for ${identity}.`,
+      };
+    },
+    buildAccountSnapshot: async ({ account, runtime, probe, audit }) => {
       const linked = await getWhatsAppRuntime().channel.whatsapp.webAuthExists(account.authDir);
       return {
         accountId: account.accountId,
@@ -387,6 +410,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         lastMessageAt: runtime?.lastMessageAt ?? null,
         lastEventAt: runtime?.lastEventAt ?? null,
         lastError: runtime?.lastError ?? null,
+        probe,
+        audit,
         dmPolicy: account.dmPolicy,
         allowFrom: account.allowFrom,
       };

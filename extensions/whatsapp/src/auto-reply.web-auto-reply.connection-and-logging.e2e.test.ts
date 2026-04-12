@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import { isUnhandledRejectionHandled } from "../../../src/infra/unhandled-rejections.js";
 import { setLoggerOverride } from "../../../src/logging.js";
 import { withEnvAsync } from "../../../src/test-utils/env.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
@@ -245,9 +246,54 @@ describe("web auto-reply connection", () => {
     expect(completedQuickly).toBe(true);
     expect(listenerFactory).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("status 401"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("authorization failure"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("logged out"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("relink"));
+  });
+
+  it("contains startup Baileys crypto rejections without crashing the gateway", async () => {
+    const closeResolvers: Array<(reason?: unknown) => void> = [];
+    const cryptoError = new Error("Unsupported state or unable to authenticate data");
+    cryptoError.stack = "at aesDecryptGCM\nat @whiskeysockets/baileys/noise-handler";
+    let controller: AbortController | null = null;
+    const sleep = vi.fn(async () => {
+      controller?.abort();
+      throw new Error("aborted");
+    });
+    const listenerFactory = vi.fn(async () => {
+      expect(isUnhandledRejectionHandled(cryptoError)).toBe(true);
+      let resolveClose: (reason?: unknown) => void = () => {};
+      const onClose = new Promise<unknown>((resolve) => {
+        resolveClose = resolve;
+        closeResolvers.push(resolve);
+      });
+      return {
+        close: vi.fn(),
+        onClose,
+        signalClose: (reason?: unknown) => resolveClose(reason),
+      };
+    });
+    const started = startMonitorWebChannel({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+    });
+    controller = started.controller;
+    const { runtime, run } = started;
+
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
+
+    await run;
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("session auth could not be decrypted"),
+    );
+    expect(closeResolvers).toHaveLength(1);
   });
 
   it("forces reconnect when watchdog closes without onClose", async () => {
