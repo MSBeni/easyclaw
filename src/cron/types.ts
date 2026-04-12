@@ -57,6 +57,25 @@ export type CronRunTelemetry = {
   usage?: CronUsageSummary;
 };
 
+export type CronTraceStepKey = "schedule" | "runtime" | "delivery" | "approvals";
+export type CronTraceStepStatus = "ok" | "error" | "pending" | "skipped" | "ready";
+export type CronFailureStage = CronTraceStepKey;
+
+export type CronTraceStep = {
+  key: CronTraceStepKey;
+  label: string;
+  status: CronTraceStepStatus;
+  detail: string;
+};
+
+export type CronRunReview = {
+  trace?: CronTraceStep[];
+  failureStage?: CronFailureStage;
+  deadLetter?: boolean;
+  retryable?: boolean;
+  replayable?: boolean;
+};
+
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;

@@ -3,6 +3,7 @@ import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { buildCronRunReview } from "../run-trace.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
@@ -932,15 +933,7 @@ async function runStartupCatchupCandidate(
     const result = await executeJobCoreWithTimeout(state, candidate.job);
     return {
       jobId: candidate.jobId,
-      status: result.status,
-      error: result.error,
-      summary: result.summary,
-      delivered: result.delivered,
-      sessionId: result.sessionId,
-      sessionKey: result.sessionKey,
-      model: result.model,
-      provider: result.provider,
-      usage: result.usage,
+      ...result,
       startedAt,
       endedAt: state.deps.nowMs(),
     };
@@ -1145,6 +1138,7 @@ export async function executeJobCore(
     status: res.status,
     error: res.error,
     deliveryError: res.deliveryError,
+    errorKind: res.errorKind,
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
@@ -1204,7 +1198,7 @@ export async function executeJob(
   }
 }
 
-function emitJobFinished(
+export function emitJobFinished(
   state: CronServiceState,
   job: CronJob,
   result: {
@@ -1215,6 +1209,7 @@ function emitJobFinished(
     CronRunTelemetry,
   runAtMs: number,
 ) {
+  const review = buildCronRunReview({ job, result, runAtMs });
   emit(state, {
     jobId: job.id,
     action: "finished",
@@ -1232,6 +1227,11 @@ function emitJobFinished(
     model: result.model,
     provider: result.provider,
     usage: result.usage,
+    trace: review.trace,
+    failureStage: review.failureStage,
+    deadLetter: review.deadLetter,
+    retryable: review.retryable,
+    replayable: review.replayable,
   });
 }
 

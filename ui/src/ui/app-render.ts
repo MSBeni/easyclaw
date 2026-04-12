@@ -882,6 +882,7 @@ export function renderApp(state: AppViewState) {
                   timezoneSuggestions: CRON_TIMEZONE_SUGGESTIONS,
                   deliveryToSuggestions,
                   accountSuggestions,
+                  execApprovalQueue: state.execApprovalQueue,
                   onFormChange: (patch) => {
                     state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
                     state.cronFieldErrors = validateCronForm(state.cronForm);
@@ -929,6 +930,13 @@ export function renderApp(state: AppViewState) {
                       return;
                     }
                     await loadCronRuns(state, state.cronRunsJobId);
+                  },
+                  onRetryRun: (jobId) => {
+                    const job = state.cronJobs.find((entry) => entry.id === jobId);
+                    if (!job) {
+                      return;
+                    }
+                    void runCronJob(state, job, "force");
                   },
                 }),
               )

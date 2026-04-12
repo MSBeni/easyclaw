@@ -2,6 +2,7 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type {
   CronDeliveryStatus,
+  CronRunReview,
   CronJob,
   CronJobCreate,
   CronJobPatch,
@@ -26,7 +27,8 @@ export type CronEvent = {
   sessionId?: string;
   sessionKey?: string;
   nextRunAtMs?: number;
-} & CronRunTelemetry;
+} & CronRunTelemetry &
+  CronRunReview;
 
 export type Logger = {
   debug: (obj: unknown, msg?: string) => void;

@@ -506,6 +506,13 @@ export type CronStatus = {
   nextWakeAtMs?: number | null;
 };
 
+export type CronTraceStep = {
+  key: "schedule" | "runtime" | "delivery" | "approvals";
+  label: string;
+  status: "ok" | "error" | "pending" | "skipped" | "ready";
+  detail: string;
+};
+
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;
@@ -523,6 +530,11 @@ export type CronRunLogEntry = {
   nextRunAtMs?: number;
   model?: string;
   provider?: string;
+  trace?: CronTraceStep[];
+  failureStage?: "schedule" | "runtime" | "delivery" | "approvals";
+  deadLetter?: boolean;
+  retryable?: boolean;
+  replayable?: boolean;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;

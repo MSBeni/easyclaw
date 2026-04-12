@@ -59,6 +59,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
     accountSuggestions: [],
+    execApprovalQueue: [],
     onFormChange: () => undefined,
     onRefresh: () => undefined,
     onAdd: () => undefined,
@@ -74,6 +75,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     onJobsFiltersReset: () => undefined,
     onLoadMoreRuns: () => undefined,
     onRunsFiltersChange: () => undefined,
+    onRetryRun: () => undefined,
     ...overrides,
   };
 }
@@ -221,10 +223,154 @@ describe("cron view", () => {
     expect(runHistoryCard).not.toBeUndefined();
 
     const summaries = Array.from(
-      runHistoryCard?.querySelectorAll(".list-item .list-sub") ?? [],
+      runHistoryCard?.querySelectorAll(".cron-run-entry__summary") ?? [],
     ).map((el) => (el.textContent ?? "").trim());
     expect(summaries[0]).toBe("newer run");
     expect(summaries[1]).toBe("older run");
+  });
+
+  it("renders an execution graph overview with matching pending approvals", () => {
+    const container = document.createElement("div");
+    const job = {
+      ...createJob("job-1"),
+      agentId: "ops",
+      sessionTarget: "isolated" as const,
+      payload: { kind: "agentTurn" as const, message: "check alerts" },
+      delivery: { mode: "announce" as const, channel: "telegram", to: "ops-room" },
+      state: {
+        lastRunAtMs: 1,
+        nextRunAtMs: 2,
+        lastStatus: "error" as const,
+      },
+    };
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+          runsJobId: "job-1",
+          runsScope: "job",
+          runs: [
+            {
+              ts: 3,
+              jobId: "job-1",
+              status: "error",
+              summary: "Delivery target rejected",
+              sessionKey: "agent:ops:cron:run-1",
+              deliveryStatus: "not-delivered",
+              deliveryError: "403 from telegram",
+            },
+          ],
+          execApprovalQueue: [
+            {
+              id: "approval-1",
+              createdAtMs: 0,
+              expiresAtMs: Date.now() + 60_000,
+              request: {
+                command: "open https://ops.example.com",
+                sessionKey: "agent:ops:cron:run-1",
+              },
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Execution graph");
+    expect(container.textContent).toContain("1 pending approvals");
+    expect(container.textContent).toContain("Isolated agent run");
+    expect(container.textContent).toContain("403 from telegram");
+  });
+
+  it("retries failed runs from the trace panel", () => {
+    const container = document.createElement("div");
+    const onRetryRun = vi.fn();
+    render(
+      renderCron(
+        createProps({
+          jobs: [createJob("job-1")],
+          runs: [
+            {
+              ts: Date.now(),
+              jobId: "job-1",
+              status: "error",
+              summary: "failed",
+              error: "network down",
+            },
+          ],
+          onRetryRun,
+        }),
+      ),
+      container,
+    );
+
+    const retryButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Retry now",
+    );
+    expect(retryButton).not.toBeUndefined();
+
+    retryButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onRetryRun).toHaveBeenCalledWith("job-1");
+  });
+
+  it("renders the dead-letter queue from persisted run metadata", () => {
+    const container = document.createElement("div");
+    const job = createJob("job-1");
+    render(
+      renderCron(
+        createProps({
+          basePath: "/ui",
+          jobs: [job],
+          runs: [
+            {
+              ts: Date.now(),
+              jobId: "job-1",
+              jobName: "Daily ping",
+              status: "error",
+              error: "token expired",
+              sessionKey: "agent:main:cron:job-1:run:dead-letter",
+              deadLetter: true,
+              retryable: true,
+              replayable: true,
+              failureStage: "runtime",
+              trace: [
+                {
+                  key: "schedule",
+                  label: "Schedule",
+                  status: "ok",
+                  detail: "Triggered at 2026-04-12T00:00:00.000Z",
+                },
+                {
+                  key: "runtime",
+                  label: "Runtime",
+                  status: "error",
+                  detail: "token expired",
+                },
+                {
+                  key: "delivery",
+                  label: "Delivery",
+                  status: "skipped",
+                  detail: "Delivery did not run because the workflow stopped earlier.",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Dead-letter queue");
+    expect(container.textContent).toContain("token expired");
+    expect(container.textContent).toContain("Runtime");
+    expect(container.textContent).toContain("Skipped: Delivery");
+
+    const replayButton = Array.from(container.querySelectorAll("a")).find(
+      (link) => link.textContent?.trim() === "Replay in chat",
+    );
+    expect(replayButton?.getAttribute("href")).toContain(
+      "/ui/chat?session=agent%3Amain%3Acron%3Ajob-1%3Arun%3Adead-letter",
+    );
   });
 
   it("labels past nextRunAtMs as due instead of next", () => {

@@ -273,6 +273,58 @@ describe("cron run log", () => {
     });
   });
 
+  it("reads persisted trace and dead-letter review fields", async () => {
+    await withRunLogDir("openclaw-cron-log-trace-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-trace.jsonl");
+
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-trace",
+        action: "finished",
+        status: "error",
+        error: "403 from telegram",
+        failureStage: "delivery",
+        deadLetter: true,
+        retryable: true,
+        replayable: true,
+        trace: [
+          {
+            key: "schedule",
+            label: "Schedule",
+            status: "ok",
+            detail: "Triggered at 2026-04-12T00:00:00.000Z",
+          },
+          {
+            key: "delivery",
+            label: "Delivery",
+            status: "error",
+            detail: "403 from telegram",
+          },
+        ],
+      });
+
+      const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-trace" });
+      expect(entries[0]?.failureStage).toBe("delivery");
+      expect(entries[0]?.deadLetter).toBe(true);
+      expect(entries[0]?.retryable).toBe(true);
+      expect(entries[0]?.replayable).toBe(true);
+      expect(entries[0]?.trace).toEqual([
+        {
+          key: "schedule",
+          label: "Schedule",
+          status: "ok",
+          detail: "Triggered at 2026-04-12T00:00:00.000Z",
+        },
+        {
+          key: "delivery",
+          label: "Delivery",
+          status: "error",
+          detail: "403 from telegram",
+        },
+      ]);
+    });
+  });
+
   it("cleans up pending-write bookkeeping after appends complete", async () => {
     await withRunLogDir("openclaw-cron-log-pending-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-cleanup.jsonl");

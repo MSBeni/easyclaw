@@ -499,6 +499,11 @@ export function buildGatewayCronService(params: {
             model: evt.model,
             provider: evt.provider,
             usage: evt.usage,
+            trace: evt.trace,
+            failureStage: evt.failureStage,
+            deadLetter: evt.deadLetter,
+            retryable: evt.retryable,
+            replayable: evt.replayable,
           },
           runLogPrune,
         ).catch((err) => {

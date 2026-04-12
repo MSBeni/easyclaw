@@ -10,7 +10,13 @@ import type {
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
-import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
+import type {
+  ChannelUiMetaEntry,
+  CronJob,
+  CronRunLogEntry,
+  CronStatus,
+  CronTraceStep,
+} from "../types.ts";
 import type {
   CronDeliveryStatus,
   CronJobsEnabledFilter,
@@ -63,6 +69,16 @@ export type CronProps = {
   timezoneSuggestions: string[];
   deliveryToSuggestions: string[];
   accountSuggestions: string[];
+  execApprovalQueue: Array<{
+    id: string;
+    createdAtMs: number;
+    expiresAtMs: number;
+    request: {
+      command: string;
+      agentId?: string | null;
+      sessionKey?: string | null;
+    };
+  }>;
   onFormChange: (patch: Partial<CronFormState>) => void;
   onRefresh: () => void;
   onAdd: () => void;
@@ -92,7 +108,10 @@ export type CronProps = {
     cronRunsQuery?: string;
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
+  onRetryRun: (jobId: string) => void;
 };
+
+type CronExecutionStatus = "ok" | "error" | "pending" | "skipped" | "ready";
 
 function getRunStatusOptions(): Array<{ value: CronRunsStatusValue; label: string }> {
   return [
@@ -350,6 +369,427 @@ function renderFieldLabel(text: string, required = false) {
   </span>`;
 }
 
+function executionStatusLabel(status: CronExecutionStatus) {
+  switch (status) {
+    case "ok":
+      return "OK";
+    case "error":
+      return "Error";
+    case "pending":
+      return "Pending";
+    case "skipped":
+      return "Skipped";
+    case "ready":
+      return "Ready";
+  }
+}
+
+function executionStatusChipClass(status: CronExecutionStatus) {
+  switch (status) {
+    case "ok":
+    case "ready":
+      return "chip-ok";
+    case "error":
+      return "chip-danger";
+    case "pending":
+      return "chip-warn";
+    case "skipped":
+      return "";
+  }
+}
+
+function resolveRuntimeStatus(value?: string | null): CronExecutionStatus {
+  if (value === "ok") {
+    return "ok";
+  }
+  if (value === "error") {
+    return "error";
+  }
+  if (value === "skipped") {
+    return "skipped";
+  }
+  return "ready";
+}
+
+function resolveDeliveryExecutionStatus(
+  value?: "delivered" | "not-delivered" | "unknown" | "not-requested",
+): CronExecutionStatus {
+  switch (value) {
+    case "delivered":
+      return "ok";
+    case "not-delivered":
+      return "error";
+    case "unknown":
+      return "pending";
+    case "not-requested":
+      return "skipped";
+    default:
+      return "ready";
+  }
+}
+
+function describeJobRuntime(job: CronJob) {
+  if (job.sessionTarget === "main") {
+    return "Main-session heartbeat";
+  }
+  if (job.sessionTarget === "isolated") {
+    return "Isolated agent run";
+  }
+  if (job.sessionTarget === "current") {
+    return "Current session run";
+  }
+  return `Session ${job.sessionTarget}`;
+}
+
+function describeDeliveryTarget(job: CronJob) {
+  const delivery = job.delivery;
+  if (!delivery || delivery.mode === "none") {
+    return "No delivery step configured.";
+  }
+  if (delivery.mode === "webhook") {
+    return delivery.to ? `Webhook to ${delivery.to}` : "Webhook delivery";
+  }
+  const channel = delivery.channel ?? "last";
+  return delivery.to ? `Announce via ${channel} -> ${delivery.to}` : `Announce via ${channel}`;
+}
+
+function collectMatchingApprovals(params: {
+  job?: CronJob;
+  entry?: CronRunLogEntry;
+  queue: CronProps["execApprovalQueue"];
+}) {
+  const sessionKeys = new Set<string>();
+  const runSessionKey = params.entry?.sessionKey?.trim();
+  const jobSessionKey = params.job?.sessionKey?.trim();
+  if (runSessionKey) {
+    sessionKeys.add(runSessionKey);
+  }
+  if (jobSessionKey) {
+    sessionKeys.add(jobSessionKey);
+  }
+  return params.queue.filter((entry) => {
+    const approvalSessionKey = entry.request.sessionKey?.trim();
+    if (approvalSessionKey && sessionKeys.has(approvalSessionKey)) {
+      return true;
+    }
+    if (sessionKeys.size > 0) {
+      return false;
+    }
+    const approvalAgentId = entry.request.agentId?.trim();
+    return Boolean(
+      params.job?.agentId && approvalAgentId && approvalAgentId === params.job.agentId,
+    );
+  });
+}
+
+function renderTraceSteps(steps: CronTraceStep[]) {
+  return html`
+    <div style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
+      ${steps.map(
+        (step) => html`
+          <div
+            style="display:grid; grid-template-columns:minmax(120px, 170px) auto; gap:10px; align-items:start;"
+          >
+            <div>
+              <div class="list-sub">${step.label}</div>
+              <span class=${`chip ${executionStatusChipClass(step.status)}`}>${executionStatusLabel(step.status)}</span>
+            </div>
+            <div class="muted">${step.detail}</div>
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
+
+function resolveApprovalTraceStep(
+  matchingApprovals: CronProps["execApprovalQueue"],
+): CronTraceStep {
+  return matchingApprovals.length > 0
+    ? {
+        key: "approvals",
+        label: "Approvals",
+        status: "pending",
+        detail:
+          matchingApprovals.length === 1
+            ? (matchingApprovals[0]?.request.command ?? "1 exec approval is pending.")
+            : `${matchingApprovals.length} exec approvals are currently pending for this path.`,
+      }
+    : {
+        key: "approvals",
+        label: "Approvals",
+        status: "skipped",
+        detail: "No live exec approvals are waiting on this run.",
+      };
+}
+
+function withLiveApprovals(
+  steps: CronTraceStep[],
+  matchingApprovals: CronProps["execApprovalQueue"],
+): CronTraceStep[] {
+  const approvalStep = resolveApprovalTraceStep(matchingApprovals);
+  const next = steps.map((step) => ({ ...step }));
+  const index = next.findIndex((step) => step.key === "approvals");
+  if (index >= 0) {
+    next[index] = approvalStep;
+    return next;
+  }
+  return [...next, approvalStep];
+}
+
+function failureStageLabel(stage?: CronRunLogEntry["failureStage"]) {
+  switch (stage) {
+    case "schedule":
+      return "Schedule";
+    case "runtime":
+      return "Runtime";
+    case "delivery":
+      return "Delivery";
+    case "approvals":
+      return "Approvals";
+    default:
+      return "Unknown";
+  }
+}
+
+function summarizeSkippedActions(trace?: CronTraceStep[]) {
+  const skipped =
+    trace?.filter((step) => step.status === "skipped").map((step) => step.label) ?? [];
+  return skipped.length > 0 ? skipped.join(", ") : "";
+}
+
+function buildExecutionGraphSteps(params: {
+  job: CronJob;
+  latestRun?: CronRunLogEntry;
+  matchingApprovals: CronProps["execApprovalQueue"];
+}) {
+  const { job, latestRun, matchingApprovals } = params;
+  if (latestRun?.trace?.length) {
+    return withLiveApprovals(latestRun.trace, matchingApprovals);
+  }
+  const lastRunAt = job.state?.lastRunAtMs;
+  const nextRunAt = job.state?.nextRunAtMs;
+  const schedulerStatus =
+    latestRun?.status === "skipped" && latestRun.error?.includes("not due")
+      ? "skipped"
+      : typeof job.state?.runningAtMs === "number"
+        ? "pending"
+        : latestRun
+          ? "ok"
+          : job.enabled
+            ? "ready"
+            : "skipped";
+  const runtimeStatus =
+    typeof job.state?.runningAtMs === "number" && !latestRun
+      ? "pending"
+      : latestRun
+        ? resolveRuntimeStatus(latestRun.status)
+        : resolveRuntimeStatus(job.state?.lastStatus);
+  const deliveryStatus = latestRun
+    ? resolveDeliveryExecutionStatus(latestRun.deliveryStatus ?? "not-requested")
+    : job.delivery && job.delivery.mode !== "none"
+      ? "ready"
+      : "skipped";
+  const approvalStatus = matchingApprovals.length > 0 ? "pending" : "ready";
+
+  return [
+    {
+      key: "schedule",
+      label: "Scheduler",
+      status: schedulerStatus satisfies CronExecutionStatus,
+      detail:
+        `Last ${formatStateRelative(lastRunAt)} · Next ${formatStateRelative(nextRunAt)}`.trim(),
+    },
+    {
+      key: "runtime",
+      label: "Runtime",
+      status: runtimeStatus,
+      detail:
+        latestRun?.summary ??
+        latestRun?.error ??
+        `${describeJobRuntime(job)}${job.agentId ? ` · agent ${job.agentId}` : ""}`,
+    },
+    {
+      key: "delivery",
+      label: "Delivery",
+      status: deliveryStatus,
+      detail:
+        latestRun?.deliveryError ??
+        runDeliveryLabel(latestRun?.deliveryStatus ?? "not-requested") ??
+        describeDeliveryTarget(job),
+    },
+    {
+      key: "approvals",
+      label: "Approvals",
+      status: approvalStatus,
+      detail:
+        matchingApprovals.length > 0
+          ? `${matchingApprovals.length} pending approval${matchingApprovals.length === 1 ? "" : "s"}`
+          : "No pending exec approvals for this execution path.",
+    },
+  ] satisfies CronTraceStep[];
+}
+
+function buildRunTraceSteps(params: {
+  entry: CronRunLogEntry;
+  job?: CronJob;
+  matchingApprovals: CronProps["execApprovalQueue"];
+}) {
+  const { entry, job, matchingApprovals } = params;
+  if (entry.trace?.length) {
+    return withLiveApprovals(entry.trace, matchingApprovals);
+  }
+  const steps: CronTraceStep[] = [
+    {
+      key: "schedule",
+      label: "Schedule",
+      status: entry.status === "skipped" ? "skipped" : "ok",
+      detail:
+        typeof entry.runAtMs === "number"
+          ? `Triggered ${formatMs(entry.runAtMs)}`
+          : "Run was accepted by the scheduler.",
+    },
+    {
+      key: "runtime",
+      label: "Runtime",
+      status: resolveRuntimeStatus(entry.status),
+      detail:
+        entry.error ??
+        entry.summary ??
+        `${job ? describeJobRuntime(job) : "Execution completed"}${entry.model ? ` · ${entry.model}` : ""}`,
+    },
+    {
+      key: "delivery",
+      label: "Delivery",
+      status: resolveDeliveryExecutionStatus(entry.deliveryStatus ?? "not-requested"),
+      detail:
+        entry.deliveryError ??
+        (job
+          ? describeDeliveryTarget(job)
+          : runDeliveryLabel(entry.deliveryStatus ?? "not-requested")),
+    },
+  ];
+  steps.push(resolveApprovalTraceStep(matchingApprovals));
+  return steps;
+}
+
+function renderExecutionOverview(params: {
+  job?: CronJob;
+  latestRun?: CronRunLogEntry;
+  runs: CronRunLogEntry[];
+  matchingApprovals: CronProps["execApprovalQueue"];
+}) {
+  if (!params.job) {
+    return nothing;
+  }
+  const skippedRuns = params.runs.filter(
+    (entry) => entry.jobId === params.job?.id && entry.status === "skipped",
+  ).length;
+  const steps = buildExecutionGraphSteps({
+    job: params.job,
+    latestRun: params.latestRun,
+    matchingApprovals: params.matchingApprovals,
+  });
+  return html`
+    <div class="callout info" style="margin-top: 12px;">
+      <div class="row" style="justify-content: space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:600;">Execution graph</div>
+          <div class="muted">${describeJobRuntime(params.job)}${params.job.agentId ? ` · agent ${params.job.agentId}` : ""}</div>
+        </div>
+        <div class="chip-row">
+          <span class="chip">Last ${formatStateRelative(params.job.state?.lastRunAtMs)}</span>
+          <span class="chip">Next ${formatStateRelative(params.job.state?.nextRunAtMs)}</span>
+          <span class=${`chip ${params.matchingApprovals.length > 0 ? "chip-warn" : ""}`}>
+            ${params.matchingApprovals.length} pending approvals
+          </span>
+          <span class=${`chip ${skippedRuns > 0 ? "chip-warn" : ""}`}>${skippedRuns} skipped runs</span>
+        </div>
+      </div>
+      ${renderTraceSteps(steps)}
+    </div>
+  `;
+}
+
+function renderDeadLetterQueue(params: {
+  basePath: string;
+  runs: CronRunLogEntry[];
+  jobsById: Map<string, CronJob>;
+  onRetryRun: (jobId: string) => void;
+}) {
+  const failedRuns = params.runs.filter((entry) => entry.deadLetter ?? entry.status === "error");
+  if (failedRuns.length === 0) {
+    return nothing;
+  }
+  const visible = failedRuns.slice(0, 5);
+  return html`
+    <div class="callout danger" style="margin-top: 12px;">
+      <div class="row" style="justify-content: space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:600;">Dead-letter queue</div>
+          <div class="muted">
+            ${failedRuns.length} failed run${failedRuns.length === 1 ? "" : "s"} waiting for review,
+            replay, or retry.
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-danger">${failedRuns.length} failed</span>
+        </div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:10px;">
+        ${visible.map((entry) => {
+          const job = params.jobsById.get(entry.jobId);
+          const chatUrl =
+            typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
+              ? `${pathForTab("chat", params.basePath)}?session=${encodeURIComponent(entry.sessionKey)}`
+              : null;
+          const skipped = summarizeSkippedActions(entry.trace);
+          const canRetry = entry.retryable ?? entry.status !== "ok";
+          const canReplay = entry.replayable ?? Boolean(chatUrl);
+          return html`
+            <div class="list-item">
+              <div class="list-main">
+                <div class="list-title">${entry.jobName ?? job?.name ?? entry.jobId}</div>
+                <div class="list-sub">
+                  ${entry.error ?? entry.summary ?? "Run failed without a recorded summary."}
+                </div>
+                <div class="chip-row" style="margin-top:6px;">
+                  <span class="chip chip-danger">${failureStageLabel(entry.failureStage)}</span>
+                  ${skipped ? html`<span class="chip">Skipped: ${skipped}</span>` : nothing}
+                </div>
+              </div>
+              <div class="list-meta">
+                <div>${formatMs(entry.ts)}</div>
+                ${
+                  typeof entry.runAtMs === "number"
+                    ? html`<div class="muted">${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}</div>`
+                    : nothing
+                }
+                <div class="row" style="justify-content:flex-end; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                  ${
+                    canRetry
+                      ? html`
+                          <button class="btn btn--sm" type="button" @click=${() => params.onRetryRun(entry.jobId)}>
+                            Retry now
+                          </button>
+                        `
+                      : nothing
+                  }
+                  ${
+                    canReplay && chatUrl
+                      ? html`<a class="btn btn--sm" href=${chatUrl}>Replay in chat</a>`
+                      : nothing
+                  }
+                </div>
+              </div>
+            </div>
+          `;
+        })}
+      </div>
+    </div>
+  `;
+}
+
 export function renderCron(props: CronProps) {
   const isEditing = Boolean(props.editingJobId);
   const isAgentTurn = props.form.payloadKind === "agentTurn";
@@ -364,6 +804,16 @@ export function renderCron(props: CronProps) {
   const runs = props.runs.toSorted((a, b) =>
     props.runsSortDir === "asc" ? a.ts - b.ts : b.ts - a.ts,
   );
+  const jobsById = new Map(props.jobs.map((job) => [job.id, job]));
+  const executionJob =
+    props.runsScope === "job" ? selectedJob : runs[0] ? jobsById.get(runs[0].jobId) : undefined;
+  const latestRunForExecutionJob =
+    executionJob == null ? undefined : runs.find((entry) => entry.jobId === executionJob.id);
+  const executionApprovals = collectMatchingApprovals({
+    job: executionJob,
+    entry: latestRunForExecutionJob,
+    queue: props.execApprovalQueue,
+  });
   const runStatusOptions = getRunStatusOptions();
   const runDeliveryOptions = getRunDeliveryOptions();
   const selectedStatusLabels = runStatusOptions
@@ -595,6 +1045,18 @@ export function renderCron(props: CronProps) {
             })}</div>
           </div>
           <div class="cron-run-filters">
+            ${renderExecutionOverview({
+              job: executionJob,
+              latestRun: latestRunForExecutionJob,
+              runs,
+              matchingApprovals: executionApprovals,
+            })}
+            ${renderDeadLetterQueue({
+              basePath: props.basePath,
+              runs,
+              jobsById,
+              onRetryRun: props.onRetryRun,
+            })}
             <div class="cron-run-filters__row cron-run-filters__row--primary">
               <label class="field">
                 <span>${t("cron.runs.scope")}</span>
@@ -684,7 +1146,19 @@ export function renderCron(props: CronProps) {
                   `
                 : html`
                     <div class="list" style="margin-top: 12px;">
-                      ${runs.map((entry) => renderRun(entry, props.basePath))}
+                      ${runs.map((entry) =>
+                        renderRun(
+                          entry,
+                          props.basePath,
+                          jobsById.get(entry.jobId),
+                          collectMatchingApprovals({
+                            job: jobsById.get(entry.jobId),
+                            entry,
+                            queue: props.execApprovalQueue,
+                          }),
+                          props.onRetryRun,
+                        ),
+                      )}
                     </div>
                   `
           }
@@ -1737,7 +2211,13 @@ function runDeliveryLabel(value: string): string {
   }
 }
 
-function renderRun(entry: CronRunLogEntry, basePath: string) {
+function renderRun(
+  entry: CronRunLogEntry,
+  basePath: string,
+  job: CronJob | undefined,
+  matchingApprovals: CronProps["execApprovalQueue"],
+  onRetryRun: (jobId: string) => void,
+) {
   const chatUrl =
     typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
       ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(entry.sessionKey)}`
@@ -1751,6 +2231,9 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
         ? `${usage.input_tokens} in / ${usage.output_tokens} out`
         : null;
+  const traceSteps = buildRunTraceSteps({ entry, job, matchingApprovals });
+  const showRetry = entry.retryable ?? (entry.status === "error" || entry.status === "skipped");
+  const showReplay = (entry.replayable ?? Boolean(chatUrl)) && Boolean(chatUrl);
   return html`
     <div class="list-item cron-run-entry">
       <div class="list-main cron-run-entry__main">
@@ -1761,6 +2244,7 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
         <div class="list-sub cron-run-entry__summary">${entry.summary ?? entry.error ?? t("cron.runEntry.noSummary")}</div>
         <div class="chip-row" style="margin-top: 6px;">
           <span class="chip">${delivery}</span>
+          ${entry.failureStage ? html`<span class="chip chip-danger">${failureStageLabel(entry.failureStage)}</span>` : nothing}
           ${entry.model ? html`<span class="chip">${entry.model}</span>` : nothing}
           ${entry.provider ? html`<span class="chip">${entry.provider}</span>` : nothing}
           ${usageSummary ? html`<span class="chip">${usageSummary}</span>` : nothing}
@@ -1782,6 +2266,26 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
         }
         ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}
         ${entry.deliveryError ? html`<div class="muted">${entry.deliveryError}</div>` : nothing}
+      </div>
+      <div style="flex-basis:100%; margin-top:10px;">
+        <details>
+          <summary style="cursor:pointer;">Trace and recovery</summary>
+          ${renderTraceSteps(traceSteps)}
+          <div class="row" style="margin-top:10px; gap:8px; flex-wrap:wrap;">
+            ${
+              showRetry
+                ? html`
+                    <button class="btn btn--sm" type="button" @click=${() => onRetryRun(entry.jobId)}>
+                      Retry now
+                    </button>
+                  `
+                : nothing
+            }
+            ${
+              showReplay ? html`<a class="btn btn--sm" href=${chatUrl}>Replay in chat</a>` : nothing
+            }
+          </div>
+        </details>
       </div>
     </div>
   `;

@@ -2,7 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
-import type { CronDeliveryStatus, CronRunStatus, CronRunTelemetry } from "./types.js";
+import type {
+  CronDeliveryStatus,
+  CronFailureStage,
+  CronRunReview,
+  CronRunStatus,
+  CronRunTelemetry,
+  CronTraceStep,
+  CronTraceStepStatus,
+} from "./types.js";
 
 export type CronRunLogEntry = {
   ts: number;
@@ -19,7 +27,8 @@ export type CronRunLogEntry = {
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
-} & CronRunTelemetry;
+} & CronRunTelemetry &
+  CronRunReview;
 
 export type CronRunLogSortDir = "asc" | "desc";
 export type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
@@ -238,6 +247,49 @@ function normalizeDeliveryStatuses(opts?: {
   return null;
 }
 
+function normalizeTraceStepStatus(value: unknown): CronTraceStepStatus | undefined {
+  return value === "ok" ||
+    value === "error" ||
+    value === "pending" ||
+    value === "skipped" ||
+    value === "ready"
+    ? value
+    : undefined;
+}
+
+function normalizeFailureStage(value: unknown): CronFailureStage | undefined {
+  return value === "schedule" ||
+    value === "runtime" ||
+    value === "delivery" ||
+    value === "approvals"
+    ? value
+    : undefined;
+}
+
+function parseTraceStep(value: unknown): CronTraceStep | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const candidate = value as Partial<CronTraceStep>;
+  const key = normalizeFailureStage(candidate.key);
+  const status = normalizeTraceStepStatus(candidate.status);
+  if (
+    !key ||
+    !status ||
+    typeof candidate.label !== "string" ||
+    candidate.label.trim().length === 0 ||
+    typeof candidate.detail !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    key,
+    label: candidate.label,
+    status,
+    detail: candidate.detail,
+  };
+}
+
 function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunLogEntry[] {
   const jobId = opts?.jobId?.trim() || undefined;
   if (!raw.trim()) {
@@ -317,6 +369,27 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
       if (typeof obj.sessionKey === "string" && obj.sessionKey.trim().length > 0) {
         entry.sessionKey = obj.sessionKey;
       }
+      const parsedTrace = Array.isArray(obj.trace)
+        ? obj.trace
+            .map((step) => parseTraceStep(step))
+            .filter((step): step is CronTraceStep => step !== undefined)
+        : [];
+      if (parsedTrace.length > 0) {
+        entry.trace = parsedTrace;
+      }
+      const failureStage = normalizeFailureStage(obj.failureStage);
+      if (failureStage) {
+        entry.failureStage = failureStage;
+      }
+      if (typeof obj.deadLetter === "boolean") {
+        entry.deadLetter = obj.deadLetter;
+      }
+      if (typeof obj.retryable === "boolean") {
+        entry.retryable = obj.retryable;
+      }
+      if (typeof obj.replayable === "boolean") {
+        entry.replayable = obj.replayable;
+      }
       parsed.push(entry);
     } catch {
       // ignore invalid lines
@@ -367,7 +440,14 @@ export async function readCronRunLogEntriesPage(
     statuses,
     deliveryStatuses,
     query,
-    queryTextForEntry: (entry) => [entry.summary ?? "", entry.error ?? "", entry.jobId].join(" "),
+    queryTextForEntry: (entry) =>
+      [
+        entry.summary ?? "",
+        entry.error ?? "",
+        entry.jobId,
+        entry.failureStage ?? "",
+        ...(entry.trace?.flatMap((step) => [step.label, step.detail]) ?? []),
+      ].join(" "),
   });
   const sorted =
     sortDir === "asc"
@@ -424,7 +504,14 @@ export async function readCronRunLogEntriesPageAll(
     query,
     queryTextForEntry: (entry) => {
       const jobName = opts.jobNameById?.[entry.jobId] ?? "";
-      return [entry.summary ?? "", entry.error ?? "", entry.jobId, jobName].join(" ");
+      return [
+        entry.summary ?? "",
+        entry.error ?? "",
+        entry.jobId,
+        jobName,
+        entry.failureStage ?? "",
+        ...(entry.trace?.flatMap((step) => [step.label, step.detail]) ?? []),
+      ].join(" ");
     },
   });
   const sorted =

@@ -500,7 +500,17 @@ describe("gateway server cron", () => {
         status: "ok",
         summary: "hello",
         deliveryStatus: "not-requested",
+        deadLetter: false,
+        retryable: false,
+        replayable: false,
       });
+      expect((finishedPayload as { trace?: unknown }).trace).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "schedule", status: "ok" }),
+          expect.objectContaining({ key: "runtime", status: "ok" }),
+          expect.objectContaining({ key: "delivery", status: "skipped" }),
+        ]),
+      );
 
       const runsRes = await rpcReq(ws, "cron.runs", { id: jobId, limit: 50 });
       expect(runsRes.ok).toBe(true);
@@ -510,6 +520,16 @@ describe("gateway server cron", () => {
       expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
       expect((entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
         "not-requested",
+      );
+      expect((entries as Array<{ failureStage?: unknown }>).at(-1)?.failureStage).toBeUndefined();
+      expect((entries as Array<{ deadLetter?: unknown }>).at(-1)?.deadLetter).toBe(false);
+      expect(
+        (entries as Array<{ trace?: Array<{ key?: unknown; status?: unknown }> }>).at(-1)?.trace,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "schedule", status: "ok" }),
+          expect.objectContaining({ key: "delivery", status: "skipped" }),
+        ]),
       );
       const allRunsRes = await rpcReq(ws, "cron.runs", {
         scope: "all",

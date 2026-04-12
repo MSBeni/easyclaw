@@ -61,6 +61,20 @@ const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("unknown"),
   Type.Literal("not-requested"),
 ]);
+const CronTraceStepStatusSchema = Type.Union([
+  Type.Literal("ok"),
+  Type.Literal("error"),
+  Type.Literal("pending"),
+  Type.Literal("skipped"),
+  Type.Literal("ready"),
+]);
+const CronTraceStepKeySchema = Type.Union([
+  Type.Literal("schedule"),
+  Type.Literal("runtime"),
+  Type.Literal("delivery"),
+  Type.Literal("approvals"),
+]);
+const CronFailureStageSchema = CronTraceStepKeySchema;
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
   Type.Literal("format"),
@@ -369,6 +383,23 @@ export const CronRunLogEntrySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    trace: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            key: CronTraceStepKeySchema,
+            label: NonEmptyString,
+            status: CronTraceStepStatusSchema,
+            detail: Type.String(),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    failureStage: Type.Optional(CronFailureStageSchema),
+    deadLetter: Type.Optional(Type.Boolean()),
+    retryable: Type.Optional(Type.Boolean()),
+    replayable: Type.Optional(Type.Boolean()),
     jobName: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

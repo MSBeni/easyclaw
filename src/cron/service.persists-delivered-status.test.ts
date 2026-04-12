@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {
-  createFinishedBarrier,
   createStartedCronServiceWithFinishedBarrier,
   createCronStoreHarness,
   createNoopLogger,
@@ -37,12 +36,51 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
   };
 }
 
+function createFinishedBarrierAny() {
+  const resolvers = new Map<string, (evt: { jobId: string; status?: string }) => void>();
+  return {
+    waitForFinished: (jobId: string) =>
+      new Promise<{ jobId: string; status?: string }>((resolve) => {
+        resolvers.set(jobId, resolve);
+      }),
+    onEvent: (evt: { jobId: string; action: string; status?: string }) => {
+      if (evt.action !== "finished") {
+        return;
+      }
+      const resolve = resolvers.get(evt.jobId);
+      if (!resolve) {
+        return;
+      }
+      resolvers.delete(evt.jobId);
+      resolve(evt);
+    },
+  };
+}
+
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   delivered?: boolean;
-  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+  result?: Partial<{
+    status: "ok" | "error" | "skipped";
+    summary: string;
+    error: string;
+    errorKind: "delivery-target";
+    deliveryError: string;
+    delivered: boolean;
+    sessionKey: string;
+  }>;
+  onFinished?: (evt: {
+    jobId: string;
+    delivered?: boolean;
+    deliveryStatus?: string;
+    failureStage?: string;
+    deadLetter?: boolean;
+    retryable?: boolean;
+    replayable?: boolean;
+    trace?: Array<{ key: string; status: string; detail: string }>;
+  }) => void;
 }) {
-  const finished = createFinishedBarrier();
+  const finished = createFinishedBarrierAny();
   const cron = new CronService({
     storePath: params.storePath,
     cronEnabled: true,
@@ -53,6 +91,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
       status: "ok" as const,
       summary: "done",
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
+      ...params.result,
     })),
     onEvent: (evt) => {
       if (evt.action === "finished") {
@@ -60,6 +99,15 @@ function createIsolatedCronWithFinishedBarrier(params: {
           jobId: evt.jobId,
           delivered: evt.delivered,
           deliveryStatus: evt.deliveryStatus,
+          failureStage: evt.failureStage,
+          deadLetter: evt.deadLetter,
+          retryable: evt.retryable,
+          replayable: evt.replayable,
+          trace: evt.trace?.map((step) => ({
+            key: step.key,
+            status: step.status,
+            detail: step.detail,
+          })),
         });
       }
       finished.onEvent(evt);
@@ -70,13 +118,21 @@ function createIsolatedCronWithFinishedBarrier(params: {
 
 async function runSingleJobAndReadState(params: {
   cron: CronService;
-  finished: ReturnType<typeof createFinishedBarrier>;
+  finished:
+    | ReturnType<typeof createFinishedBarrierAny>
+    | {
+        waitForOk: (jobId: string) => Promise<unknown>;
+      };
   job: CronAddInput;
 }) {
   const job = await params.cron.add(params.job);
   vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
   await vi.runOnlyPendingTimersAsync();
-  await params.finished.waitForOk(job.id);
+  if ("waitForFinished" in params.finished) {
+    await params.finished.waitForFinished(job.id);
+  } else {
+    await params.finished.waitForOk(job.id);
+  }
 
   const jobs = await params.cron.list({ includeDisabled: true });
   return { job, updated: jobs.find((entry) => entry.id === job.id) };
@@ -117,12 +173,31 @@ function expectDeliveryNotRequested(
 async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
   delivered?: boolean;
-  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+  result?: Partial<{
+    status: "ok" | "error" | "skipped";
+    summary: string;
+    error: string;
+    errorKind: "delivery-target";
+    deliveryError: string;
+    delivered: boolean;
+    sessionKey: string;
+  }>;
+  onFinished?: (evt: {
+    jobId: string;
+    delivered?: boolean;
+    deliveryStatus?: string;
+    failureStage?: string;
+    deadLetter?: boolean;
+    retryable?: boolean;
+    replayable?: boolean;
+    trace?: Array<{ key: string; status: string; detail: string }>;
+  }) => void;
 }) {
   const store = await makeStorePath();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
     storePath: store.storePath,
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
+    ...(params.result ? { result: params.result } : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
   });
 
@@ -203,7 +278,13 @@ describe("CronService persists delivered status", () => {
   });
 
   it("emits delivered in the finished event", async () => {
-    let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
+    let capturedEvent:
+      | {
+          jobId: string;
+          delivered?: boolean;
+          deliveryStatus?: string;
+        }
+      | undefined;
     await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("event-test"),
       delivered: true,
@@ -215,5 +296,46 @@ describe("CronService persists delivered status", () => {
     expect(capturedEvent).toBeDefined();
     expect(capturedEvent?.delivered).toBe(true);
     expect(capturedEvent?.deliveryStatus).toBe("delivered");
+  });
+
+  it("emits trace and dead-letter metadata for delivery failures", async () => {
+    let capturedEvent:
+      | {
+          failureStage?: string;
+          deadLetter?: boolean;
+          retryable?: boolean;
+          replayable?: boolean;
+          trace?: Array<{ key: string; status: string; detail: string }>;
+        }
+      | undefined;
+
+    await runIsolatedJobAndReadState({
+      job: {
+        ...buildIsolatedAgentTurnJob("event-trace"),
+        delivery: { mode: "announce", channel: "telegram", to: "ops-room" },
+      },
+      result: {
+        status: "error",
+        error: "telegram target rejected",
+        errorKind: "delivery-target",
+        deliveryError: "403 from telegram",
+        delivered: false,
+        sessionKey: "agent:ops:cron:event-trace",
+      },
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    expect(capturedEvent?.failureStage).toBe("delivery");
+    expect(capturedEvent?.deadLetter).toBe(true);
+    expect(capturedEvent?.retryable).toBe(true);
+    expect(capturedEvent?.replayable).toBe(true);
+    expect(capturedEvent?.trace).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "runtime", status: "ok" }),
+        expect.objectContaining({ key: "delivery", status: "error" }),
+      ]),
+    );
   });
 });
