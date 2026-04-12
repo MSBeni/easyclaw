@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import SlackBolt from "@slack/bolt";
+import * as SlackBolt from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../../../src/auto-reply/reply/history.js";
 import {
@@ -32,6 +32,7 @@ import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
+import { resolveSlackBoltRuntime } from "./bolt-interop.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
@@ -45,15 +46,7 @@ import {
 } from "./reconnect-policy.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
-
-const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
-  default?: typeof import("@slack/bolt");
-};
-// Bun allows named imports from CJS; Node ESM doesn't. Use default+fallback for compatibility.
-// Fix: Check if module has App property directly (Node 25.x ESM/CJS compat issue)
-const slackBolt =
-  (slackBoltModule.App ? slackBoltModule : slackBoltModule.default) ?? slackBoltModule;
-const { App, HTTPReceiver } = slackBolt;
+const { App, HTTPReceiver } = resolveSlackBoltRuntime(SlackBolt);
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import type { WebClient } from "@slack/web-api";
+import { describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 
 installSlackBlockTestMocks();
@@ -171,5 +172,60 @@ describe("sendMessageSlack blocks", () => {
       }),
     ).rejects.toThrow(/non-empty string type/i);
     expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("joins a public Slack channel and retries when the bot is not in channel", async () => {
+    const postError = Object.assign(new Error("An API error occurred: not_in_channel"), {
+      data: { error: "not_in_channel" },
+    });
+    const client = {
+      conversations: {
+        open: vi.fn(async () => ({ channel: { id: "D123" } })),
+        join: vi.fn(async () => ({ ok: true, channel: { id: "C123" } })),
+      },
+      chat: {
+        postMessage: vi
+          .fn()
+          .mockRejectedValueOnce(postError)
+          .mockResolvedValueOnce({ ts: "171234.567" }),
+      },
+    } as unknown as WebClient;
+
+    const result = await sendMessageSlack("channel:C123", "hi", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ messageId: "171234.567", channelId: "C123" });
+  });
+
+  it("surfaces an actionable error when Slack delivery cannot join the channel", async () => {
+    const postError = Object.assign(new Error("An API error occurred: not_in_channel"), {
+      data: { error: "not_in_channel" },
+    });
+    const joinError = Object.assign(new Error("An API error occurred: missing_scope"), {
+      data: { error: "missing_scope", needed: "channels:join" },
+    });
+    const client = {
+      conversations: {
+        open: vi.fn(async () => ({ channel: { id: "D123" } })),
+        join: vi.fn(async () => {
+          throw joinError;
+        }),
+      },
+      chat: {
+        postMessage: vi.fn().mockRejectedValue(postError),
+      },
+    } as unknown as WebClient;
+
+    await expect(
+      sendMessageSlack("channel:C123", "hi", {
+        token: "xoxb-test",
+        client,
+      }),
+    ).rejects.toThrow(/missing channels:join/i);
+    expect(client.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
   });
 });

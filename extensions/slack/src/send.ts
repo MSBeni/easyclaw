@@ -86,6 +86,61 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
   return scopes.includes("chat:write.customize");
 }
 
+function isSlackApiErrorCode(
+  err: unknown,
+  code: string,
+): err is Error & { data?: { error?: string; needed?: string } } {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const maybeData = err as Error & { data?: { error?: string; needed?: string } };
+  return maybeData.data?.error?.toLowerCase() === code.toLowerCase();
+}
+
+function buildSlackJoinRequiredError(params: {
+  channelId: string;
+  joinAttempted: boolean;
+  missingJoinScope: boolean;
+}): Error {
+  if (params.missingJoinScope) {
+    return new Error(
+      `Slack bot is not in channel ${params.channelId}, and the token is missing channels:join. Invite the app to that channel or add channels:join and reinstall the app.`,
+    );
+  }
+  if (params.joinAttempted) {
+    return new Error(
+      `Slack bot is not in channel ${params.channelId}. Invite the app to that conversation, then retry delivery.`,
+    );
+  }
+  return new Error(
+    `Slack bot is not in channel ${params.channelId}. Invite the app to that conversation, then retry delivery.`,
+  );
+}
+
+async function tryJoinSlackChannel(
+  client: WebClient,
+  channelId: string,
+): Promise<{
+  joined: boolean;
+  missingScope: boolean;
+}> {
+  try {
+    const response = await client.conversations.join({ channel: channelId });
+    if (response.ok === false) {
+      return {
+        joined: false,
+        missingScope: response.error?.toLowerCase() === "missing_scope",
+      };
+    }
+    return { joined: true, missingScope: false };
+  } catch (err) {
+    return {
+      joined: false,
+      missingScope: isSlackApiErrorCode(err, "missing_scope"),
+    };
+  }
+}
+
 async function postSlackMessageBestEffort(params: {
   client: WebClient;
   channelId: string;
@@ -122,11 +177,25 @@ async function postSlackMessageBestEffort(params: {
       ...(params.identity?.username ? { username: params.identity.username } : {}),
     });
   } catch (err) {
-    if (!hasCustomIdentity(params.identity) || !isSlackCustomizeScopeError(err)) {
-      throw err;
+    if (hasCustomIdentity(params.identity) && isSlackCustomizeScopeError(err)) {
+      logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
+      return params.client.chat.postMessage(basePayload);
     }
-    logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
-    return params.client.chat.postMessage(basePayload);
+    if (isSlackApiErrorCode(err, "not_in_channel")) {
+      const canAttemptJoin = /^C[A-Z0-9]+$/i.test(params.channelId);
+      const joinResult = canAttemptJoin
+        ? await tryJoinSlackChannel(params.client, params.channelId)
+        : { joined: false, missingScope: false };
+      if (joinResult.joined) {
+        return params.client.chat.postMessage(basePayload);
+      }
+      throw buildSlackJoinRequiredError({
+        channelId: params.channelId,
+        joinAttempted: canAttemptJoin,
+        missingJoinScope: joinResult.missingScope,
+      });
+    }
+    throw err;
   }
 }
 
