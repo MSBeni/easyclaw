@@ -1,0 +1,216 @@
+{
+  "name": "openclaw",
+  "version": "2026.3.14",
+  "description": "Compatibility package that re-exports EasyClaw under the legacy OpenClaw npm name",
+  "homepage": "https://github.com/MSBeni/easyclaw#readme",
+  "bugs": {
+    "url": "https://github.com/MSBeni/easyclaw/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MSBeni/easyclaw.git"
+  },
+  "bin": {
+    "openclaw": "./bin/openclaw.js"
+  },
+  "files": [
+    "README.md",
+    "bin/",
+    "plugin-sdk/",
+    "index.js",
+    "index.d.ts"
+  ],
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./cli-entry": "./bin/openclaw.js",
+    "./plugin-sdk": {
+      "types": "./plugin-sdk/index.d.ts",
+      "default": "./plugin-sdk/index.js"
+    },
+    "./plugin-sdk/account-id": {
+      "types": "./plugin-sdk/account-id.d.ts",
+      "default": "./plugin-sdk/account-id.js"
+    },
+    "./plugin-sdk/acpx": {
+      "types": "./plugin-sdk/acpx.d.ts",
+      "default": "./plugin-sdk/acpx.js"
+    },
+    "./plugin-sdk/bluebubbles": {
+      "types": "./plugin-sdk/bluebubbles.d.ts",
+      "default": "./plugin-sdk/bluebubbles.js"
+    },
+    "./plugin-sdk/compat": {
+      "types": "./plugin-sdk/compat.d.ts",
+      "default": "./plugin-sdk/compat.js"
+    },
+    "./plugin-sdk/copilot-proxy": {
+      "types": "./plugin-sdk/copilot-proxy.d.ts",
+      "default": "./plugin-sdk/copilot-proxy.js"
+    },
+    "./plugin-sdk/core": {
+      "types": "./plugin-sdk/core.d.ts",
+      "default": "./plugin-sdk/core.js"
+    },
+    "./plugin-sdk/device-pair": {
+      "types": "./plugin-sdk/device-pair.d.ts",
+      "default": "./plugin-sdk/device-pair.js"
+    },
+    "./plugin-sdk/diagnostics-otel": {
+      "types": "./plugin-sdk/diagnostics-otel.d.ts",
+      "default": "./plugin-sdk/diagnostics-otel.js"
+    },
+    "./plugin-sdk/diffs": {
+      "types": "./plugin-sdk/diffs.d.ts",
+      "default": "./plugin-sdk/diffs.js"
+    },
+    "./plugin-sdk/discord": {
+      "types": "./plugin-sdk/discord.d.ts",
+      "default": "./plugin-sdk/discord.js"
+    },
+    "./plugin-sdk/feishu": {
+      "types": "./plugin-sdk/feishu.d.ts",
+      "default": "./plugin-sdk/feishu.js"
+    },
+    "./plugin-sdk/google-gemini-cli-auth": {
+      "types": "./plugin-sdk/google-gemini-cli-auth.d.ts",
+      "default": "./plugin-sdk/google-gemini-cli-auth.js"
+    },
+    "./plugin-sdk/googlechat": {
+      "types": "./plugin-sdk/googlechat.d.ts",
+      "default": "./plugin-sdk/googlechat.js"
+    },
+    "./plugin-sdk/imessage": {
+      "types": "./plugin-sdk/imessage.d.ts",
+      "default": "./plugin-sdk/imessage.js"
+    },
+    "./plugin-sdk/irc": {
+      "types": "./plugin-sdk/irc.d.ts",
+      "default": "./plugin-sdk/irc.js"
+    },
+    "./plugin-sdk/keyed-async-queue": {
+      "types": "./plugin-sdk/keyed-async-queue.d.ts",
+      "default": "./plugin-sdk/keyed-async-queue.js"
+    },
+    "./plugin-sdk/line": {
+      "types": "./plugin-sdk/line.d.ts",
+      "default": "./plugin-sdk/line.js"
+    },
+    "./plugin-sdk/llm-task": {
+      "types": "./plugin-sdk/llm-task.d.ts",
+      "default": "./plugin-sdk/llm-task.js"
+    },
+    "./plugin-sdk/lobster": {
+      "types": "./plugin-sdk/lobster.d.ts",
+      "default": "./plugin-sdk/lobster.js"
+    },
+    "./plugin-sdk/matrix": {
+      "types": "./plugin-sdk/matrix.d.ts",
+      "default": "./plugin-sdk/matrix.js"
+    },
+    "./plugin-sdk/mattermost": {
+      "types": "./plugin-sdk/mattermost.d.ts",
+      "default": "./plugin-sdk/mattermost.js"
+    },
+    "./plugin-sdk/memory-core": {
+      "types": "./plugin-sdk/memory-core.d.ts",
+      "default": "./plugin-sdk/memory-core.js"
+    },
+    "./plugin-sdk/memory-lancedb": {
+      "types": "./plugin-sdk/memory-lancedb.d.ts",
+      "default": "./plugin-sdk/memory-lancedb.js"
+    },
+    "./plugin-sdk/minimax-portal-auth": {
+      "types": "./plugin-sdk/minimax-portal-auth.d.ts",
+      "default": "./plugin-sdk/minimax-portal-auth.js"
+    },
+    "./plugin-sdk/msteams": {
+      "types": "./plugin-sdk/msteams.d.ts",
+      "default": "./plugin-sdk/msteams.js"
+    },
+    "./plugin-sdk/nextcloud-talk": {
+      "types": "./plugin-sdk/nextcloud-talk.d.ts",
+      "default": "./plugin-sdk/nextcloud-talk.js"
+    },
+    "./plugin-sdk/nostr": {
+      "types": "./plugin-sdk/nostr.d.ts",
+      "default": "./plugin-sdk/nostr.js"
+    },
+    "./plugin-sdk/open-prose": {
+      "types": "./plugin-sdk/open-prose.d.ts",
+      "default": "./plugin-sdk/open-prose.js"
+    },
+    "./plugin-sdk/phone-control": {
+      "types": "./plugin-sdk/phone-control.d.ts",
+      "default": "./plugin-sdk/phone-control.js"
+    },
+    "./plugin-sdk/qwen-portal-auth": {
+      "types": "./plugin-sdk/qwen-portal-auth.d.ts",
+      "default": "./plugin-sdk/qwen-portal-auth.js"
+    },
+    "./plugin-sdk/signal": {
+      "types": "./plugin-sdk/signal.d.ts",
+      "default": "./plugin-sdk/signal.js"
+    },
+    "./plugin-sdk/slack": {
+      "types": "./plugin-sdk/slack.d.ts",
+      "default": "./plugin-sdk/slack.js"
+    },
+    "./plugin-sdk/synology-chat": {
+      "types": "./plugin-sdk/synology-chat.d.ts",
+      "default": "./plugin-sdk/synology-chat.js"
+    },
+    "./plugin-sdk/talk-voice": {
+      "types": "./plugin-sdk/talk-voice.d.ts",
+      "default": "./plugin-sdk/talk-voice.js"
+    },
+    "./plugin-sdk/telegram": {
+      "types": "./plugin-sdk/telegram.d.ts",
+      "default": "./plugin-sdk/telegram.js"
+    },
+    "./plugin-sdk/test-utils": {
+      "types": "./plugin-sdk/test-utils.d.ts",
+      "default": "./plugin-sdk/test-utils.js"
+    },
+    "./plugin-sdk/thread-ownership": {
+      "types": "./plugin-sdk/thread-ownership.d.ts",
+      "default": "./plugin-sdk/thread-ownership.js"
+    },
+    "./plugin-sdk/tlon": {
+      "types": "./plugin-sdk/tlon.d.ts",
+      "default": "./plugin-sdk/tlon.js"
+    },
+    "./plugin-sdk/twitch": {
+      "types": "./plugin-sdk/twitch.d.ts",
+      "default": "./plugin-sdk/twitch.js"
+    },
+    "./plugin-sdk/voice-call": {
+      "types": "./plugin-sdk/voice-call.d.ts",
+      "default": "./plugin-sdk/voice-call.js"
+    },
+    "./plugin-sdk/whatsapp": {
+      "types": "./plugin-sdk/whatsapp.d.ts",
+      "default": "./plugin-sdk/whatsapp.js"
+    },
+    "./plugin-sdk/zalo": {
+      "types": "./plugin-sdk/zalo.d.ts",
+      "default": "./plugin-sdk/zalo.js"
+    },
+    "./plugin-sdk/zalouser": {
+      "types": "./plugin-sdk/zalouser.d.ts",
+      "default": "./plugin-sdk/zalouser.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "easyclaw": "2026.3.14"
+  }
+}

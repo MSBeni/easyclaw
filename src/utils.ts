@@ -286,11 +286,14 @@ export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const override =
+    env.EASYCLAW_STATE_DIR?.trim() ||
+    env.OPENCLAW_STATE_DIR?.trim() ||
+    env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".easyclaw");
   try {
     const hasNew = fs.existsSync(newDir);
     if (hasNew) {
@@ -311,9 +314,12 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   if (!home) {
     return undefined;
   }
-  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+  const explicitHome = process.env.EASYCLAW_HOME?.trim() || process.env.OPENCLAW_HOME?.trim();
   if (explicitHome) {
-    return { home, prefix: "$OPENCLAW_HOME" };
+    return {
+      home,
+      prefix: process.env.EASYCLAW_HOME?.trim() ? "$EASYCLAW_HOME" : "$OPENCLAW_HOME",
+    };
   }
   return { home, prefix: "~" };
 }

@@ -24,6 +24,8 @@ const STEP_LABELS: Record<string, string> = {
   "ui:build": "Building UI assets",
   "ui:build (post-doctor repair)": "Restoring missing UI assets",
   "ui assets verify": "Validating UI assets",
+  "easyclaw doctor entry": "Checking doctor entrypoint",
+  "easyclaw doctor": "Running doctor checks",
   "openclaw doctor entry": "Checking doctor entrypoint",
   "openclaw doctor": "Running doctor checks",
   "git rev-parse HEAD (after)": "Verifying update",
@@ -52,7 +54,7 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
     hints.push(
       "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
     );
-    hints.push("Example: npm config set prefix ~/.local && npm i -g openclaw@latest");
+    hints.push("Example: npm config set prefix ~/.local && npm i -g easyclaw@latest");
   }
 
   if (
@@ -62,7 +64,7 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
     hints.push(
       "Detected native optional dependency build failure. The updater retries with --omit=optional automatically.",
     );
-    hints.push("If it still fails: npm i -g openclaw@latest --omit=optional");
+    hints.push("If it still fails: npm i -g easyclaw@latest --omit=optional");
   }
 
   return hints;

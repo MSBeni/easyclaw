@@ -121,9 +121,11 @@ vi.mock("./update-cli/restart-helper.js", () => ({
 vi.mock("../commands/doctor.js", () => ({
   doctorCommand: vi.fn(),
 }));
-// Mock the daemon-cli module
-vi.mock("./daemon-cli.js", () => ({
+vi.mock("./daemon-cli/install.js", () => ({
   runDaemonInstall: mockedRunDaemonInstall,
+}));
+
+vi.mock("./daemon-cli/lifecycle.js", () => ({
   runDaemonRestart: vi.fn(),
 }));
 
@@ -142,7 +144,8 @@ const { readConfigFileSnapshot, writeConfigFile } = await import("../config/conf
 const { checkUpdateStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
-const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
+const { runDaemonInstall } = await import("./daemon-cli/install.js");
+const { runDaemonRestart } = await import("./daemon-cli/lifecycle.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { updateCommand, updateStatusCommand, updateWizardCommand } = await import("./update-cli.js");
@@ -302,7 +305,7 @@ describe("update-cli", () => {
       killed: false,
       termination: "exit",
     });
-    readPackageName.mockResolvedValue("openclaw");
+    readPackageName.mockResolvedValue("easyclaw");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
     serviceLoaded.mockResolvedValue(false);
@@ -368,7 +371,7 @@ describe("update-cli", () => {
     await updateStatusCommand({ json: false });
 
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => call[0]);
-    expect(logs.join("\n")).toContain("OpenClaw update status");
+    expect(logs.join("\n")).toContain("EasyClaw update status");
   });
 
   it("updateStatusCommand emits JSON", async () => {
@@ -430,7 +433,7 @@ describe("update-cli", () => {
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      ["npm", "i", "-g", "easyclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),
     );
   });
@@ -451,7 +454,7 @@ describe("update-cli", () => {
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      ["npm", "i", "-g", "easyclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),
     );
   });
@@ -465,7 +468,7 @@ describe("update-cli", () => {
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["npm", "i", "-g", "openclaw@next", "--no-fund", "--no-audit", "--loglevel=error"],
+      ["npm", "i", "-g", "easyclaw@next", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),
     );
   });
@@ -523,12 +526,12 @@ describe("update-cli", () => {
     expect(updateOptions?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 
-  it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for package updates", async () => {
+  it("uses EASYCLAW_UPDATE_PACKAGE_SPEC for package updates", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
 
     await withEnvAsync(
-      { OPENCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/openclaw-next.tgz" },
+      { EASYCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/easyclaw-next.tgz" },
       async () => {
         await updateCommand({ yes: true, tag: "latest" });
       },
@@ -540,7 +543,7 @@ describe("update-cli", () => {
         "npm",
         "i",
         "-g",
-        "http://10.211.55.2:8138/openclaw-next.tgz",
+        "http://10.211.55.2:8138/easyclaw-next.tgz",
         "--no-fund",
         "--no-audit",
         "--loglevel=error",

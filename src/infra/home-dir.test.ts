@@ -10,14 +10,15 @@ import {
 describe("resolveEffectiveHomeDir", () => {
   it.each([
     {
-      name: "prefers OPENCLAW_HOME over HOME and USERPROFILE",
+      name: "prefers EASYCLAW_HOME over OPENCLAW_HOME, HOME, and USERPROFILE",
       env: {
+        EASYCLAW_HOME: " /srv/easyclaw-home ",
         OPENCLAW_HOME: " /srv/openclaw-home ",
         HOME: "/home/other",
         USERPROFILE: "C:/Users/other",
       } as NodeJS.ProcessEnv,
       homedir: () => "/fallback",
-      expected: "/srv/openclaw-home",
+      expected: "/srv/easyclaw-home",
     },
     {
       name: "falls back to HOME",
@@ -50,7 +51,7 @@ describe("resolveEffectiveHomeDir", () => {
     {
       name: "expands ~/ using HOME",
       env: {
-        OPENCLAW_HOME: "~/svc",
+        EASYCLAW_HOME: "~/svc",
         HOME: "/home/alice",
       } as NodeJS.ProcessEnv,
       expected: "/home/alice/svc",
@@ -58,7 +59,7 @@ describe("resolveEffectiveHomeDir", () => {
     {
       name: "expands ~\\\\ using USERPROFILE",
       env: {
-        OPENCLAW_HOME: "~\\svc",
+        EASYCLAW_HOME: "~\\svc",
         HOME: " ",
         USERPROFILE: "C:/Users/alice",
       } as NodeJS.ProcessEnv,
@@ -78,17 +79,17 @@ describe("resolveRequiredHomeDir", () => {
     ).toBe(process.cwd());
   });
 
-  it("returns a fully resolved path for OPENCLAW_HOME", () => {
+  it("returns a fully resolved path for EASYCLAW_HOME", () => {
     const result = resolveRequiredHomeDir(
-      { OPENCLAW_HOME: "/custom/home" } as NodeJS.ProcessEnv,
+      { EASYCLAW_HOME: "/custom/home" } as NodeJS.ProcessEnv,
       () => "/fallback",
     );
     expect(result).toBe(path.resolve("/custom/home"));
   });
 
-  it("returns cwd when OPENCLAW_HOME is tilde-only and no fallback home exists", () => {
+  it("returns cwd when EASYCLAW_HOME is tilde-only and no fallback home exists", () => {
     expect(
-      resolveRequiredHomeDir({ OPENCLAW_HOME: "~" } as NodeJS.ProcessEnv, () => {
+      resolveRequiredHomeDir({ EASYCLAW_HOME: "~" } as NodeJS.ProcessEnv, () => {
         throw new Error("no home");
       }),
     ).toBe(process.cwd());
@@ -99,6 +100,14 @@ describe("expandHomePrefix", () => {
   it.each([
     {
       name: "expands ~/ using effective home",
+      input: "~/x",
+      opts: {
+        env: { EASYCLAW_HOME: "/srv/easyclaw-home" } as NodeJS.ProcessEnv,
+      },
+      expected: `${path.resolve("/srv/easyclaw-home")}/x`,
+    },
+    {
+      name: "expands ~/ using legacy OPENCLAW_HOME",
       input: "~/x",
       opts: {
         env: { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv,
@@ -142,9 +151,9 @@ describe("resolveHomeRelativePath", () => {
   it("expands tilde paths using the resolved home directory", () => {
     expect(
       resolveHomeRelativePath("~/docs", {
-        env: { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv,
+        env: { EASYCLAW_HOME: "/srv/easyclaw-home" } as NodeJS.ProcessEnv,
       }),
-    ).toBe(path.resolve("/srv/openclaw-home/docs"));
+    ).toBe(path.resolve("/srv/easyclaw-home/docs"));
   });
 
   it("falls back to cwd when tilde paths have no home source", () => {

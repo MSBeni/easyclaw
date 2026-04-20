@@ -52,14 +52,15 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
   return timeoutMs;
 }
 
-const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
+const EASYCLAW_REPO_URL = "https://github.com/MSBeni/easyclaw.git";
 const MAX_LOG_CHARS = 8000;
 
-export const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+export const DEFAULT_PACKAGE_NAME = "easyclaw";
+const LEGACY_PACKAGE_NAME = "openclaw";
+const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME, LEGACY_PACKAGE_NAME]);
 
 export function normalizeTag(value?: string | null): string | null {
-  return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
+  return normalizePackageTagInput(value, [DEFAULT_PACKAGE_NAME, LEGACY_PACKAGE_NAME]);
 }
 
 export function normalizeVersionTag(tag: string): string | null {
@@ -109,7 +110,7 @@ export async function isEmptyDir(targetPath: string): Promise<boolean> {
 }
 
 export function resolveGitInstallDir(): string {
-  const override = process.env.OPENCLAW_GIT_DIR?.trim();
+  const override = process.env.EASYCLAW_GIT_DIR?.trim() || process.env.OPENCLAW_GIT_DIR?.trim();
   if (override) {
     return path.resolve(override);
   }
@@ -193,7 +194,7 @@ export async function ensureGitCheckout(params: {
   if (!dirExists) {
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", EASYCLAW_REPO_URL, params.dir],
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
@@ -203,13 +204,13 @@ export async function ensureGitCheckout(params: {
     const empty = await isEmptyDir(params.dir);
     if (!empty) {
       throw new Error(
-        `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+        `EASYCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set EASYCLAW_GIT_DIR to an empty folder or an EasyClaw checkout.`,
       );
     }
 
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", EASYCLAW_REPO_URL, params.dir],
       cwd: params.dir,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -217,7 +218,7 @@ export async function ensureGitCheckout(params: {
   }
 
   if (!(await isCorePackage(params.dir))) {
-    throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
+    throw new Error(`EASYCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
   }
 
   return null;
@@ -246,7 +247,9 @@ export async function resolveGlobalManager(params: {
 }
 
 export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
-  const binPath = path.join(root, "openclaw.mjs");
+  const binPath = (await pathExists(path.join(root, "easyclaw.mjs")))
+    ? path.join(root, "easyclaw.mjs")
+    : path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
     return;
   }

@@ -39,4 +39,25 @@ describe("resolveLegacyDaemonCliAccessors", () => {
 
     expect(resolveLegacyDaemonCliAccessors(bundle)).toBeNull();
   });
+
+  it("resolves wrapper-chunk exports where mangled locals alias to public names", () => {
+    // When Rolldown splits daemon-cli.ts into a wrapper + shared chunk, the
+    // wrapper imports mangled locals from the shared chunk and re-exports
+    // them under the original public names: `export { r as runDaemonRestart }`.
+    // The accessor in this case is the public name itself because the
+    // wrapper module publicly exposes `runDaemonRestart`, not `r`.
+    const bundle = `
+      import { a, i, n, o, r, s } from "./daemon-cli-ABCD1234.js";
+      export { a as registerDaemonCli, i as runDaemonStart, n as runDaemonStatus, o as runDaemonUninstall, r as runDaemonRestart, s as runDaemonInstall };
+    `;
+
+    expect(resolveLegacyDaemonCliAccessors(bundle)).toEqual({
+      registerDaemonCli: "registerDaemonCli",
+      runDaemonInstall: "runDaemonInstall",
+      runDaemonRestart: "runDaemonRestart",
+      runDaemonStart: "runDaemonStart",
+      runDaemonStatus: "runDaemonStatus",
+      runDaemonUninstall: "runDaemonUninstall",
+    });
+  });
 });

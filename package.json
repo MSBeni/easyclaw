@@ -1,19 +1,20 @@
 {
-  "name": "openclaw",
+  "name": "easyclaw",
   "version": "2026.3.14",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
+  "description": "Builder-first AI agent platform with extensible messaging integrations",
   "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "homepage": "https://github.com/MSBeni/easyclaw#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
+    "url": "https://github.com/MSBeni/easyclaw/issues"
   },
   "license": "MIT",
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/MSBeni/easyclaw.git"
   },
   "bin": {
+    "easyclaw": "easyclaw.mjs",
     "openclaw": "openclaw.mjs"
   },
   "directories": {
@@ -23,6 +24,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "easyclaw.mjs",
     "openclaw.mjs",
     "README-header.png",
     "README.md",
@@ -212,7 +214,7 @@
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
-    "./cli-entry": "./openclaw.mjs"
+    "./cli-entry": "./easyclaw.mjs"
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
@@ -224,10 +226,10 @@
     "android:run": "cd apps/android && ./gradlew :app:installDebug && adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:test": "cd apps/android && ./gradlew :app:testDebugUnitTest",
     "android:test:integration": "OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 vitest run --config vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
-    "build": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/copy-plugin-sdk-root-alias.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
-    "build:docker": "node scripts/tsdown-build.mjs && node scripts/copy-plugin-sdk-root-alias.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/copy-plugin-sdk-root-alias.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/write-openclaw-compat-package.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build:docker": "node scripts/tsdown-build.mjs && node scripts/copy-plugin-sdk-root-alias.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/write-openclaw-compat-package.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json || true",
-    "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/copy-plugin-sdk-root-alias.mjs && pnpm build:plugin-sdk:dts",
+    "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/copy-plugin-sdk-root-alias.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-openclaw-compat-package.ts",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
     "check": "pnpm check:host-env-policy:swift && pnpm format:check && pnpm tsgo && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-links",
@@ -252,6 +254,7 @@
     "docs:spellcheck:fix": "bash scripts/docs-spellcheck.sh --write",
     "dup:check": "jscpd src extensions test scripts --format typescript,javascript --pattern \"**/*.{ts,tsx,js,mjs,cjs}\" --gitignore --noSymlinks --ignore \"**/node_modules/**,**/dist/**,**/.git/**,**/coverage/**,**/build/**,**/.build/**,**/.artifacts/**\" --min-lines 12 --min-tokens 80 --reporters console",
     "dup:check:json": "jscpd src extensions test scripts --format typescript,javascript --pattern \"**/*.{ts,tsx,js,mjs,cjs}\" --gitignore --noSymlinks --ignore \"**/node_modules/**,**/dist/**,**/.git/**,**/coverage/**,**/build/**,**/.build/**,**/.artifacts/**\" --min-lines 12 --min-tokens 80 --reporters json --output .artifacts/jscpd",
+    "easyclaw": "node scripts/run-node.mjs",
     "format": "oxfmt --write",
     "format:all": "pnpm format && pnpm format:swift",
     "format:check": "oxfmt --check",

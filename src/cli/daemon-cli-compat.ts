@@ -52,6 +52,41 @@ function findRegisterContainerSymbol(bundleSource: string): string | null {
   return bundleSource.match(REGISTER_CONTAINER_RE)?.[1] ?? null;
 }
 
+/**
+ * Resolve the accessor path the legacy shim should use on the bundled
+ * daemon-cli module to reach `targetName`. The shim consumes the module as
+ * `import * as daemonCli from "..."` and reads `daemonCli.<accessor>`, so
+ * the accessor must be whatever NAME the bundle publicly exports the
+ * function under.
+ *
+ * Rolldown can emit the matching `export {...}` statement in either
+ * direction depending on whether the file ended up as a shared chunk or as
+ * a wrapper chunk:
+ *   - shared chunk:  `export { runDaemonRestart as r }`  (local → mangled public)
+ *   - wrapper chunk: `export { r as runDaemonRestart }`  (mangled local → public)
+ *   - unmangled:     `export { runDaemonRestart }`       (both the same)
+ *
+ * In all three cases we want the public name of the matching spec, which is
+ * the ALIAS side stored as the Map value. Returns `undefined` when neither
+ * side of any spec mentions `targetName`.
+ */
+function resolvePublicExportAccessor(
+  aliases: Map<string, string>,
+  targetName: string,
+): string | undefined {
+  // Local name matches (shared-chunk or unmangled): public is the mapped alias.
+  if (aliases.has(targetName)) {
+    return aliases.get(targetName);
+  }
+  // Public name matches (wrapper chunk): accessor is the target itself.
+  for (const alias of aliases.values()) {
+    if (alias === targetName) {
+      return targetName;
+    }
+  }
+  return undefined;
+}
+
 export function resolveLegacyDaemonCliAccessors(
   bundleSource: string,
 ): LegacyDaemonCliAccessors | null {
@@ -62,14 +97,14 @@ export function resolveLegacyDaemonCliAccessors(
 
   const registerContainer = findRegisterContainerSymbol(bundleSource);
   const registerContainerAlias = registerContainer ? aliases.get(registerContainer) : undefined;
-  const registerDirectAlias = aliases.get("registerDaemonCli");
+  const registerDirectAlias = resolvePublicExportAccessor(aliases, "registerDaemonCli");
 
-  const runDaemonInstall = aliases.get("runDaemonInstall");
-  const runDaemonRestart = aliases.get("runDaemonRestart");
-  const runDaemonStart = aliases.get("runDaemonStart");
-  const runDaemonStatus = aliases.get("runDaemonStatus");
-  const runDaemonStop = aliases.get("runDaemonStop");
-  const runDaemonUninstall = aliases.get("runDaemonUninstall");
+  const runDaemonInstall = resolvePublicExportAccessor(aliases, "runDaemonInstall");
+  const runDaemonRestart = resolvePublicExportAccessor(aliases, "runDaemonRestart");
+  const runDaemonStart = resolvePublicExportAccessor(aliases, "runDaemonStart");
+  const runDaemonStatus = resolvePublicExportAccessor(aliases, "runDaemonStatus");
+  const runDaemonStop = resolvePublicExportAccessor(aliases, "runDaemonStop");
+  const runDaemonUninstall = resolvePublicExportAccessor(aliases, "runDaemonUninstall");
   if (!(registerContainerAlias || registerDirectAlias) || !runDaemonRestart) {
     return null;
   }

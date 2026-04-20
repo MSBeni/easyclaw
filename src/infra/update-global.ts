@@ -11,8 +11,9 @@ export type CommandRunner = (
   options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
-const PRIMARY_PACKAGE_NAME = "openclaw";
-const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
+const PRIMARY_PACKAGE_NAME = "easyclaw";
+const LEGACY_PACKAGE_NAME = "openclaw";
+const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME, LEGACY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
@@ -30,17 +31,21 @@ async function resolvePortableGitPathPrepend(
   if (!localAppData) {
     return [];
   }
-  const portableGitRoot = path.join(localAppData, "OpenClaw", "deps", "portable-git");
-  const candidates = [
-    path.join(portableGitRoot, "mingw64", "bin"),
-    path.join(portableGitRoot, "usr", "bin"),
-    path.join(portableGitRoot, "cmd"),
-    path.join(portableGitRoot, "bin"),
+  const portableGitRoots = [
+    path.join(localAppData, "EasyClaw", "deps", "portable-git"),
+    path.join(localAppData, "OpenClaw", "deps", "portable-git"),
   ];
   const existing: string[] = [];
-  for (const candidate of candidates) {
-    if (await pathExists(candidate)) {
-      existing.push(candidate);
+  for (const portableGitRoot of portableGitRoots) {
+    for (const candidate of [
+      path.join(portableGitRoot, "mingw64", "bin"),
+      path.join(portableGitRoot, "usr", "bin"),
+      path.join(portableGitRoot, "cmd"),
+      path.join(portableGitRoot, "bin"),
+    ]) {
+      if (await pathExists(candidate)) {
+        existing.push(candidate);
+      }
     }
   }
   return existing;
@@ -63,6 +68,8 @@ export function resolveGlobalInstallSpec(params: {
   env?: NodeJS.ProcessEnv;
 }): string {
   const override =
+    params.env?.EASYCLAW_UPDATE_PACKAGE_SPEC?.trim() ||
+    process.env.EASYCLAW_UPDATE_PACKAGE_SPEC?.trim() ||
     params.env?.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim() ||
     process.env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
   if (override) {
@@ -126,6 +133,12 @@ export async function resolveGlobalPackageRoot(
   const root = await resolveGlobalRoot(manager, runCommand, timeoutMs);
   if (!root) {
     return null;
+  }
+  for (const name of ALL_PACKAGE_NAMES) {
+    const candidate = path.join(root, name);
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
   }
   return path.join(root, PRIMARY_PACKAGE_NAME);
 }

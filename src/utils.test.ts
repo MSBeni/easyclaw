@@ -119,10 +119,10 @@ describe("jidToE164", () => {
 });
 
 describe("resolveConfigDir", () => {
-  it("prefers ~/.openclaw when legacy dir is missing", async () => {
+  it("prefers ~/.easyclaw when legacy dir is missing", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-config-dir-"));
     try {
-      const newDir = path.join(root, ".openclaw");
+      const newDir = path.join(root, ".easyclaw");
       await fs.promises.mkdir(newDir, { recursive: true });
       const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);
       expect(resolved).toBe(newDir);
@@ -131,10 +131,10 @@ describe("resolveConfigDir", () => {
     }
   });
 
-  it("expands OPENCLAW_STATE_DIR using the provided env", () => {
+  it("expands EASYCLAW_STATE_DIR using the provided env", () => {
     const env = {
       HOME: "/tmp/openclaw-home",
-      OPENCLAW_STATE_DIR: "~/state",
+      EASYCLAW_STATE_DIR: "~/state",
     } as NodeJS.ProcessEnv;
 
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
@@ -142,23 +142,23 @@ describe("resolveConfigDir", () => {
 });
 
 describe("resolveHomeDir", () => {
-  it("prefers OPENCLAW_HOME over HOME", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+  it("prefers EASYCLAW_HOME over HOME", () => {
+    vi.stubEnv("EASYCLAW_HOME", "/srv/easyclaw-home");
     vi.stubEnv("HOME", "/home/other");
 
-    expect(resolveHomeDir()).toBe(path.resolve("/srv/openclaw-home"));
+    expect(resolveHomeDir()).toBe(path.resolve("/srv/easyclaw-home"));
 
     vi.unstubAllEnvs();
   });
 });
 
 describe("shortenHomePath", () => {
-  it("uses $OPENCLAW_HOME prefix when OPENCLAW_HOME is set", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+  it("uses $EASYCLAW_HOME prefix when EASYCLAW_HOME is set", () => {
+    vi.stubEnv("EASYCLAW_HOME", "/srv/easyclaw-home");
     vi.stubEnv("HOME", "/home/other");
 
-    expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
-      "$OPENCLAW_HOME/.openclaw/openclaw.json",
+    expect(shortenHomePath(`${path.resolve("/srv/easyclaw-home")}/.easyclaw/easyclaw.json`)).toBe(
+      "$EASYCLAW_HOME/.easyclaw/easyclaw.json",
     );
 
     vi.unstubAllEnvs();
@@ -166,13 +166,13 @@ describe("shortenHomePath", () => {
 });
 
 describe("shortenHomeInString", () => {
-  it("uses $OPENCLAW_HOME replacement when OPENCLAW_HOME is set", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+  it("uses $EASYCLAW_HOME replacement when EASYCLAW_HOME is set", () => {
+    vi.stubEnv("EASYCLAW_HOME", "/srv/easyclaw-home");
     vi.stubEnv("HOME", "/home/other");
 
     expect(
-      shortenHomeInString(`config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`),
-    ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
+      shortenHomeInString(`config: ${path.resolve("/srv/easyclaw-home")}/.easyclaw/easyclaw.json`),
+    ).toBe("config: $EASYCLAW_HOME/.easyclaw/easyclaw.json");
 
     vi.unstubAllEnvs();
   });
@@ -219,11 +219,11 @@ describe("resolveUserPath", () => {
     expect(resolveUserPath("tmp/dir")).toBe(path.resolve("tmp/dir"));
   });
 
-  it("prefers OPENCLAW_HOME for tilde expansion", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+  it("prefers EASYCLAW_HOME for tilde expansion", () => {
+    vi.stubEnv("EASYCLAW_HOME", "/srv/easyclaw-home");
     vi.stubEnv("HOME", "/home/other");
 
-    expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
+    expect(resolveUserPath("~/easyclaw")).toBe(path.resolve("/srv/easyclaw-home", "easyclaw"));
 
     vi.unstubAllEnvs();
   });
@@ -231,10 +231,10 @@ describe("resolveUserPath", () => {
   it("uses the provided env for tilde expansion", () => {
     const env = {
       HOME: "/tmp/openclaw-home",
-      OPENCLAW_HOME: "/srv/openclaw-home",
+      EASYCLAW_HOME: "/srv/easyclaw-home",
     } as NodeJS.ProcessEnv;
 
-    expect(resolveUserPath("~/openclaw", env)).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
+    expect(resolveUserPath("~/easyclaw", env)).toBe(path.resolve("/srv/easyclaw-home", "easyclaw"));
   });
 
   it("keeps blank paths blank", () => {

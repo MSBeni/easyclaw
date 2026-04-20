@@ -11,6 +11,7 @@ import { selectStyled } from "../../terminal/prompt-select-styled.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
+import { replaceCliName, resolveCliName } from "../cli-name.js";
 import {
   isEmptyDir,
   isGitCheckout,
@@ -22,9 +23,10 @@ import {
 import { updateCommand } from "./update-command.js";
 
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
+  const cliName = resolveCliName();
   if (!process.stdin.isTTY) {
     defaultRuntime.error(
-      "Update wizard requires a TTY. Use `openclaw update --channel <stable|beta|dev>` instead.",
+      `Update wizard requires a TTY. Use \`${replaceCliName("easyclaw update --channel <stable|beta|dev>", cliName)}\` instead.`,
     );
     defaultRuntime.exit(1);
     return;
@@ -107,7 +109,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         const empty = await isEmptyDir(gitDir);
         if (!empty) {
           defaultRuntime.error(
-            `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+            `EASYCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set EASYCLAW_GIT_DIR to an empty folder or an EasyClaw checkout.`,
           );
           defaultRuntime.exit(1);
           return;
@@ -116,7 +118,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
 
       const ok = await confirm({
         message: stylePromptMessage(
-          `Create a git checkout at ${gitDir}? (override via OPENCLAW_GIT_DIR)`,
+          `Create a git checkout at ${gitDir}? (override via EASYCLAW_GIT_DIR)`,
         ),
         initialValue: true,
       });

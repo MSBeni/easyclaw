@@ -24,19 +24,25 @@ describe("update global helpers", () => {
   });
 
   it("prefers explicit package spec overrides", () => {
-    envSnapshot = captureEnv(["OPENCLAW_UPDATE_PACKAGE_SPEC"]);
-    process.env.OPENCLAW_UPDATE_PACKAGE_SPEC = "file:/tmp/openclaw.tgz";
+    envSnapshot = captureEnv(["EASYCLAW_UPDATE_PACKAGE_SPEC", "OPENCLAW_UPDATE_PACKAGE_SPEC"]);
+    process.env.EASYCLAW_UPDATE_PACKAGE_SPEC = "file:/tmp/easyclaw.tgz";
 
-    expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag: "latest" })).toBe(
-      "file:/tmp/openclaw.tgz",
+    expect(resolveGlobalInstallSpec({ packageName: "easyclaw", tag: "latest" })).toBe(
+      "file:/tmp/easyclaw.tgz",
     );
     expect(
       resolveGlobalInstallSpec({
-        packageName: "openclaw",
+        packageName: "easyclaw",
         tag: "beta",
-        env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw@next" },
+        env: { EASYCLAW_UPDATE_PACKAGE_SPEC: "easyclaw@next" },
       }),
-    ).toBe("openclaw@next");
+    ).toBe("easyclaw@next");
+
+    delete process.env.EASYCLAW_UPDATE_PACKAGE_SPEC;
+    process.env.OPENCLAW_UPDATE_PACKAGE_SPEC = "file:/tmp/openclaw-compat.tgz";
+    expect(resolveGlobalInstallSpec({ packageName: "easyclaw", tag: "latest" })).toBe(
+      "file:/tmp/openclaw-compat.tgz",
+    );
   });
 
   it("resolves global roots and package roots from runner output", async () => {
@@ -56,7 +62,7 @@ describe("update global helpers", () => {
       path.join(".bun", "install", "global", "node_modules"),
     );
     await expect(resolveGlobalPackageRoot("npm", runCommand, 1000)).resolves.toBe(
-      path.join("/tmp/npm-root", "openclaw"),
+      path.join("/tmp/npm-root", "easyclaw"),
     );
   });
 
@@ -65,10 +71,10 @@ describe("update global helpers", () => {
     const npmRoot = path.join(base, "npm-root");
     const pnpmRoot = path.join(base, "pnpm-root");
     const bunRoot = path.join(base, ".bun", "install", "global", "node_modules");
-    const pkgRoot = path.join(pnpmRoot, "openclaw");
+    const pkgRoot = path.join(pnpmRoot, "easyclaw");
     await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.mkdir(path.join(npmRoot, "openclaw"), { recursive: true });
-    await fs.mkdir(path.join(bunRoot, "openclaw"), { recursive: true });
+    await fs.mkdir(path.join(npmRoot, "easyclaw"), { recursive: true });
+    await fs.mkdir(path.join(bunRoot, "easyclaw"), { recursive: true });
 
     envSnapshot = captureEnv(["BUN_INSTALL"]);
     process.env.BUN_INSTALL = path.join(base, ".bun");
@@ -88,39 +94,39 @@ describe("update global helpers", () => {
     );
     await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe("npm");
 
-    await fs.rm(path.join(npmRoot, "openclaw"), { recursive: true, force: true });
-    await fs.rm(path.join(pnpmRoot, "openclaw"), { recursive: true, force: true });
+    await fs.rm(path.join(npmRoot, "easyclaw"), { recursive: true, force: true });
+    await fs.rm(path.join(pnpmRoot, "easyclaw"), { recursive: true, force: true });
     await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe("bun");
   });
 
   it("builds install argv and npm fallback argv", () => {
-    expect(globalInstallArgs("npm", "openclaw@latest")).toEqual([
+    expect(globalInstallArgs("npm", "easyclaw@latest")).toEqual([
       "npm",
       "i",
       "-g",
-      "openclaw@latest",
+      "easyclaw@latest",
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
     ]);
-    expect(globalInstallArgs("pnpm", "openclaw@latest")).toEqual([
+    expect(globalInstallArgs("pnpm", "easyclaw@latest")).toEqual([
       "pnpm",
       "add",
       "-g",
-      "openclaw@latest",
+      "easyclaw@latest",
     ]);
-    expect(globalInstallArgs("bun", "openclaw@latest")).toEqual([
+    expect(globalInstallArgs("bun", "easyclaw@latest")).toEqual([
       "bun",
       "add",
       "-g",
-      "openclaw@latest",
+      "easyclaw@latest",
     ]);
 
-    expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([
+    expect(globalInstallFallbackArgs("npm", "easyclaw@latest")).toEqual([
       "npm",
       "i",
       "-g",
-      "openclaw@latest",
+      "easyclaw@latest",
       "--omit=optional",
       "--no-fund",
       "--no-audit",
@@ -131,20 +137,20 @@ describe("update global helpers", () => {
 
   it("cleans only renamed package directories", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-cleanup-"));
-    await fs.mkdir(path.join(root, ".openclaw-123"), { recursive: true });
-    await fs.mkdir(path.join(root, ".openclaw-456"), { recursive: true });
-    await fs.writeFile(path.join(root, ".openclaw-file"), "nope", "utf8");
-    await fs.mkdir(path.join(root, "openclaw"), { recursive: true });
+    await fs.mkdir(path.join(root, ".easyclaw-123"), { recursive: true });
+    await fs.mkdir(path.join(root, ".easyclaw-456"), { recursive: true });
+    await fs.writeFile(path.join(root, ".easyclaw-file"), "nope", "utf8");
+    await fs.mkdir(path.join(root, "easyclaw"), { recursive: true });
 
     await expect(
       cleanupGlobalRenameDirs({
         globalRoot: root,
-        packageName: "openclaw",
+        packageName: "easyclaw",
       }),
     ).resolves.toEqual({
-      removed: [".openclaw-123", ".openclaw-456"],
+      removed: [".easyclaw-123", ".easyclaw-456"],
     });
-    await expect(fs.stat(path.join(root, "openclaw"))).resolves.toBeDefined();
-    await expect(fs.stat(path.join(root, ".openclaw-file"))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(root, "easyclaw"))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(root, ".easyclaw-file"))).resolves.toBeDefined();
   });
 });

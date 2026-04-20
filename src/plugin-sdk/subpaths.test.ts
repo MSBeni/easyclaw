@@ -50,6 +50,11 @@ const bundledExtensionSubpathLoaders = [
 ] as const;
 
 describe("plugin-sdk subpath exports", () => {
+  it("supports the new easyclaw package name", async () => {
+    const compat = await import("easyclaw/plugin-sdk/compat");
+    expect(typeof compat.emptyPluginConfigSchema).toBe("function");
+  });
+
   it("exports compat helpers", () => {
     expect(typeof compatSdk.emptyPluginConfigSchema).toBe("function");
     expect(typeof compatSdk.resolveControlCommandGate).toBe("function");

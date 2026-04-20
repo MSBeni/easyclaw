@@ -12,7 +12,18 @@ import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { inheritOptionFromParent } from "../command-options.js";
-import { addGatewayServiceCommands } from "../daemon-cli.js";
+// Import directly from the concrete file rather than via the `daemon-cli.ts`
+// aggregator. `daemon-cli.ts` is registered as a separate tsdown entry so the
+// legacy-shim writer (scripts/write-cli-compat.ts) can resolve its exports
+// from hashed bundles. When gateway-cli is bundled (as part of src/entry.ts),
+// importing from "../daemon-cli.js" becomes a cross-entry reference, and
+// Rolldown occasionally emits the consumer's mangled local name as the
+// import specifier ("import { n as addGatewayServiceCommands } from ...") —
+// which the producer chunk doesn't export, yielding
+// `SyntaxError: The requested module './daemon-cli.js' does not provide an
+// export named 'n'` at runtime. Importing the concrete file lets Rolldown
+// inline it into the same chunk and sidesteps the cross-entry mismatch.
+import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withProgress } from "../progress.js";
 import { callGatewayCli, gatewayCallOpts } from "./call.js";

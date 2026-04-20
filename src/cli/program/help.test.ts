@@ -32,8 +32,11 @@ vi.mock("../../infra/git-commit.js", () => ({
 }));
 
 vi.mock("../cli-name.js", () => ({
-  resolveCliName: () => "openclaw",
-  replaceCliName: (cmd: string) => cmd,
+  resolveCliName: () => {
+    const argv1 = process.argv[1] ?? "";
+    return argv1.includes("openclaw") ? "openclaw" : "easyclaw";
+  },
+  replaceCliName: (cmd: string, cliName = "easyclaw") => cmd.replace(/\beasyclaw\b/g, cliName),
 }));
 
 vi.mock("./command-registry.js", () => ({
@@ -108,7 +111,7 @@ describe("configureProgramHelp", () => {
   }
 
   it("adds root help hint and marks commands with subcommands", () => {
-    process.argv = ["node", "openclaw", "--help"];
+    process.argv = ["node", "easyclaw", "--help"];
     const program = makeProgramWithCommands();
     configureProgramHelp(program, testProgramContext);
 
@@ -120,24 +123,34 @@ describe("configureProgramHelp", () => {
   });
 
   it("includes banner and docs/examples in root help output", () => {
-    process.argv = ["node", "openclaw", "--help"];
+    process.argv = ["node", "easyclaw", "--help"];
     const program = makeProgramWithCommands();
     configureProgramHelp(program, testProgramContext);
 
     const help = captureHelpOutput(program);
     expect(help).toContain("BANNER-LINE");
     expect(help).toContain("Examples:");
-    expect(help).toContain("https://docs.openclaw.ai/cli");
+    expect(help).toContain("https://docs.easyclaw.ai/cli");
+    expect(help).toContain("easyclaw models --help");
+  });
+
+  it("rewrites examples for the legacy openclaw alias", () => {
+    process.argv = ["node", "openclaw", "--help"];
+    const program = makeProgramWithCommands();
+    configureProgramHelp(program, testProgramContext);
+
+    const help = captureHelpOutput(program);
+    expect(help).toContain("openclaw models --help");
   });
 
   it("prints version and exits immediately when version flags are present", () => {
-    process.argv = ["node", "openclaw", "--version"];
-    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test (abc1234)" });
+    process.argv = ["node", "easyclaw", "--version"];
+    expectVersionExit({ expectedVersion: "EasyClaw 9.9.9-test (abc1234)" });
   });
 
   it("prints version and exits immediately without commit metadata", () => {
-    process.argv = ["node", "openclaw", "--version"];
+    process.argv = ["node", "easyclaw", "--version"];
     resolveCommitHashMock.mockReturnValue(null);
-    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test" });
+    expectVersionExit({ expectedVersion: "EasyClaw 9.9.9-test" });
   });
 });

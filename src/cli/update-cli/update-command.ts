@@ -40,7 +40,11 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
-import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
+// Import directly from concrete files rather than via the `daemon-cli.ts`
+// aggregator entry to sidestep Rolldown cross-entry mangling (see
+// src/cli/gateway-cli/register.ts for the full explanation).
+import { runDaemonInstall } from "../daemon-cli/install.js";
+import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import {
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
@@ -70,9 +74,12 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
+  "EASYCLAW_HOME",
   "OPENCLAW_HOME",
+  "EASYCLAW_STATE_DIR",
   "OPENCLAW_STATE_DIR",
   "CLAWDBOT_STATE_DIR",
+  "EASYCLAW_CONFIG_PATH",
   "OPENCLAW_CONFIG_PATH",
   "CLAWDBOT_CONFIG_PATH",
 ] as const;
@@ -772,7 +779,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else if (updateInstallKind === "git") {
       actions.push(`Run git update flow on channel ${channel} (fetch/rebase/build/doctor)`);
     } else {
-      actions.push(`Run global package manager update with spec openclaw@${tag}`);
+      actions.push(`Run global package manager update with spec easyclaw@${tag}`);
     }
     actions.push("Run plugin update sync after core update");
     actions.push("Refresh shell completion cache (if needed)");
@@ -864,7 +871,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   const showProgress = !opts.json && process.stdout.isTTY;
   if (!opts.json) {
-    defaultRuntime.log(theme.heading("Updating OpenClaw..."));
+    defaultRuntime.log(theme.heading("Updating EasyClaw..."));
     defaultRuntime.log("");
   }
 
@@ -932,12 +939,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     if (result.reason === "not-git-install") {
       defaultRuntime.log(
         theme.warn(
-          `Skipped: this OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`.`,
+          `Skipped: this EasyClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`.`,
         ),
       );
       defaultRuntime.log(
         theme.muted(
-          `Examples: \`${replaceCliName("npm i -g openclaw@latest", CLI_NAME)}\` or \`${replaceCliName("pnpm add -g openclaw@latest", CLI_NAME)}\``,
+          `Examples: \`${replaceCliName("npm i -g easyclaw@latest", CLI_NAME)}\` or \`${replaceCliName("pnpm add -g easyclaw@latest", CLI_NAME)}\``,
         ),
       );
     }
