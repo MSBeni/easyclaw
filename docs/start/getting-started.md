@@ -1,5 +1,5 @@
 ---
-summary: "Get OpenClaw installed and run your first chat in minutes."
+summary: "Get EasyClaw installed and build your first agent in minutes."
 read_when:
   - First time setup from zero
   - You want the fastest path to a working chat
@@ -8,12 +8,11 @@ title: "Getting Started"
 
 # Getting Started
 
-Goal: go from zero to a first working chat with minimal setup.
+Goal: go from zero to a working Builder-first agent flow with minimal setup.
 
 <Info>
-Fastest chat: open the Control UI (no channel setup needed). Run `openclaw dashboard`
-and chat in the browser, or open `http://127.0.0.1:18789/` on the
-<Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">gateway host</Tooltip>.
+Fastest path: open the Control UI, land on Builder, describe the agent you want, and let Setup handle blockers only when needed. Run `easyclaw dashboard` or open `http://127.0.0.1:18789/` on the
+<Tooltip headline="Gateway host" tip="The machine running the EasyClaw gateway service.">gateway host</Tooltip>.
 Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
 </Info>
 
@@ -28,11 +27,11 @@ Check your Node version with `node --version` if you are unsure.
 ## Quick setup (CLI)
 
 <Steps>
-  <Step title="Install OpenClaw (recommended)">
+  <Step title="Install EasyClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash
+        curl -fsSL https://easyclaw.ai/install.sh | bash
         ```
         <img
   src="/assets/install-script.svg"
@@ -42,7 +41,7 @@ Check your Node version with `node --version` if you are unsure.
       </Tab>
       <Tab title="Windows (PowerShell)">
         ```powershell
-        iwr -useb https://openclaw.ai/install.ps1 | iex
+        iwr -useb https://easyclaw.ai/install.ps1 | iex
         ```
       </Tab>
     </Tabs>
@@ -54,10 +53,10 @@ Check your Node version with `node --version` if you are unsure.
   </Step>
   <Step title="Run the onboarding wizard">
     ```bash
-    openclaw onboard --install-daemon
+    easyclaw onboard --install-daemon
     ```
 
-    The wizard configures auth, gateway settings, and optional channels.
+    The wizard configures auth, gateway settings, and the Builder-first flow.
     See [Onboarding Wizard](/start/wizard) for details.
 
   </Step>
@@ -65,19 +64,19 @@ Check your Node version with `node --version` if you are unsure.
     If you installed the service, it should already be running:
 
     ```bash
-    openclaw gateway status
+    easyclaw gateway status
     ```
 
   </Step>
   <Step title="Open the Control UI">
     ```bash
-    openclaw dashboard
+    easyclaw dashboard
     ```
   </Step>
 </Steps>
 
 <Check>
-If the Control UI loads, your Gateway is ready for use.
+If the Control UI loads, start in Builder: write a brief, complete any guided Setup blockers, then plan, apply, verify, and chat.
 </Check>
 
 ## Optional checks and extras
@@ -87,7 +86,7 @@ If the Control UI loads, your Gateway is ready for use.
     Useful for quick tests or troubleshooting.
 
     ```bash
-    openclaw gateway --port 18789
+    easyclaw gateway --port 18789
     ```
 
   </Accordion>
@@ -95,7 +94,7 @@ If the Control UI loads, your Gateway is ready for use.
     Requires a configured channel.
 
     ```bash
-    openclaw message send --target +15555550123 --message "Hello from OpenClaw"
+    easyclaw message send --target +15555550123 --message "Hello from EasyClaw"
     ```
 
   </Accordion>
@@ -103,11 +102,12 @@ If the Control UI loads, your Gateway is ready for use.
 
 ## Useful environment variables
 
-If you run OpenClaw as a service account or want custom config/state locations:
+If you run EasyClaw as a service account or want custom config/state locations:
 
-- `OPENCLAW_HOME` sets the home directory used for internal path resolution.
-- `OPENCLAW_STATE_DIR` overrides the state directory.
-- `OPENCLAW_CONFIG_PATH` overrides the config file path.
+- `EASYCLAW_HOME` sets the home directory used for internal path resolution.
+- `EASYCLAW_STATE_DIR` overrides the state directory.
+- `EASYCLAW_CONFIG_PATH` overrides the config file path.
+- `OPENCLAW_*` names are still accepted as compatibility fallbacks.
 
 Full environment variable reference: [Environment vars](/help/environment).
 
@@ -126,10 +126,11 @@ Full environment variable reference: [Environment vars](/help/environment).
 
 - A running Gateway
 - Auth configured
-- Control UI access or a connected channel
+- Builder access with a working plan/apply/verify path
 
 ## Next steps
 
+- Build your first agent brief in Builder: [Dashboard](/web/dashboard)
 - DM safety and approvals: [Pairing](/channels/pairing)
 - Connect more channels: [Channels](/channels)
 - Advanced workflows and from source: [Setup](/start/setup)

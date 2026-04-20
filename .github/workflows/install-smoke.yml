@@ -60,7 +60,7 @@ jobs:
 
       - name: Run root Dockerfile CLI smoke
         run: |
-          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
+          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which easyclaw && easyclaw --version && which openclaw && openclaw --version'
 
       # This smoke only validates that the build-arg path preinstalls selected
       # extension deps without breaking image build or basic CLI startup. It
@@ -79,7 +79,7 @@ jobs:
 
       - name: Smoke test Dockerfile with extension build arg
         run: |
-          docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc 'which openclaw && openclaw --version'
+          docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc 'which easyclaw && easyclaw --version && which openclaw && openclaw --version'
 
       - name: Build installer smoke image
         uses: useblacksmith/build-push-action@v2
@@ -104,8 +104,8 @@ jobs:
 
       - name: Run installer docker tests
         env:
-          CLAWDBOT_INSTALL_URL: https://openclaw.ai/install.sh
-          CLAWDBOT_INSTALL_CLI_URL: https://openclaw.ai/install-cli.sh
+          CLAWDBOT_INSTALL_URL: https://easyclaw.ai/install.sh
+          CLAWDBOT_INSTALL_CLI_URL: https://easyclaw.ai/install-cli.sh
           CLAWDBOT_NO_ONBOARD: "1"
           CLAWDBOT_INSTALL_SMOKE_SKIP_CLI: "1"
           CLAWDBOT_INSTALL_SMOKE_SKIP_IMAGE_BUILD: "1"

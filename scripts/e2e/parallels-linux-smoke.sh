@@ -5,7 +5,7 @@ VM_NAME="Ubuntu 24.04.3 ARM64"
 SNAPSHOT_HINT="fresh"
 MODE="both"
 OPENAI_API_KEY_ENV="OPENAI_API_KEY"
-INSTALL_URL="https://openclaw.ai/install.sh"
+INSTALL_URL="https://easyclaw.ai/install.sh"
 HOST_PORT="18427"
 HOST_PORT_EXPLICIT=0
 HOST_IP=""
@@ -78,7 +78,7 @@ Options:
   --snapshot-hint <name>     Snapshot name substring/fuzzy match. Default: "fresh"
   --mode <fresh|upgrade|both>
   --openai-api-key-env <var> Host env var name for OpenAI API key. Default: OPENAI_API_KEY
-  --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.sh
+  --install-url <url>        Installer URL for latest release. Default: https://easyclaw.ai/install.sh
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18427
   --host-ip <ip>             Override Parallels host IP.
   --latest-version <ver>     Override npm latest version lookup.

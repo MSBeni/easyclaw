@@ -163,6 +163,7 @@ const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
       distFile: `${subpath}.js`,
     });
     if (resolved) {
+      aliasMap[`easyclaw/plugin-sdk/${subpath}`] = resolved;
       aliasMap[`openclaw/plugin-sdk/${subpath}`] = resolved;
     }
   }
@@ -626,6 +627,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const aliasMap = {
+      ...(pluginSdkAlias ? { "easyclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...resolvePluginSdkScopedAliasMap(),
     };

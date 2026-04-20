@@ -5,7 +5,7 @@ VM_NAME="Windows 11"
 SNAPSHOT_HINT="pre-openclaw-native-e2e-2026-03-12"
 MODE="both"
 OPENAI_API_KEY_ENV="OPENAI_API_KEY"
-INSTALL_URL="https://openclaw.ai/install.ps1"
+INSTALL_URL="https://easyclaw.ai/install.ps1"
 HOST_PORT="18426"
 HOST_PORT_EXPLICIT=0
 HOST_IP=""
@@ -83,7 +83,7 @@ Options:
   --mode <fresh|upgrade|both>
   --openai-api-key-env <var> Host env var name for OpenAI API key.
                              Default: OPENAI_API_KEY
-  --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.ps1
+  --install-url <url>        Installer URL for latest release. Default: https://easyclaw.ai/install.ps1
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18426
   --host-ip <ip>             Override Parallels host IP.
   --latest-version <ver>     Override npm latest version lookup.

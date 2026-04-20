@@ -109,26 +109,33 @@ describe("collectReleasePackageMetadataErrors", () => {
     expect(
       collectReleasePackageMetadataErrors({
         name: "openclaw",
-        description: "Multi-channel AI gateway with extensible messaging integrations",
+        description: "Compatibility package that re-exports EasyClaw under the legacy OpenClaw npm name",
         license: "MIT",
-        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
-        bin: { openclaw: "openclaw.mjs" },
-        peerDependencies: { "node-llama-cpp": "3.16.2" },
-        peerDependenciesMeta: { "node-llama-cpp": { optional: true } },
+        repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
+        bin: { openclaw: "./bin/openclaw.js" },
+        exports: { "./cli-entry": "./bin/openclaw.js" },
+        dependencies: { easyclaw: "2026.3.14" },
+      }, {
+        version: "2026.3.14",
+        repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
       }),
     ).toEqual([]);
   });
 
-  it("requires node-llama-cpp to stay an optional peer", () => {
+  it("requires the compatibility package to depend on the matching easyclaw version", () => {
     expect(
       collectReleasePackageMetadataErrors({
         name: "openclaw",
-        description: "Multi-channel AI gateway with extensible messaging integrations",
+        description: "Compatibility package that re-exports EasyClaw under the legacy OpenClaw npm name",
         license: "MIT",
-        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
-        bin: { openclaw: "openclaw.mjs" },
-        peerDependencies: { "node-llama-cpp": "3.16.2" },
+        repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
+        bin: { openclaw: "./bin/openclaw.js" },
+        exports: { "./cli-entry": "./bin/openclaw.js" },
+        dependencies: { easyclaw: "2026.3.13" },
+      }, {
+        version: "2026.3.14",
+        repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
       }),
-    ).toContain('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
+    ).toContain('package.json dependencies.easyclaw must match root version "2026.3.14"; found "2026.3.13".');
   });
 });

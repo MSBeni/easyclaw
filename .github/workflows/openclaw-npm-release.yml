@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          PACKAGE_VERSION=$(node -p "require('./packages/openclaw/package.json').version")
           if [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-[1-9][0-9]*$ ]]; then
             TAG_KIND="fallback correction"
           else
@@ -84,7 +84,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euxo pipefail
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          PACKAGE_VERSION=$(node -p "require('./packages/openclaw/package.json').version")
           IS_CORRECTION_TAG=0
           if [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-[1-9][0-9]*$ ]]; then
             IS_CORRECTION_TAG=1
@@ -173,7 +173,7 @@ jobs:
       - name: Ensure version is not already published
         run: |
           set -euo pipefail
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          PACKAGE_VERSION=$(node -p "require('./packages/openclaw/package.json').version")
 
           if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
             echo "openclaw@${PACKAGE_VERSION} is already published on npm."

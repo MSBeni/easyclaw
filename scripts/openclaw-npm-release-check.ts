@@ -11,6 +11,8 @@ type PackageJson = {
   license?: string;
   repository?: { url?: string } | string;
   bin?: Record<string, string>;
+  dependencies?: Record<string, string>;
+  exports?: Record<string, unknown>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
@@ -37,7 +39,7 @@ const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\
 const BETA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
 const CORRECTION_TAG_REGEX = /^(?<base>\d{4}\.[1-9]\d?\.[1-9]\d?)-(?<correction>[1-9]\d*)$/;
-const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+const COMPAT_PACKAGE_JSON_PATH = "packages/openclaw/package.json";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 
 function normalizeRepoUrl(value: unknown): string {
@@ -167,10 +169,19 @@ export function utcCalendarDayDistance(left: Date, right: Date): number {
   return Math.round(Math.abs(startOfUtcDay(left) - startOfUtcDay(right)) / 86_400_000);
 }
 
-export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] {
+export function collectReleasePackageMetadataErrors(
+  pkg: PackageJson,
+  rootPackage?: PackageJson,
+): string[] {
   const actualRepositoryUrl = normalizeRepoUrl(
     typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url,
   );
+  const expectedRepositoryUrl = normalizeRepoUrl(
+    typeof rootPackage?.repository === "string"
+      ? rootPackage.repository
+      : rootPackage?.repository?.url,
+  );
+  const expectedEasyClawVersion = rootPackage?.version?.trim() ?? "";
   const errors: string[] = [];
 
   if (pkg.name !== "openclaw") {
@@ -182,27 +193,31 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
   if (pkg.license !== "MIT") {
     errors.push(`package.json license must be "MIT"; found "${pkg.license ?? ""}".`);
   }
-  if (actualRepositoryUrl !== EXPECTED_REPOSITORY_URL) {
+  if (expectedRepositoryUrl && actualRepositoryUrl !== expectedRepositoryUrl) {
     errors.push(
-      `package.json repository.url must resolve to ${EXPECTED_REPOSITORY_URL}; found ${
+      `package.json repository.url must resolve to ${expectedRepositoryUrl}; found ${
         actualRepositoryUrl || "<missing>"
       }.`,
     );
   }
-  if (pkg.bin?.openclaw !== "openclaw.mjs") {
+  if (pkg.bin?.openclaw !== "./bin/openclaw.js") {
     errors.push(
-      `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
+      `package.json bin.openclaw must be "./bin/openclaw.js"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
   }
-  if (pkg.peerDependencies?.["node-llama-cpp"] !== "3.16.2") {
+  if (pkg.dependencies?.easyclaw !== expectedEasyClawVersion) {
     errors.push(
-      `package.json peerDependencies["node-llama-cpp"] must be "3.16.2"; found "${
-        pkg.peerDependencies?.["node-llama-cpp"] ?? ""
+      `package.json dependencies.easyclaw must match root version "${expectedEasyClawVersion}"; found "${
+        pkg.dependencies?.easyclaw ?? ""
       }".`,
     );
   }
-  if (pkg.peerDependenciesMeta?.["node-llama-cpp"]?.optional !== true) {
-    errors.push('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
+  if (pkg.exports?.["./cli-entry"] !== "./bin/openclaw.js") {
+    errors.push(
+      `package.json exports["./cli-entry"] must be "./bin/openclaw.js"; found "${
+        String(pkg.exports?.["./cli-entry"] ?? "")
+      }".`,
+    );
   }
 
   return errors;
@@ -282,14 +297,19 @@ export function collectReleaseTagErrors(params: {
   return errors;
 }
 
-function loadPackageJson(): PackageJson {
+function loadCompatPackageJson(): PackageJson {
+  return JSON.parse(readFileSync(COMPAT_PACKAGE_JSON_PATH, "utf8")) as PackageJson;
+}
+
+function loadRootPackageJson(): PackageJson {
   return JSON.parse(readFileSync("package.json", "utf8")) as PackageJson;
 }
 
 function main(): number {
-  const pkg = loadPackageJson();
+  const pkg = loadCompatPackageJson();
+  const rootPkg = loadRootPackageJson();
   const now = new Date();
-  const metadataErrors = collectReleasePackageMetadataErrors(pkg);
+  const metadataErrors = collectReleasePackageMetadataErrors(pkg, rootPkg);
   const tagErrors = collectReleaseTagErrors({
     packageVersion: pkg.version ?? "",
     releaseTag: process.env.RELEASE_TAG ?? "",
