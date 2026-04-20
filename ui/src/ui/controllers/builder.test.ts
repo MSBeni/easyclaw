@@ -809,7 +809,8 @@ describe("builder controller", () => {
       [
         "agents.builder.verify",
         {
-          brief: "Search public event sites and send the schedule to Telegram every morning at 8am.",
+          brief:
+            "Search public event sites and send the schedule to Telegram every morning at 8am.",
         },
       ],
     ]);

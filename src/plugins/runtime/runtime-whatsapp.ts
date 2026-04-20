@@ -1,4 +1,3 @@
-import { getActiveWebListener } from "../../channel-web.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
@@ -6,6 +5,7 @@ import {
   readWebSelfId,
   webAuthExists,
 } from "../../../extensions/whatsapp/src/auth-store.js";
+import { getActiveWebListener } from "../../channel-web.js";
 import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
 import type { PluginRuntime } from "./types.js";
 

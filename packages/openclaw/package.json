@@ -11,6 +11,9 @@
     "type": "git",
     "url": "git+https://github.com/MSBeni/easyclaw.git"
   },
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
   "bin": {
     "openclaw": "./bin/openclaw.js"
   },
@@ -21,9 +24,6 @@
     "index.js",
     "index.d.ts"
   ],
-  "type": "module",
-  "main": "./index.js",
-  "types": "./index.d.ts",
   "exports": {
     ".": {
       "types": "./index.d.ts",
@@ -207,10 +207,10 @@
       "default": "./plugin-sdk/zalouser.js"
     }
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "dependencies": {
     "easyclaw": "2026.3.14"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -147,11 +147,7 @@ function readWhatsAppIdentity(host: OpenClawApp): string | null {
   if (!account) {
     return null;
   }
-  return (
-    readRecordString(account, "name") ??
-    readRecordString(account, "accountId") ??
-    null
-  );
+  return readRecordString(account, "name") ?? readRecordString(account, "accountId") ?? null;
 }
 
 function isWhatsAppLinkedButListenerDown(host: OpenClawApp): boolean {

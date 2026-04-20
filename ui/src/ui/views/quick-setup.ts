@@ -2072,8 +2072,9 @@ function renderWhatsAppInlineSetup(
       ${
         qrTimedOut && linkedButListenerDown
           ? html`
-              <div class="callout danger" style="margin-top:12px;">
-                EasyClaw timed out waiting for a fresh QR because the WhatsApp runtime is still down. Restart the gateway first. If you need a completely new link, use Logout and then Show QR.
+              <div class="callout danger" style="margin-top: 12px">
+                EasyClaw timed out waiting for a fresh QR because the WhatsApp runtime is still down. Restart the
+                gateway first. If you need a completely new link, use Logout and then Show QR.
               </div>
             `
           : nothing
@@ -2088,8 +2089,8 @@ function renderWhatsAppInlineSetup(
           : state.whatsappLoginConnected === true
             ? html`
                 <div class="callout warn" style="margin-top: 12px">
-                  WhatsApp linked successfully, but the live listener is still coming up. Stay on
-                  this page a moment longer or restart the gateway if it does not recover.
+                  WhatsApp linked successfully, but the live listener is still coming up. Stay on this page a moment
+                  longer or restart the gateway if it does not recover.
                 </div>
               `
             : nothing

@@ -43,11 +43,9 @@ describe("createRuntimeWhatsApp", () => {
       runtime.sendMessageWhatsApp("whatsapp:+15551234567", "hello", { verbose: false }),
     ).resolves.toEqual(expected);
 
-    expect(sendMessageWhatsAppMock).toHaveBeenCalledWith(
-      "whatsapp:+15551234567",
-      "hello",
-      { verbose: false },
-    );
+    expect(sendMessageWhatsAppMock).toHaveBeenCalledWith("whatsapp:+15551234567", "hello", {
+      verbose: false,
+    });
     expect(outboundBoundarySendMock).not.toHaveBeenCalled();
   });
 

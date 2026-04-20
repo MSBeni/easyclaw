@@ -1822,9 +1822,7 @@ function readRecordString(record: Record<string, unknown> | null, key: string): 
   return typeof value === "string" ? value.trim() : null;
 }
 
-function resolvePrimaryWhatsAppAccount(
-  state?: OnboardingState,
-): Record<string, unknown> | null {
+function resolvePrimaryWhatsAppAccount(state?: OnboardingState): Record<string, unknown> | null {
   const accounts = state?.channelsSnapshot?.channelAccounts?.whatsapp;
   if (!Array.isArray(accounts) || accounts.length === 0) {
     return null;
@@ -3268,32 +3266,33 @@ function renderOnboardingStepDetail(
                                                           `
                                                         : html`
                                                             <span class="onboarding__dirty">
-                                                              Validate checks gog token decryption and a read-only Gmail API probe. Reconnect opens gog login again without changing your Gmail watch.
+                                                              Validate checks gog token decryption and a read-only Gmail API probe. Reconnect opens gog login
+                                                              again without changing your Gmail watch.
                                                             </span>
                                                           `
-                                                    : isWhatsAppStep
-                                                      ? whatsappReady
-                                                        ? html`
-                                                            <span class="onboarding__dirty">WhatsApp listener is active and ready.</span>
-                                                          `
-                                                        : whatsappListenerDown
+                                                      : isWhatsAppStep
+                                                        ? whatsappReady
                                                           ? html`
-                                                              <span class="onboarding__dirty">
-                                                                WhatsApp is linked, but the live listener is down. Restart the gateway before moving on.
-                                                              </span>
+                                                              <span class="onboarding__dirty">WhatsApp listener is active and ready.</span>
                                                             `
-                                                          : whatsappLinked
-                                                          ? html`
-                                                              <span class="onboarding__dirty">
-                                                                WhatsApp is linked but not connected. Click Relink for a fresh QR if this persists.
-                                                              </span>
-                                                            `
-                                                          : html`
-                                                              <span class="onboarding__dirty">
-                                                                Show QR to start pairing, then click Wait for scan after scanning.
-                                                              </span>
-                                                            `
-                                                      : nothing
+                                                          : whatsappListenerDown
+                                                            ? html`
+                                                                <span class="onboarding__dirty">
+                                                                  WhatsApp is linked, but the live listener is down. Restart the gateway before moving on.
+                                                                </span>
+                                                              `
+                                                            : whatsappLinked
+                                                              ? html`
+                                                                  <span class="onboarding__dirty">
+                                                                    WhatsApp is linked but not connected. Click Relink for a fresh QR if this persists.
+                                                                  </span>
+                                                                `
+                                                              : html`
+                                                                  <span class="onboarding__dirty">
+                                                                    Show QR to start pairing, then click Wait for scan after scanning.
+                                                                  </span>
+                                                                `
+                                                        : nothing
                     }
                   </div>
                   <div class="onboarding__actions-right">

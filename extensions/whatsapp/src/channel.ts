@@ -324,7 +324,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         ? deps.hasActiveWebListener()
         : Boolean(
             getWhatsAppRuntime().channel.whatsapp.getActiveWebListener?.() ??
-              getSharedActiveWebListener(),
+            getSharedActiveWebListener(),
           );
       if (!listenerActive) {
         return { ok: false, reason: "whatsapp-not-running" };
@@ -387,7 +387,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       const identity = self.e164 ?? self.jid ?? account.accountId;
       const listenerActive = Boolean(
         getWhatsAppRuntime().channel.whatsapp.getActiveWebListener?.(account.accountId) ??
-          getSharedActiveWebListener(account.accountId),
+        getSharedActiveWebListener(account.accountId),
       );
       if (!listenerActive) {
         return {

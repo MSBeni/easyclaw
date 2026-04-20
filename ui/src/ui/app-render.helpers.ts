@@ -9,7 +9,13 @@ import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
-import { iconForTab, pathForTab, primaryNavTabForTab, titleForTab, type Tab } from "./navigation.ts";
+import {
+  iconForTab,
+  pathForTab,
+  primaryNavTabForTab,
+  titleForTab,
+  type Tab,
+} from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "./types.ts";

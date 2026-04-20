@@ -135,7 +135,8 @@ describe("app-channels whatsapp automation", () => {
               connected: false,
               lastError: "Listener missing",
               probe: {
-                error: "WhatsApp Web is linked, but no active listener is running for this account.",
+                error:
+                  "WhatsApp Web is linked, but no active listener is running for this account.",
               },
             },
           ],
@@ -153,7 +154,8 @@ describe("app-channels whatsapp automation", () => {
               connected: false,
               lastError: "Listener missing",
               probe: {
-                error: "WhatsApp Web is linked, but no active listener is running for this account.",
+                error:
+                  "WhatsApp Web is linked, but no active listener is running for this account.",
               },
             },
           ],
@@ -214,7 +216,8 @@ describe("app-channels whatsapp automation", () => {
               lastError: "Listener missing",
               probe: {
                 ok: false,
-                error: "WhatsApp Web is linked, but no active listener is running for this account.",
+                error:
+                  "WhatsApp Web is linked, but no active listener is running for this account.",
               },
             },
           ],

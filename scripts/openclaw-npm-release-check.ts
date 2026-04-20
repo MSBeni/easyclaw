@@ -214,9 +214,9 @@ export function collectReleasePackageMetadataErrors(
   }
   if (pkg.exports?.["./cli-entry"] !== "./bin/openclaw.js") {
     errors.push(
-      `package.json exports["./cli-entry"] must be "./bin/openclaw.js"; found "${
-        String(pkg.exports?.["./cli-entry"] ?? "")
-      }".`,
+      `package.json exports["./cli-entry"] must be "./bin/openclaw.js"; found "${String(
+        pkg.exports?.["./cli-entry"] ?? "",
+      )}".`,
     );
   }
 

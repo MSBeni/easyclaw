@@ -115,7 +115,9 @@ describe("agent blueprint materializer", () => {
     expect(cronStore.jobs[0]?.payload?.message).toContain(
       'Complete the scheduled task for "Day-schedule-ai" now.',
     );
-    expect(cronStore.jobs[0]?.payload?.message).not.toContain('Run the "Daily Briefing Agent" workflow now.');
+    expect(cronStore.jobs[0]?.payload?.message).not.toContain(
+      'Run the "Daily Briefing Agent" workflow now.',
+    );
   });
 
   it("updates an existing cron job instead of duplicating it", async () => {

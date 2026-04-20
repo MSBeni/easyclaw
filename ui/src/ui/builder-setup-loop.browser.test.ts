@@ -1390,8 +1390,7 @@ function createLiveCheckBlockedBuilderPlanResult(): BuilderPlanResult {
             probeKind: "delivery",
             probeLabel: "WhatsApp: Send test",
             status: "needs_live_check",
-            detail:
-              "WhatsApp looks configured, but send test still needs a live runtime check.",
+            detail: "WhatsApp looks configured, but send test still needs a live runtime check.",
             source: "preflight",
             checkedAt: "2026-04-12T18:00:00.000Z",
           },
@@ -2290,29 +2289,33 @@ describe("Builder setup loop", () => {
     expect(request.mock.calls.filter(([method]) => method === "agents.builder.plan")).toHaveLength(
       2,
     );
-    expect(request.mock.calls.filter(([method]) => method === "agents.builder.verify")).toHaveLength(
-      1,
-    );
-    expect(request.mock.calls.filter(([method, params]) => {
-      return (
-        method === "agents.builder.plan" &&
-        params &&
-        typeof params === "object" &&
-        !Array.isArray(params) &&
-        (params as Record<string, unknown>).modelId === "openai/gpt-5.4"
-      );
-    })).toHaveLength(2);
-    expect(request.mock.calls.filter(([method, params]) => {
-      return (
-        method === "agents.builder.verify" &&
-        params &&
-        typeof params === "object" &&
-        !Array.isArray(params) &&
-        (params as Record<string, unknown>).modelId === "openai/gpt-5.4"
-      );
-    })).toHaveLength(1);
+    expect(
+      request.mock.calls.filter(([method]) => method === "agents.builder.verify"),
+    ).toHaveLength(1);
+    expect(
+      request.mock.calls.filter(([method, params]) => {
+        return (
+          method === "agents.builder.plan" &&
+          params &&
+          typeof params === "object" &&
+          !Array.isArray(params) &&
+          (params as Record<string, unknown>).modelId === "openai/gpt-5.4"
+        );
+      }),
+    ).toHaveLength(2);
+    expect(
+      request.mock.calls.filter(([method, params]) => {
+        return (
+          method === "agents.builder.verify" &&
+          params &&
+          typeof params === "object" &&
+          !Array.isArray(params) &&
+          (params as Record<string, unknown>).modelId === "openai/gpt-5.4"
+        );
+      }),
+    ).toHaveLength(1);
     expect(sessionStorage.getItem("openclaw.control.builder-draft.v1")).toContain(
-      "\"modelId\":\"openai/gpt-5.4\"",
+      '"modelId":"openai/gpt-5.4"',
     );
     expect(app.builderVerifyResult?.verification.fingerprint).toBe("return-verify-1");
     expectApplyBlocked(app);

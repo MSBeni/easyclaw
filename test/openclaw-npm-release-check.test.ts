@@ -107,35 +107,45 @@ describe("collectReleaseTagErrors", () => {
 describe("collectReleasePackageMetadataErrors", () => {
   it("validates the expected npm package metadata", () => {
     expect(
-      collectReleasePackageMetadataErrors({
-        name: "openclaw",
-        description: "Compatibility package that re-exports EasyClaw under the legacy OpenClaw npm name",
-        license: "MIT",
-        repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
-        bin: { openclaw: "./bin/openclaw.js" },
-        exports: { "./cli-entry": "./bin/openclaw.js" },
-        dependencies: { easyclaw: "2026.3.14" },
-      }, {
-        version: "2026.3.14",
-        repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
-      }),
+      collectReleasePackageMetadataErrors(
+        {
+          name: "openclaw",
+          description:
+            "Compatibility package that re-exports EasyClaw under the legacy OpenClaw npm name",
+          license: "MIT",
+          repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
+          bin: { openclaw: "./bin/openclaw.js" },
+          exports: { "./cli-entry": "./bin/openclaw.js" },
+          dependencies: { easyclaw: "2026.3.14" },
+        },
+        {
+          version: "2026.3.14",
+          repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
+        },
+      ),
     ).toEqual([]);
   });
 
   it("requires the compatibility package to depend on the matching easyclaw version", () => {
     expect(
-      collectReleasePackageMetadataErrors({
-        name: "openclaw",
-        description: "Compatibility package that re-exports EasyClaw under the legacy OpenClaw npm name",
-        license: "MIT",
-        repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
-        bin: { openclaw: "./bin/openclaw.js" },
-        exports: { "./cli-entry": "./bin/openclaw.js" },
-        dependencies: { easyclaw: "2026.3.13" },
-      }, {
-        version: "2026.3.14",
-        repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
-      }),
-    ).toContain('package.json dependencies.easyclaw must match root version "2026.3.14"; found "2026.3.13".');
+      collectReleasePackageMetadataErrors(
+        {
+          name: "openclaw",
+          description:
+            "Compatibility package that re-exports EasyClaw under the legacy OpenClaw npm name",
+          license: "MIT",
+          repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
+          bin: { openclaw: "./bin/openclaw.js" },
+          exports: { "./cli-entry": "./bin/openclaw.js" },
+          dependencies: { easyclaw: "2026.3.13" },
+        },
+        {
+          version: "2026.3.14",
+          repository: { url: "git+https://github.com/MSBeni/easyclaw.git" },
+        },
+      ),
+    ).toContain(
+      'package.json dependencies.easyclaw must match root version "2026.3.14"; found "2026.3.13".',
+    );
   });
 });

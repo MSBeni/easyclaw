@@ -1,10 +1,10 @@
 import { html } from "lit";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../../src/agents/defaults.js";
 import {
   expandToolGroups,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../../src/agents/defaults.js";
 import { resolveAgentModelPrimaryValue } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
@@ -900,10 +900,10 @@ export function resolveBuilderModelOverrideOptions(
     const key = option.value.toLowerCase();
     const configured =
       exactConfigured.get(key) ??
-      (provider
+      ((provider
         ? configuredProviders.has(provider) || configuredProvidersFromConfig.has(provider)
         : false) ||
-      !catalogProvided;
+        !catalogProvided);
     addBuilderModelOption(byValue, {
       valueRaw: option.value,
       labelHint: option.label,
