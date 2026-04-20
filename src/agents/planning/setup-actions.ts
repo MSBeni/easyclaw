@@ -4,6 +4,7 @@ import { buildOpenClawCapabilityRegistry } from "../capabilities/openclaw.js";
 import type {
   PlannedIntegrationInstance,
   PlannedSetupTaskKind,
+  PlannedVerificationResult,
   RequirementPlannerResult,
 } from "../capabilities/planner.js";
 import type {
@@ -472,6 +473,8 @@ function actionIdForSetupTask(params: { connectorId: string; kind: PlannedSetupT
       return ids.configure ?? `${params.connectorId}:configure`;
     case "enable":
       return ids.configure ?? `${params.connectorId}:enable`;
+    case "verify":
+      return ids.verify ?? ids.connect ?? `${params.connectorId}:verify`;
   }
 }
 

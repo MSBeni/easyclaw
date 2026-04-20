@@ -99,7 +99,13 @@ export type PlannedIntegrationInstance = IntegrationInstance & {
 
 export type PlannedSetupTaskStatus = "completed" | "pending";
 
-export type PlannedSetupTaskKind = "install" | "connect" | "configure" | "enable" | "policy";
+export type PlannedSetupTaskKind =
+  | "install"
+  | "connect"
+  | "configure"
+  | "enable"
+  | "policy"
+  | "verify";
 
 export type PlannedSetupTask = {
   id: string;

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   buildAllowedModelSet,
@@ -96,7 +97,7 @@ function createProviderWithModelsConfig(provider: string, models: Array<Record<s
   } as Partial<OpenClawConfig>;
 }
 
-function createModelConfigEntry(id: string, opts?: { reasoning?: boolean }) {
+function createModelConfigEntry(id: string, opts?: { reasoning?: boolean }): ModelDefinitionConfig {
   return {
     id,
     name: id,
@@ -105,7 +106,7 @@ function createModelConfigEntry(id: string, opts?: { reasoning?: boolean }) {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128000,
     maxTokens: 4096,
-  } as const;
+  };
 }
 
 function resolveConfiguredRefForTest(

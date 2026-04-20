@@ -663,10 +663,11 @@ function normalizeSlackApiErrorMessage(raw: string): string {
 
 function extractSlackApiErrorDetails(error: unknown): { error: string; neededScopes: string[] } {
   const errorRecord = asRecord(error);
+  const errorData = asRecord(errorRecord?.data);
   const nestedRecord =
-    asRecord(errorRecord?.data) ??
+    errorData ??
     asRecord(errorRecord?.body) ??
-    asRecord(errorRecord?.data?.response_metadata) ??
+    asRecord(errorData?.["response_metadata"]) ??
     errorRecord;
   const directMessage =
     error instanceof Error

@@ -12,6 +12,7 @@ import type { AgentBlueprintBundle } from "../blueprints/schema.js";
 import type { RequirementPlannerResult } from "../capabilities/planner.js";
 import type { RequirementSet } from "../capabilities/requirements.js";
 import type { CapabilityRegistry } from "../capabilities/schema.js";
+import { normalizeTimeZoneInput } from "../date-time.js";
 import { getApiKeyForModel, requireApiKey } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveModelWithRegistry } from "../pi-embedded-runner/model.js";
@@ -101,6 +102,18 @@ type CandidateGraphNode = BuildSpec["graph"]["nodes"][number];
 type CandidateIntegration = BuildSpec["integrations"][number];
 type CandidateSetupAction = BuildSpec["setupActions"][number];
 type CandidateWorkspaceArtifact = BuildSpec["workspaceArtifacts"][number];
+type RelevantConnectorSummaryEntry = {
+  id: string;
+  label: string;
+  kind: string;
+  sourceKind: string;
+  contracts: string[];
+  onboarding: boolean;
+  requiresConfig: boolean;
+  requiresAuth: boolean;
+  installRequired: boolean;
+  installStrategy: string;
+};
 
 const PLANNER_REPAIR_ATTEMPTS = 2;
 const BUILDER_PLANNER_CONTRACT_ID = "easyclaw-hybrid-planner";
@@ -172,6 +185,42 @@ function readOptionalBoolean(value: unknown): boolean | undefined {
 
 function dedupeStrings(values: string[]): string[] {
   return values.filter((value, index, all) => all.indexOf(value) === index);
+}
+
+function normalizeScheduleTimeZone(params: {
+  timeZone?: string;
+  timeZoneLabel?: string;
+  fallbackTimeZone?: string;
+  fallbackTimeZoneLabel?: string;
+}): Pick<BuildSpec["schedule"], "timezone" | "timezoneLabel"> {
+  const resolveNormalized = (
+    timeZone?: string,
+    timeZoneLabel?: string,
+  ): Pick<BuildSpec["schedule"], "timezone" | "timezoneLabel"> | null => {
+    const normalized = normalizeTimeZoneInput(timeZone);
+    if (!normalized) {
+      return null;
+    }
+    const trimmedTimeZone = timeZone?.trim();
+    const trimmedLabel = timeZoneLabel?.trim();
+    return {
+      timezone: normalized.timeZone,
+      ...((trimmedLabel && trimmedLabel.toLowerCase() !== trimmedTimeZone?.toLowerCase()) ||
+      (!trimmedLabel && normalized.label)
+        ? { timezoneLabel: trimmedLabel || normalized.label }
+        : normalized.label
+          ? { timezoneLabel: normalized.label }
+          : trimmedLabel
+            ? { timezoneLabel: trimmedLabel }
+            : {}),
+    };
+  };
+
+  return (
+    resolveNormalized(params.timeZone, params.timeZoneLabel) ??
+    resolveNormalized(params.fallbackTimeZone, params.fallbackTimeZoneLabel) ??
+    {}
+  );
 }
 
 function resolveWorkspaceArtifactPurpose(fileName: string): string {
@@ -260,7 +309,9 @@ function buildConnectorCatalogSummary(
   }));
 }
 
-function buildRelevantConnectorSummary(params: BuilderPlannerAgentInput) {
+function buildRelevantConnectorSummary(
+  params: BuilderPlannerAgentInput,
+): RelevantConnectorSummaryEntry[] {
   const relevantConnectorIds = dedupeStrings([
     ...params.planning.alternatives.flatMap((alternative) => [
       ...alternative.selectedConnectorIds,
@@ -270,27 +321,26 @@ function buildRelevantConnectorSummary(params: BuilderPlannerAgentInput) {
     ...params.planning.setupTasks.map((task) => task.connectorId),
     ...params.runtimeGraph.nodes.flatMap((node) => node.connectorIds),
   ]);
-
-  return relevantConnectorIds
-    .map((connectorId) => {
-      const connector = params.capabilityRegistry.connectorsById.get(connectorId);
-      if (!connector) {
-        return null;
-      }
-      return {
-        id: connector.id,
-        label: connector.label,
-        kind: connector.kind,
-        sourceKind: connector.source.kind,
-        contracts: connector.contracts,
-        onboarding: connector.setup.onboarding,
-        requiresConfig: connector.setup.requiresConfig,
-        requiresAuth: connector.setup.requiresAuth,
-        installRequired: connector.install.required,
-        installStrategy: connector.install.strategy,
-      };
-    })
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  const summaries: RelevantConnectorSummaryEntry[] = [];
+  for (const connectorId of relevantConnectorIds) {
+    const connector = params.capabilityRegistry.connectorsById.get(connectorId);
+    if (!connector) {
+      continue;
+    }
+    summaries.push({
+      id: connector.id,
+      label: connector.label,
+      kind: connector.kind,
+      sourceKind: connector.source.kind,
+      contracts: connector.contracts,
+      onboarding: connector.setup.onboarding,
+      requiresConfig: connector.setup.requiresConfig,
+      requiresAuth: connector.setup.requiresAuth,
+      installRequired: connector.install.required,
+      installStrategy: connector.install.strategy,
+    });
+  }
+  return summaries;
 }
 
 function buildBaselineBuildSpec(params: {
@@ -304,6 +354,9 @@ function buildBaselineBuildSpec(params: {
   const unresolvedIntegrationCount =
     params.input.planning.integrations.length - readyIntegrationCount;
   const schedule = params.input.bundle.automation?.schedules?.[0];
+  const normalizedScheduleTimeZone = normalizeScheduleTimeZone({
+    timeZone: schedule?.timezone,
+  });
   const exemplarNames = params.input.templateExemplars
     .slice(0, 4)
     .map((entry) => `${entry.displayName} (${entry.templateId})`);
@@ -335,8 +388,7 @@ function buildBaselineBuildSpec(params: {
     schedule: {
       ...(schedule?.schedule ? { cron: schedule.schedule } : {}),
       ...(schedule?.purpose ? { description: schedule.purpose } : {}),
-      ...(schedule?.timezone ? { timezone: schedule.timezone } : {}),
-      ...(schedule?.timezone ? { timezoneLabel: schedule.timezone } : {}),
+      ...normalizedScheduleTimeZone,
     },
     graph: {
       mode: resolveGraphMode(params.input),
@@ -587,8 +639,20 @@ function canonicalizeSchedule(
 ): BuildSpec["schedule"] {
   const record = asRecord(value);
   if (!record) {
-    return fallback;
+    return {
+      ...fallback,
+      ...normalizeScheduleTimeZone({
+        fallbackTimeZone: fallback.timezone,
+        fallbackTimeZoneLabel: fallback.timezoneLabel,
+      }),
+    };
   }
+  const normalizedScheduleTimeZone = normalizeScheduleTimeZone({
+    timeZone: readOptionalString(record.timezone),
+    timeZoneLabel: readOptionalString(record.timezoneLabel),
+    fallbackTimeZone: fallback.timezone,
+    fallbackTimeZoneLabel: fallback.timezoneLabel,
+  });
   return {
     ...((readOptionalString(record.cron) ?? fallback.cron)
       ? { cron: readOptionalString(record.cron) ?? fallback.cron }
@@ -596,12 +660,7 @@ function canonicalizeSchedule(
     ...((readOptionalString(record.description) ?? fallback.description)
       ? { description: readOptionalString(record.description) ?? fallback.description }
       : {}),
-    ...((readOptionalString(record.timezone) ?? fallback.timezone)
-      ? { timezone: readOptionalString(record.timezone) ?? fallback.timezone }
-      : {}),
-    ...((readOptionalString(record.timezoneLabel) ?? fallback.timezoneLabel)
-      ? { timezoneLabel: readOptionalString(record.timezoneLabel) ?? fallback.timezoneLabel }
-      : {}),
+    ...normalizedScheduleTimeZone,
     ...((readOptionalBoolean(record.assumed) ?? fallback.assumed)
       ? { assumed: readOptionalBoolean(record.assumed) ?? fallback.assumed }
       : {}),
@@ -1125,7 +1184,7 @@ export async function runBuilderPlannerAgent(
         "No configured high-reasoning planner model was available, so Builder used deterministic planning.",
     });
     return {
-      contract: buildSpec.contract,
+      contract: createPlannerContract("hybrid-deterministic"),
       buildSpec,
     };
   }
@@ -1207,7 +1266,7 @@ export async function runBuilderPlannerAgent(
       formatValidationIssues(previousIssues),
   });
   return {
-    contract: buildSpec.contract,
+    contract: createPlannerContract("hybrid-deterministic"),
     buildSpec,
   };
 }

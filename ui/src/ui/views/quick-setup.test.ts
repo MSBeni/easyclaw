@@ -93,13 +93,14 @@ describe("quick setup connector assist parity", () => {
         ref: "channels.slack",
       }),
     );
+    const steps = setup?.steps ?? [];
 
     expect(setup?.assist?.actionId).toBe("channel:slack:auto-default-target");
     expect(setup?.assist?.runLabel).toBe("Auto-detect target");
     expect(setup?.docsHint).toBe("https://docs.openclaw.ai/channels/slack");
-    expect(setup?.steps[3]?.instruction).toContain("channels:read");
-    expect(setup?.steps[3]?.instruction).toContain("groups:read");
-    expect(setup?.steps[4]?.instruction).toContain("reinstall the app");
+    expect(steps[3]?.instruction).toContain("channels:read");
+    expect(steps[3]?.instruction).toContain("groups:read");
+    expect(steps[4]?.instruction).toContain("reinstall the app");
   });
 
   it("maps Discord to a dedicated auto-default-target assist action", () => {
@@ -256,9 +257,10 @@ describe("quick setup connector assist parity", () => {
       refs: ["channels.msteams"],
       targetTab: "builder",
     });
+    const steps = setup?.steps ?? [];
 
     expect(setup?.title).toBe("Install Microsoft Teams");
-    expect(setup?.steps[0]?.instruction).toContain("Install the Microsoft Teams plugin");
+    expect(steps[0]?.instruction).toContain("Install the Microsoft Teams plugin");
     expect(setup?.assist?.runLabel).toBe("Install Microsoft Teams");
   });
 

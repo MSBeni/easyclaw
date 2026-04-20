@@ -1,6 +1,6 @@
 import { buildAgentMainSessionKey } from "../../../../src/routing/session-key.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { clearBuilderSetupSession, saveBuilderSetupSession } from "../storage.ts";
+import { clearBuilderSetupSession, saveBuilderSetupSession, type UiSettings } from "../storage.ts";
 import { loadAgents, type AgentsState } from "./agents.ts";
 import { loadConfig, type ConfigState } from "./config.ts";
 import { loadCronStatus, reloadCronJobs, type CronState } from "./cron.ts";
@@ -339,7 +339,7 @@ export type BuilderDraftSummary = {
       id: string;
       connectorId: string;
       connectorLabel: string;
-      kind: "install" | "connect" | "configure" | "enable" | "policy";
+      kind: "install" | "connect" | "configure" | "enable" | "policy" | "verify";
       status: "completed" | "pending";
       title: string;
       detail: string;
@@ -519,18 +519,12 @@ export type BuilderState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   setTab?: (tab: import("../navigation.ts").Tab) => void;
-  applySettings?: (settings: Record<string, unknown>) => void;
-  settings?: Record<string, unknown>;
+  applySettings?: (settings: UiSettings) => void;
+  settings?: UiSettings;
   sessionKey?: string;
   loadAssistantIdentity?: () => Promise<void> | void;
   builderBrief: string;
-  builderApprovalPosture:
-    | ""
-    | "always_auto"
-    | "ask_once"
-    | "ask_every_time"
-    | "draft_only"
-    | "never";
+  builderApprovalPosture: string;
   builderTemplateId: string;
   builderModelId: string;
   builderAgentName: string;
@@ -625,7 +619,9 @@ function normalizeBuilderSetupResult(
   result: BuilderSetupRunResult,
   params: { actionId: string; connectorId: string },
 ): BuilderSetupRunResult {
-  const normalizeNestedRef = (value: { actionId?: string; connectorId: string }) => {
+  const normalizeNestedRef = <T extends { actionId?: string; connectorId: string }>(
+    value: T,
+  ): T => {
     const actionRef = normalizeBuilderSetupActionRef({
       actionId: value.actionId ?? value.connectorId,
       connectorId: value.connectorId,
@@ -714,7 +710,9 @@ function builderSetupFocusMatchesPlan(
   ) {
     return true;
   }
-  return draft.planning.integrations.some((integration) => integration.connectorId.trim() === connectorId);
+  return draft.planning.integrations.some(
+    (integration) => integration.connectorId.trim() === connectorId,
+  );
 }
 
 function reconcileBuilderSetupFocus(
@@ -966,9 +964,7 @@ export async function runBuilderSetupAction(
         await verifyBuilderPlan(state);
       }
       const pendingAction =
-        normalizedResult?.status === "configured"
-          ? findPendingSetupAction(state, actionRef)
-          : null;
+        normalizedResult?.status === "configured" ? findPendingSetupAction(state, actionRef) : null;
       if (normalizedResult?.status === "configured" && pendingAction) {
         state.builderSetupResult = {
           ...normalizedResult,
@@ -1067,11 +1063,13 @@ export async function applyBuilderPlan(state: BuilderState) {
     if (agentId && typeof state.setTab === "function") {
       const sessionKey = buildAgentMainSessionKey({ agentId });
       state.sessionKey = sessionKey;
-      state.applySettings?.({
-        ...(state.settings ?? {}),
-        sessionKey,
-        lastActiveSessionKey: sessionKey,
-      });
+      if (state.settings) {
+        state.applySettings?.({
+          ...state.settings,
+          sessionKey,
+          lastActiveSessionKey: sessionKey,
+        });
+      }
       await state.loadAssistantIdentity?.();
       state.setTab("chat");
     }

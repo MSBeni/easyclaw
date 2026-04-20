@@ -3,17 +3,67 @@ import { execFileSync } from "node:child_process";
 export type TimeFormatPreference = "auto" | "12" | "24";
 export type ResolvedTimeFormat = "12" | "24";
 
+const TIMEZONE_ALIAS_MAP = new Map<string, { timeZone: string; label?: string }>([
+  ["AKDT", { timeZone: "America/Anchorage", label: "Alaska Time" }],
+  ["AKST", { timeZone: "America/Anchorage", label: "Alaska Time" }],
+  ["AKT", { timeZone: "America/Anchorage", label: "Alaska Time" }],
+  ["CDT", { timeZone: "America/Chicago", label: "Central Time" }],
+  ["CST", { timeZone: "America/Chicago", label: "Central Time" }],
+  ["CT", { timeZone: "America/Chicago", label: "Central Time" }],
+  ["EDT", { timeZone: "America/New_York", label: "Eastern Time" }],
+  ["EST", { timeZone: "America/New_York", label: "Eastern Time" }],
+  ["ET", { timeZone: "America/New_York", label: "Eastern Time" }],
+  ["GMT", { timeZone: "UTC", label: "UTC" }],
+  ["HDT", { timeZone: "Pacific/Honolulu", label: "Hawaii Time" }],
+  ["HST", { timeZone: "Pacific/Honolulu", label: "Hawaii Time" }],
+  ["HT", { timeZone: "Pacific/Honolulu", label: "Hawaii Time" }],
+  ["MDT", { timeZone: "America/Denver", label: "Mountain Time" }],
+  ["MST", { timeZone: "America/Denver", label: "Mountain Time" }],
+  ["MT", { timeZone: "America/Denver", label: "Mountain Time" }],
+  ["PDT", { timeZone: "America/Los_Angeles", label: "Pacific Time" }],
+  ["PST", { timeZone: "America/Los_Angeles", label: "Pacific Time" }],
+  ["PT", { timeZone: "America/Los_Angeles", label: "Pacific Time" }],
+  ["UTC", { timeZone: "UTC", label: "UTC" }],
+]);
+
+const TIMEZONE_LABEL_MAP = new Map<string, string>([
+  ["America/Anchorage", "Alaska Time"],
+  ["America/Chicago", "Central Time"],
+  ["America/Denver", "Mountain Time"],
+  ["America/Los_Angeles", "Pacific Time"],
+  ["America/New_York", "Eastern Time"],
+  ["Pacific/Honolulu", "Hawaii Time"],
+  ["UTC", "UTC"],
+]);
+
 let cachedTimeFormat: ResolvedTimeFormat | undefined;
 
-export function resolveUserTimezone(configured?: string): string {
+export function normalizeTimeZoneInput(
+  configured?: string,
+): { timeZone: string; label?: string } | undefined {
   const trimmed = configured?.trim();
-  if (trimmed) {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-      return trimmed;
-    } catch {
-      // ignore invalid timezone
-    }
+  if (!trimmed) {
+    return undefined;
+  }
+  const alias = TIMEZONE_ALIAS_MAP.get(trimmed.toUpperCase());
+  if (alias) {
+    return alias;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
+    return {
+      timeZone: trimmed,
+      ...(TIMEZONE_LABEL_MAP.get(trimmed) ? { label: TIMEZONE_LABEL_MAP.get(trimmed) } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveUserTimezone(configured?: string): string {
+  const normalized = normalizeTimeZoneInput(configured);
+  if (normalized) {
+    return normalized.timeZone;
   }
   const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
   return host?.trim() || "UTC";

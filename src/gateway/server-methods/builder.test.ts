@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({ agents: { default: "main" } })),
+  loadConfig: vi.fn<() => Record<string, unknown>>(() => ({ agents: { default: "main" } })),
   writeConfigFile: vi.fn(async () => {}),
   getChannelPluginCatalogEntry: vi.fn(),
   clearPluginDiscoveryCache: vi.fn(),

@@ -15,7 +15,10 @@ import {
 } from "../controllers/builder.ts";
 import { normalizePath, pathForTab, type Tab } from "../navigation.ts";
 import { saveBuilderDraft, saveBuilderSetupSession } from "../storage.ts";
-import { resolveBuilderDefaultModelLabel, resolveBuilderModelOverrideOptions } from "./agents-utils.ts";
+import {
+  resolveBuilderDefaultModelLabel,
+  resolveBuilderModelOverrideOptions,
+} from "./agents-utils.ts";
 
 const BUILDER_TEMPLATE_OPTIONS = [
   { value: "", label: "Auto select" },
@@ -255,6 +258,15 @@ export function shouldOpenBuilderQuickSetup(connectorId: string | null): boolean
   return connectorId.startsWith("channel:");
 }
 
+function normalizeBuilderApprovalPosture(
+  value: string | null | undefined,
+): ApprovalPosture | undefined {
+  const trimmed = value?.trim();
+  return trimmed && APPROVAL_POSTURES.includes(trimmed as ApprovalPosture)
+    ? (trimmed as ApprovalPosture)
+    : undefined;
+}
+
 function setOptionalBuilderSetupParam(
   searchParams: URLSearchParams,
   key: string,
@@ -459,7 +471,7 @@ function navigateToConfig(
   // Guided Builder setup should open the dedicated Setup tab so the user sees
   // the focused assist card rather than landing in a generic config surface.
   if (shouldOpenBuilderQuickSetup(connectorId)) {
-    const focus = {
+    const focus: NonNullable<AppViewState["builderSetupFocus"]> = {
       actionId: params?.actionId?.trim() || null,
       connectorId,
       connectorLabel: params?.connectorLabel?.trim() || null,
@@ -587,9 +599,8 @@ export function renderBuilder(props: BuilderProps) {
       (action) => (action.blocking ?? false) && action.status !== "completed",
     ).length ?? 0;
   const blockingVerifications =
-    draft?.planning.verifications.filter((entry) =>
-      ["blocked", "failed"].includes(entry.status),
-    ).length ?? 0;
+    draft?.planning.verifications.filter((entry) => ["blocked", "failed"].includes(entry.status))
+      .length ?? 0;
   const warningVerifications =
     draft?.planning.verifications.filter((entry) => entry.status === "needs_live_check").length ??
     0;
@@ -791,7 +802,8 @@ export function renderBuilder(props: BuilderProps) {
           planResult && !state.builderApplyResult
             ? html`
                 <div class="card-sub" style="margin-top: 8px">
-                  This is a preview. Click Apply Plan to create or update the agent and its scheduled tasks.
+                  This is a preview. Rebuild as needed, run a smoke test with Check Connections, then apply the plan
+                  to activate the agent and its scheduled tasks.
                 </div>
               `
             : nothing
@@ -914,7 +926,9 @@ export function renderBuilder(props: BuilderProps) {
                         </div>
                         ${builderPolicyCard({
                           policy: draft.buildSpec.policy,
-                          currentBuilderPosture: state.builderApprovalPosture || undefined,
+                          currentBuilderPosture: normalizeBuilderApprovalPosture(
+                            state.builderApprovalPosture,
+                          ),
                           disabled: state.builderPlanLoading || state.builderVerifying,
                           onChoosePosture: (posture) => {
                             props.onSetApprovalPosture(posture);
@@ -1069,7 +1083,11 @@ function renderBuilderApplySection(
     return html`
       <section class="card applied-banner">
         <div class="card-title section-title" style="color:var(--ok);">
-          Agent Created
+          Agent Activated
+        </div>
+        <div class="card-sub" style="margin-bottom:12px;">
+          Your agent is live. Open chat to interact with it, or manage agents to monitor runs,
+          schedules, and approvals.
         </div>
         <div class="builder-grid">
           ${kv("Name", result.agent.name)}
@@ -1171,13 +1189,13 @@ function renderBuilderApplySection(
   if (state.builderConfirmApply) {
     return html`
       <section class="card confirm-banner">
-        <div class="card-title section-title">Create Your Agent</div>
+        <div class="card-title section-title">Activate Your Agent</div>
         <div class="card-sub" style="margin-bottom:12px;">
-          This will create <strong>${draft.displayName}</strong> with its schedule, files, and
-          connection settings. You can edit these later.
+          This will activate <strong>${draft.displayName}</strong> with its schedule, workspace
+          files, and connection settings. You can edit and monitor everything afterward.
         </div>
         <div style="display:flex; gap:8px;">
-          <button type="button" class="btn primary" @click=${props.onApply}>Create Agent</button>
+          <button type="button" class="btn primary" @click=${props.onApply}>Activate Agent</button>
           <button type="button" class="btn" @click=${props.onCancelApply}>Go Back</button>
         </div>
       </section>
@@ -1212,38 +1230,32 @@ function renderBuilderApplySection(
           ? hasWarningVerification
             ? html`
                 <div class="card-sub" style="margin-top: 8px">
-                  Ready to create your agent. Some optional checks could not run automatically
-                  but will not block setup.
+                  Ready to activate your agent. Some optional smoke checks could not run automatically, but they
+                  will not block setup.
                 </div>
               `
             : html`
                 <div class="card-sub" style="margin-top: 8px">
-                  Everything looks good. Click to create your agent and set up its schedule.
+                  Everything looks good. Activate the agent to turn on its schedule and runtime.
                 </div>
               `
           : hasPendingBlockingSetupAction
             ? html`
-                <div class="card-sub" style="margin-top: 8px">
-                  Complete the setup steps above before applying.
-                </div>
+                <div class="card-sub" style="margin-top: 8px">Complete the setup steps above before applying.</div>
               `
             : hasBlockingVerification
               ? html`
-                  <div class="card-sub" style="margin-top: 8px">
-                    Fix the failed checks above, then try again.
-                  </div>
+                  <div class="card-sub" style="margin-top: 8px">Fix the failed checks above, then try again.</div>
                 `
-            : !policyReady
-              ? html`
-                  <div class="card-sub" style="margin-top: 8px">
-                    Choose a safety policy before applying.
-                  </div>
-                `
-              : html`
-                  <div class="card-sub" style="margin-top: 8px">
-                    Some required settings are still missing. Check the items above.
-                  </div>
-                `
+              : !policyReady
+                ? html`
+                    <div class="card-sub" style="margin-top: 8px">Choose a safety policy before applying.</div>
+                  `
+                : html`
+                    <div class="card-sub" style="margin-top: 8px">
+                      Some required settings are still missing. Check the items above.
+                    </div>
+                  `
       }
       </div>
     </section>
@@ -1330,7 +1342,8 @@ function builderQuestionList(state: AppViewState, questions: BuilderQuestion[]) 
                           navigateToConfig(state, refs, {
                             ...(channel
                               ? {
-                                  connectorId: resolveBuilderQuestionSetupConnectorId(question),
+                                  connectorId:
+                                    resolveBuilderQuestionSetupConnectorId(question) ?? undefined,
                                   connectorLabel: titleCaseWords(channel),
                                 }
                               : {}),
@@ -2462,7 +2475,19 @@ function builderSetupActionList(
     requiredFields?: Array<{
       key: string;
       label: string;
-      kind: string;
+      kind:
+        | "account"
+        | "destination"
+        | "sender"
+        | "filter"
+        | "session"
+        | "auth"
+        | "approval"
+        | "schedule"
+        | "model"
+        | "provider"
+        | "plugin"
+        | "generic";
       required: boolean;
       inputKey?: string;
       configPath?: string;
@@ -2579,8 +2604,8 @@ function builderSetupActionList(
             value.connectorId === "channel:whatsapp" && canNavigate
               ? html`
                   <div class="tpl-note">
-                    Link your WhatsApp by scanning a QR code. You can also choose which number or
-                    group receives messages.
+                    Link your WhatsApp by scanning a QR code. You can also choose which number or group receives
+                    messages.
                   </div>
                 `
               : nothing

@@ -456,6 +456,33 @@ describe("builder planner agent", () => {
     );
   });
 
+  it("normalizes explicit schedule timezone shorthands from planner output", async () => {
+    const { input } = createPlannerInput({
+      brief:
+        "At 9am PST every weekday, read my Gmail AI newsletters and send the final brief to WhatsApp.",
+    });
+    __testing.setResolvePlannerModelForTest(() => plannerModelResolution());
+    __testing.setPlannerModelRunnerForTest(async () =>
+      JSON.stringify({
+        schedule: {
+          cron: "0 9 * * 1-5",
+          description: "Weekdays at 9:00 AM PST",
+          timezone: "PST",
+        },
+      }),
+    );
+
+    const result = await runBuilderPlannerAgent(input);
+
+    expect(result.contract.kind).toBe("model-backed-hybrid");
+    expect(result.buildSpec.schedule).toMatchObject({
+      cron: "0 9 * * 1-5",
+      description: "Weekdays at 9:00 AM PST",
+      timezone: "America/Los_Angeles",
+      timezoneLabel: "Pacific Time",
+    });
+  });
+
   it("falls back to deterministic planning when no planner model is available", async () => {
     const { input } = createPlannerInput({
       brief: "Create a daily Gmail briefing and send it to Telegram every morning.",
