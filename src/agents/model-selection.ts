@@ -461,6 +461,7 @@ export function resolveConfiguredModelRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
+  preferConfiguredProviderFallback?: boolean;
 }): ModelRef {
   const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
   if (rawModel) {
@@ -505,9 +506,13 @@ export function resolveConfiguredModelRef(params: {
     const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
     log.warn(`Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`);
   }
-  // Before falling back to the hardcoded default, check if the default provider
-  // is actually available. If it isn't but other providers are configured, prefer
-  // the first configured provider's first model to avoid reporting a stale default
+  if (!params.preferConfiguredProviderFallback) {
+    return { provider: params.defaultProvider, model: params.defaultModel };
+  }
+
+  // Optional legacy behavior: before falling back to the hardcoded default, check if the
+  // default provider is actually available. If it isn't but other providers are configured,
+  // prefer the first configured provider's first model to avoid reporting a stale default
   // from a removed provider. (See #38880)
   const configuredProviders = params.cfg.models?.providers;
   if (configuredProviders && typeof configuredProviders === "object") {

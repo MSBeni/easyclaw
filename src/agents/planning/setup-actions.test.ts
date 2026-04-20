@@ -342,6 +342,56 @@ describe("synchronizeBuildSpec", () => {
     });
   });
 
+  it("treats scheduled briefing plans as communication risk instead of operator risk", () => {
+    const cfg = {
+      hooks: {
+        token: "hook-token",
+        gmail: {
+          account: "user@example.com",
+          topic: "projects/test/topics/watch",
+          pushToken: "push-token",
+        },
+      },
+      channels: {
+        whatsapp: {
+          enabled: true,
+        },
+      },
+    };
+    const requirements = buildRequirementSet({
+      brief:
+        "Read my Gmail AI newsletters, give me business ideas every day at 9am PST, and send it to WhatsApp.",
+      cfg,
+    });
+    const planning = buildRequirementPlannerResult({
+      requirements,
+      cfg,
+    });
+
+    const synced = synchronizeBuildSpec({
+      buildSpec: createBaseBuildSpec({
+        brief: requirements.brief,
+        status: planning.status,
+      }),
+      requirements,
+      planning,
+      questions: [],
+      cfg,
+    });
+
+    expect(synced.policy).toMatchObject({
+      highestRisk: "communicative",
+      riskTiers: expect.arrayContaining(["communicative"]),
+      approval: {
+        required: false,
+        routeStatus: "not_required",
+        posture: "always_auto",
+        recommendedPosture: "always_auto",
+      },
+    });
+    expect(synced.policy?.summary).toContain("Communication risk");
+  });
+
   it("merges external setup descriptors and workspace artifacts from catalog metadata", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-phase13-setup-"));
     const catalogPath = path.join(dir, "catalog.json");

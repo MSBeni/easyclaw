@@ -29,6 +29,7 @@ import {
   type ChannelMessageActionName,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/whatsapp";
+import { getActiveWebListener as getSharedActiveWebListener } from "../../../src/channel-web.js";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import {
   listWhatsAppAccountIds,
@@ -36,7 +37,6 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
-import { getActiveWebListener } from "./active-listener.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 import { whatsappOnboardingAdapter } from "./onboarding.js";
 import { getWhatsAppRuntime } from "./runtime.js";
@@ -322,7 +322,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       }
       const listenerActive = deps?.hasActiveWebListener
         ? deps.hasActiveWebListener()
-        : Boolean(getWhatsAppRuntime().channel.whatsapp.getActiveWebListener());
+        : Boolean(
+            getWhatsAppRuntime().channel.whatsapp.getActiveWebListener?.() ??
+              getSharedActiveWebListener(),
+          );
       if (!listenerActive) {
         return { ok: false, reason: "whatsapp-not-running" };
       }
@@ -380,15 +383,18 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
           error: "WhatsApp Web is not linked for this account yet.",
         };
       }
-      const listenerActive = Boolean(getActiveWebListener(account.accountId));
+      const self = getWhatsAppRuntime().channel.whatsapp.readWebSelfId(account.authDir);
+      const identity = self.e164 ?? self.jid ?? account.accountId;
+      const listenerActive = Boolean(
+        getWhatsAppRuntime().channel.whatsapp.getActiveWebListener?.(account.accountId) ??
+          getSharedActiveWebListener(account.accountId),
+      );
       if (!listenerActive) {
         return {
           ok: false,
           error: "WhatsApp Web is linked, but no active listener is running for this account.",
         };
       }
-      const self = getWhatsAppRuntime().channel.whatsapp.readWebSelfId(account.authDir);
-      const identity = self.e164 ?? self.jid ?? account.accountId;
       return {
         ok: true,
         detail: `WhatsApp Web listener is active for ${identity}.`,

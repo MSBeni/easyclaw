@@ -21,6 +21,9 @@ import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
   basePath: string;
+  builderSetupFocus?: {
+    targetTab?: Tab;
+  } | null;
   client?: { stop: () => void } | null;
   connectGeneration: number;
   connected?: boolean;
@@ -39,6 +42,7 @@ type LifecycleHost = {
   logsAtBottom: boolean;
   logsEntries: unknown[];
   popStateHandler: () => void;
+  setTab?: (tab: Tab) => void;
   topbarObserver: ResizeObserver | null;
 };
 

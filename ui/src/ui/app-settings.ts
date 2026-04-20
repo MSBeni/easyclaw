@@ -169,6 +169,20 @@ function clearBuilderSetupParams(url: URL) {
   }
 }
 
+function shouldNormalizeGuidedSetupTargetTab(connectorId: string): boolean {
+  const normalized = connectorId.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.startsWith("channel:") ||
+    normalized === "tools:web" ||
+    normalized === "platform:exec-approvals" ||
+    normalized === "platform:gmail-hook" ||
+    normalized === "platform:core-model"
+  );
+}
+
 function readBuilderSetupFocusFromUrl(url: URL): BuilderSetupFocusState | null {
   const connectorId = trimParam(url.searchParams.get("builderSetupConnectorId"));
   if (!connectorId) {
@@ -181,6 +195,7 @@ function readBuilderSetupFocusFromUrl(url: URL): BuilderSetupFocusState | null {
     rawTargetTab === "templates" ||
     rawTargetTab === "overview" ||
     rawTargetTab === "onboarding" ||
+    rawTargetTab === "advanced" ||
     rawTargetTab === "channels" ||
     rawTargetTab === "instances" ||
     rawTargetTab === "sessions" ||
@@ -239,7 +254,10 @@ function readBuilderSetupFocusFromUrl(url: URL): BuilderSetupFocusState | null {
       trimParam(url.searchParams.get("builderSetupDetail")) ||
       "Finish the requested setup here, save or apply your changes, then return to Builder.",
     refs,
-    targetTab,
+    targetTab:
+      shouldNormalizeGuidedSetupTargetTab(connectorId) && targetTab === "builder"
+        ? "onboarding"
+        : targetTab,
   };
 }
 
@@ -581,7 +599,7 @@ export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
   if (typeof window === "undefined") {
     return;
   }
-  const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "chat";
+  const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "builder";
   setTabFromRoute(host, resolved);
   syncUrlWithTab(host, resolved, replace);
 }

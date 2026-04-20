@@ -19,7 +19,8 @@ export {
 } from "../extensions/whatsapp/src/inbound.js";
 export { loginWeb } from "../extensions/whatsapp/src/login.js";
 export { loadWebMedia, optimizeImageToJpeg } from "../extensions/whatsapp/src/media.js";
-export { sendMessageWhatsApp } from "../extensions/whatsapp/src/send.js";
+export { getActiveWebListener } from "../extensions/whatsapp/src/active-listener.js";
+export { sendMessageWhatsApp, sendPollWhatsApp } from "../extensions/whatsapp/src/send.js";
 export {
   createWaSocket,
   formatError,

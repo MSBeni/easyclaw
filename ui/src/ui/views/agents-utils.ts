@@ -4,6 +4,8 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../../src/agents/defaults.js";
+import { resolveAgentModelPrimaryValue } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -580,6 +582,64 @@ function normalizeModelRefProvider(valueRaw: unknown): string | null {
   return provider || null;
 }
 
+function readProviderConfigRecord(
+  configForm: Record<string, unknown> | null,
+  providerRaw: string | null | undefined,
+): Record<string, unknown> | null {
+  const provider = providerRaw?.trim().toLowerCase();
+  if (!provider) {
+    return null;
+  }
+  const providers = (configForm as ConfigSnapshot | null)?.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return null;
+  }
+  for (const [key, value] of Object.entries(providers)) {
+    if (key.trim().toLowerCase() !== provider) {
+      continue;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function hasConfiguredSecretLike(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const source = typeof record.source === "string" ? record.source.trim() : "";
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  return source.length > 0 && id.length > 0;
+}
+
+function hasConfiguredModelProviderInConfig(
+  configForm: Record<string, unknown> | null,
+  providerRaw: string | null | undefined,
+): boolean {
+  const providerConfig = readProviderConfigRecord(configForm, providerRaw);
+  if (!providerConfig) {
+    return false;
+  }
+  if (hasConfiguredSecretLike(providerConfig.apiKey)) {
+    return true;
+  }
+  const auth = typeof providerConfig.auth === "string" ? providerConfig.auth.trim() : "";
+  if (auth === "aws-sdk") {
+    return true;
+  }
+  const baseUrl = typeof providerConfig.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
+  const api = typeof providerConfig.api === "string" ? providerConfig.api.trim() : "";
+  const models = Array.isArray(providerConfig.models) ? providerConfig.models : [];
+  return Boolean(baseUrl && api && models.length > 0);
+}
+
 function buildProviderScopedModelRef(params: {
   modelId: string;
   provider?: string | null;
@@ -793,17 +853,23 @@ export function resolveBuilderModelOverrideOptions(
   modelCatalog?: readonly ModelCatalogEntry[] | null,
 ): BuilderModelOverrideOption[] {
   const byValue = new Map<string, BuilderModelOverrideOption>();
+  const exactConfigured = new Map<string, boolean>();
+  const configuredProviders = new Set<string>();
+  const configuredProvidersFromConfig = new Set<string>();
+  const catalogProvided = Array.isArray(modelCatalog) && modelCatalog.length > 0;
 
-  for (const option of resolveConfiguredModels(configForm)) {
-    addBuilderModelOption(byValue, {
-      valueRaw: option.value,
-      labelHint: option.label,
-      configured: true,
-      providerHint: normalizeModelRefProvider(option.value),
-    });
+  const providerRecords = (configForm as ConfigSnapshot | null)?.models?.providers;
+  if (providerRecords && typeof providerRecords === "object") {
+    for (const providerId of Object.keys(providerRecords)) {
+      const normalized = providerId.trim().toLowerCase();
+      if (!normalized || !hasConfiguredModelProviderInConfig(configForm, normalized)) {
+        continue;
+      }
+      configuredProvidersFromConfig.add(normalized);
+    }
   }
 
-  if (Array.isArray(modelCatalog)) {
+  if (catalogProvided) {
     for (const entry of modelCatalog) {
       const modelId = entry?.id?.trim();
       if (!modelId) {
@@ -814,30 +880,49 @@ export function resolveBuilderModelOverrideOptions(
       if (!value) {
         continue;
       }
+      const configured = entry.configured !== false;
+      exactConfigured.set(value.toLowerCase(), configured);
+      if (configured && provider) {
+        configuredProviders.add(provider.toLowerCase());
+      }
       const baseLabel = provider ? `${modelId} · ${provider}` : modelId;
       addBuilderModelOption(byValue, {
         valueRaw: value,
         labelHint: baseLabel,
-        configured: entry.configured !== false,
+        configured,
         providerHint: provider ?? null,
       });
     }
   }
 
-  const configuredProviders = new Set<string>();
-  for (const option of byValue.values()) {
-    if (!option.configured || !option.provider) {
-      continue;
-    }
-    configuredProviders.add(option.provider);
+  for (const option of resolveConfiguredModels(configForm)) {
+    const provider = normalizeModelRefProvider(option.value);
+    const key = option.value.toLowerCase();
+    const configured =
+      exactConfigured.get(key) ??
+      (provider
+        ? configuredProviders.has(provider) || configuredProvidersFromConfig.has(provider)
+        : false) ||
+      !catalogProvided;
+    addBuilderModelOption(byValue, {
+      valueRaw: option.value,
+      labelHint: option.label,
+      configured,
+      providerHint: provider,
+    });
   }
 
   if (suggestedModelIds) {
     for (const suggestion of suggestedModelIds) {
       const provider = normalizeModelRefProvider(suggestion);
+      const configured =
+        exactConfigured.get(suggestion.trim().toLowerCase()) ??
+        (provider
+          ? configuredProviders.has(provider) || configuredProvidersFromConfig.has(provider)
+          : false);
       addBuilderModelOption(byValue, {
         valueRaw: suggestion,
-        configured: provider ? configuredProviders.has(provider) : false,
+        configured,
         providerHint: provider,
       });
     }
@@ -846,10 +931,15 @@ export function resolveBuilderModelOverrideOptions(
   const currentValue = current?.trim();
   if (currentValue && !byValue.has(currentValue.toLowerCase())) {
     const provider = normalizeModelRefProvider(currentValue);
+    const configured =
+      exactConfigured.get(currentValue.toLowerCase()) ??
+      (provider
+        ? configuredProviders.has(provider) || configuredProvidersFromConfig.has(provider)
+        : false);
     addBuilderModelOption(byValue, {
       valueRaw: currentValue,
       labelHint: `Current (${currentValue})`,
-      configured: provider ? configuredProviders.has(provider) : false,
+      configured,
       providerHint: provider,
     });
   }
@@ -863,6 +953,22 @@ export function resolveBuilderModelOverrideOptions(
     .filter((option) => !option.configured)
     .toSorted(sortOptions);
   return [...configured, ...unconfigured];
+}
+
+export function resolveBuilderDefaultModelLabel(
+  configForm: Record<string, unknown> | null,
+): string {
+  const configuredDefault = resolveAgentModelPrimaryValue(
+    (configForm as ConfigSnapshot | null)?.agents?.defaults?.model,
+  )?.trim();
+  if (!configuredDefault) {
+    return `${DEFAULT_MODEL} · ${DEFAULT_PROVIDER}`;
+  }
+  const provider = normalizeModelRefProvider(configuredDefault);
+  if (!provider) {
+    return configuredDefault;
+  }
+  return `${configuredDefault.slice(provider.length + 1)} · ${provider}`;
 }
 
 type CompiledPattern =

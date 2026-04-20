@@ -147,8 +147,15 @@ function summarizeBuildSpecPolicy(params: {
   );
   const riskTiers = sortRiskClasses([
     ...riskyContractIds.flatMap((contractId) => registry.contractsById.get(contractId)?.risk ?? []),
-    ...riskyConnectorIds.flatMap(
-      (connectorId) => registry.connectorsById.get(connectorId)?.riskClasses ?? [],
+    ...params.planning.selections.flatMap((selection) =>
+      selection.contractIds
+        .map((contractId) => registry.contractsById.get(contractId)?.risk)
+        .filter((risk): risk is RiskClass => Boolean(risk)),
+    ),
+    ...params.planning.integrations.flatMap((integration) =>
+      integration.contracts.length === 0
+        ? (registry.connectorsById.get(integration.connectorId)?.riskClasses ?? [])
+        : [],
     ),
   ]);
   const highestRisk = riskTiers.at(-1) ?? "read_only";

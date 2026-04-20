@@ -61,12 +61,16 @@ describe("agent blueprint materializer", () => {
   });
 
   it("applies a daily briefing blueprint into config, workspace, and cron", async () => {
+    const bundle = structuredClone(dailyBriefingBlueprint) as AgentBlueprintBundle;
+    bundle.agent.agentId = "day-schedule-ai";
+    bundle.agent.name = "Day-schedule-ai";
+
     const result = await applyAgentBlueprint({
       loaded: {
         kind: "template",
         source: "daily-briefing",
         format: null,
-        bundle: dailyBriefingBlueprint,
+        bundle,
       },
       variables: {
         owner_target: "@owner",
@@ -75,12 +79,12 @@ describe("agent blueprint materializer", () => {
 
     clearConfigCache();
     const snapshot = await readConfigFileSnapshot();
-    const agent = snapshot.config.agents?.list?.find((entry) => entry.id === "daily-briefing");
+    const agent = snapshot.config.agents?.list?.find((entry) => entry.id === "day-schedule-ai");
     if (!agent) {
       throw new Error("missing applied agent");
     }
 
-    expect(result.agent.agentId).toBe("daily-briefing");
+    expect(result.agent.agentId).toBe("day-schedule-ai");
     expect(agent.skills).toEqual(["summarization"]);
     expect(agent.tools?.profile).toBe("messaging");
     expect(agent.tools?.alsoAllow).toEqual(["cron"]);
@@ -98,12 +102,20 @@ describe("agent blueprint materializer", () => {
     expect(metadata.manifest.templateId).toBe("daily-briefing");
 
     const cronStore = JSON.parse(await fs.readFile(cronStorePath, "utf-8")) as {
-      jobs: Array<{ name: string; payload?: { model?: string }; delivery?: { to?: string } }>;
+      jobs: Array<{
+        name: string;
+        payload?: { model?: string; message?: string };
+        delivery?: { to?: string };
+      }>;
     };
     expect(cronStore.jobs).toHaveLength(1);
-    expect(cronStore.jobs[0]?.name).toBe("easyclaw:daily-briefing:weekday-morning-brief");
+    expect(cronStore.jobs[0]?.name).toBe("easyclaw:day-schedule-ai:weekday-morning-brief");
     expect(cronStore.jobs[0]?.payload?.model).toBeTypeOf("string");
     expect(cronStore.jobs[0]?.delivery?.to).toBe("@owner");
+    expect(cronStore.jobs[0]?.payload?.message).toContain(
+      'Complete the scheduled task for "Day-schedule-ai" now.',
+    );
+    expect(cronStore.jobs[0]?.payload?.message).not.toContain('Run the "Daily Briefing Agent" workflow now.');
   });
 
   it("updates an existing cron job instead of duplicating it", async () => {

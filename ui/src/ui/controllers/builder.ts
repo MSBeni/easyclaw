@@ -1,5 +1,6 @@
+import { buildAgentMainSessionKey } from "../../../../src/routing/session-key.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { saveBuilderSetupSession } from "../storage.ts";
+import { clearBuilderSetupSession, saveBuilderSetupSession } from "../storage.ts";
 import { loadAgents, type AgentsState } from "./agents.ts";
 import { loadConfig, type ConfigState } from "./config.ts";
 import { loadCronStatus, reloadCronJobs, type CronState } from "./cron.ts";
@@ -517,6 +518,11 @@ export type BuilderSetupRunResult = {
 export type BuilderState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  setTab?: (tab: import("../navigation.ts").Tab) => void;
+  applySettings?: (settings: Record<string, unknown>) => void;
+  settings?: Record<string, unknown>;
+  sessionKey?: string;
+  loadAssistantIdentity?: () => Promise<void> | void;
   builderBrief: string;
   builderApprovalPosture:
     | ""
@@ -665,6 +671,82 @@ function persistBuilderSetupSessionState(state: {
     inputs: state.builderSetupInputs,
     result: state.builderSetupResult,
   });
+}
+
+function clearBuilderSetupState(
+  state: BuilderState & {
+    builderSetupFocus?: unknown;
+  },
+) {
+  state.builderSetupInputs = {};
+  state.builderSetupError = null;
+  state.builderSetupResult = null;
+  state.builderSetupRunningConnectorId = null;
+  if ("builderSetupFocus" in state) {
+    state.builderSetupFocus = null;
+  }
+  clearBuilderSetupSession();
+}
+
+function builderSetupFocusMatchesPlan(
+  focus: unknown,
+  plan: BuilderPlanResult | Pick<BuilderVerifyResult, "draft"> | null | undefined,
+): boolean {
+  if (!focus || typeof focus !== "object" || Array.isArray(focus) || !plan) {
+    return false;
+  }
+  const focusRecord = focus as {
+    actionId?: unknown;
+    connectorId?: unknown;
+  };
+  const connectorId =
+    typeof focusRecord.connectorId === "string" ? focusRecord.connectorId.trim() : "";
+  const actionId = typeof focusRecord.actionId === "string" ? focusRecord.actionId.trim() : "";
+  if (!connectorId) {
+    return false;
+  }
+  const draft = plan.draft;
+  if (
+    draft.buildSpec.setupActions.some((action) => {
+      const actionRef = action.id?.trim() ?? action.connectorId.trim();
+      return actionRef === actionId || action.connectorId.trim() === connectorId;
+    })
+  ) {
+    return true;
+  }
+  return draft.planning.integrations.some((integration) => integration.connectorId.trim() === connectorId);
+}
+
+function reconcileBuilderSetupFocus(
+  state: BuilderState & {
+    builderSetupFocus?: unknown;
+  },
+  plan: BuilderPlanResult | Pick<BuilderVerifyResult, "draft"> | null | undefined,
+) {
+  if (!state.builderSetupFocus) {
+    return;
+  }
+  if (builderSetupFocusMatchesPlan(state.builderSetupFocus, plan)) {
+    persistBuilderSetupSessionState(state);
+    return;
+  }
+  clearBuilderSetupState(state);
+}
+
+function findPendingSetupAction(
+  state: BuilderState,
+  params: { actionId: string; connectorId: string },
+) {
+  const actions = state.builderVerifyResult?.draft.buildSpec.setupActions ?? [];
+  return (
+    actions.find((action) => {
+      const actionRef = action.id?.trim() ?? action.connectorId.trim();
+      return (
+        action.status !== "completed" &&
+        (actionRef === params.actionId || action.connectorId.trim() === params.connectorId)
+      );
+    }) ?? null
+  );
 }
 
 function buildWorkspaceDocEditsPayload(state: BuilderState): Array<{
@@ -883,6 +965,26 @@ export async function runBuilderSetupAction(
       if (state.builderBrief.trim()) {
         await verifyBuilderPlan(state);
       }
+      const pendingAction =
+        normalizedResult?.status === "configured"
+          ? findPendingSetupAction(state, actionRef)
+          : null;
+      if (normalizedResult?.status === "configured" && pendingAction) {
+        state.builderSetupResult = {
+          ...normalizedResult,
+          status: "needs_setup",
+          message: pendingAction.detail?.trim() || normalizedResult.message,
+        };
+        persistBuilderSetupSessionState(
+          state as BuilderState & {
+            builderSetupFocus?: unknown;
+          },
+        );
+        return;
+      }
+      if (normalizedResult?.status === "configured" && typeof state.setTab === "function") {
+        state.setTab("builder");
+      }
     }
   } catch (error) {
     const formatted = formatBuilderSetupError(error);
@@ -923,6 +1025,12 @@ export async function loadBuilderPlan(state: BuilderState) {
       ...(state.builderAgentName ? { agentName: state.builderAgentName } : {}),
     });
     state.builderPlan = result ?? null;
+    reconcileBuilderSetupFocus(
+      state as BuilderState & {
+        builderSetupFocus?: unknown;
+      },
+      state.builderPlan,
+    );
   } catch (error) {
     state.builderPlanError = String(error);
   } finally {
@@ -955,6 +1063,18 @@ export async function applyBuilderPlan(state: BuilderState) {
       reloadCronJobs(refreshState),
       loadCronStatus(refreshState),
     ]);
+    const agentId = result?.result.agent.agentId?.trim();
+    if (agentId && typeof state.setTab === "function") {
+      const sessionKey = buildAgentMainSessionKey({ agentId });
+      state.sessionKey = sessionKey;
+      state.applySettings?.({
+        ...(state.settings ?? {}),
+        sessionKey,
+        lastActiveSessionKey: sessionKey,
+      });
+      await state.loadAssistantIdentity?.();
+      state.setTab("chat");
+    }
   } catch (error) {
     state.builderApplyError = String(error);
   } finally {
@@ -986,6 +1106,12 @@ export async function verifyBuilderPlan(state: BuilderState) {
         graphPlans: result.graphPlans,
       };
     }
+    reconcileBuilderSetupFocus(
+      state as BuilderState & {
+        builderSetupFocus?: unknown;
+      },
+      state.builderPlan,
+    );
   } catch (error) {
     state.builderVerifyError = String(error);
   } finally {

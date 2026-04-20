@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentLogoUrl,
+  resolveBuilderDefaultModelLabel,
   resolveBuilderModelOverrideOptions,
   resolveConfiguredCronModelSuggestions,
   resolveModelOptions,
@@ -139,12 +140,101 @@ describe("resolveBuilderModelOverrideOptions", () => {
     expect((grok?.label ?? "").toLowerCase()).toContain("xai");
   });
 
+  it("trusts gateway readiness over config presence when catalog data is available", () => {
+    const options = resolveBuilderModelOverrideOptions(
+      {
+        agents: {
+          defaults: {
+            model: "google/gemini-2.5-pro",
+          },
+        },
+      },
+      undefined,
+      [],
+      [
+        {
+          id: "gemini-2.5-pro",
+          name: "Gemini 2.5 Pro",
+          provider: "google",
+          configured: false,
+        },
+      ],
+    );
+
+    expect(options).toContainEqual(
+      expect.objectContaining({
+        value: "google/gemini-2.5-pro",
+        configured: false,
+      }),
+    );
+  });
+
   it("keeps the current override visible even when it is not in catalog", () => {
     const options = resolveBuilderModelOverrideOptions(null, "openai/gpt-5.4-pro", [], []);
     expect(options[0]).toMatchObject({
       value: "openai/gpt-5.4-pro",
       label: "Current (openai/gpt-5.4-pro)",
     });
+  });
+
+  it("falls back to config-defined readiness when the model catalog has not loaded yet", () => {
+    const options = resolveBuilderModelOverrideOptions(
+      {
+        agents: {
+          defaults: {
+            model: "google/gemini-2.5-pro",
+          },
+        },
+      },
+      undefined,
+      [],
+      [],
+    );
+
+    expect(options).toContainEqual(
+      expect.objectContaining({
+        value: "google/gemini-2.5-pro",
+        configured: true,
+      }),
+    );
+  });
+
+  it("treats a current override as configured when the provider has saved auth config", () => {
+    const options = resolveBuilderModelOverrideOptions(
+      {
+        models: {
+          providers: {
+            google: {
+              apiKey: "***redacted***",
+            },
+          },
+        },
+      },
+      "google/gemini-2.5-pro",
+      [],
+      [],
+    );
+
+    expect(options).toContainEqual(
+      expect.objectContaining({
+        value: "google/gemini-2.5-pro",
+        configured: true,
+      }),
+    );
+  });
+});
+
+describe("resolveBuilderDefaultModelLabel", () => {
+  it("shows the configured default model when one is set", () => {
+    expect(
+      resolveBuilderDefaultModelLabel({
+        agents: {
+          defaults: {
+            model: "openai/gpt-4o",
+          },
+        },
+      }),
+    ).toBe("gpt-4o · openai");
   });
 });
 

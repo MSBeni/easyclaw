@@ -15,7 +15,7 @@ import {
 } from "../controllers/builder.ts";
 import { normalizePath, pathForTab, type Tab } from "../navigation.ts";
 import { saveBuilderDraft, saveBuilderSetupSession } from "../storage.ts";
-import { resolveBuilderModelOverrideOptions } from "./agents-utils.ts";
+import { resolveBuilderDefaultModelLabel, resolveBuilderModelOverrideOptions } from "./agents-utils.ts";
 
 const BUILDER_TEMPLATE_OPTIONS = [
   { value: "", label: "Auto select" },
@@ -442,6 +442,7 @@ function navigateToConfig(
     refs,
     title: params?.title,
   });
+  const focusTitle = params?.title?.trim() || actionTitle;
   const focusDetail =
     params?.detail?.trim() ||
     "Finish the requested setup here, save or apply your changes, then return to Builder and rebuild or verify.";
@@ -477,7 +478,7 @@ function navigateToConfig(
       requiredFields: params?.requiredFields,
       uiSchema: params?.uiSchema ?? null,
       completionSignal: params?.completionSignal ?? null,
-      title: actionTitle,
+      title: focusTitle,
       detail: focusDetail,
       refs,
       targetTab: "onboarding",
@@ -497,10 +498,10 @@ function navigateToConfig(
       inputs: state.builderSetupInputs,
       result: null,
     });
-    // Stay in Builder for the primary setup flow so a stale runtime or auth
-    // redirect cannot strand the user on a half-rendered page. The focused
-    // quick-setup card renders inline here, and users can still jump to the
-    // Setup tab from inside that card if they want the full onboarding view.
+    // Guided Builder setup should open the dedicated Setup tab immediately so
+    // the user lands on the focused integration surface instead of a Builder
+    // banner anchored above the plan.
+    state.setTab("onboarding");
     scrollToTop();
     return;
   }
@@ -532,7 +533,7 @@ function navigateToConfig(
     requiredFields: params?.requiredFields,
     uiSchema: params?.uiSchema ?? null,
     completionSignal: params?.completionSignal ?? null,
-    title: actionTitle,
+    title: focusTitle,
     detail: focusDetail,
     refs,
     targetTab: target.tab,
@@ -558,6 +559,7 @@ export type BuilderProps = {
   onConfirmApply: () => void;
   onCancelApply: () => void;
   onApply: () => void;
+  onOpenChat?: () => void;
 };
 
 export function triggerBuilderPlan(state: BuilderState) {
@@ -584,10 +586,18 @@ export function renderBuilder(props: BuilderProps) {
     draft?.buildSpec.setupActions.filter(
       (action) => (action.blocking ?? false) && action.status !== "completed",
     ).length ?? 0;
+  const blockingVerifications =
+    draft?.planning.verifications.filter((entry) =>
+      ["blocked", "failed"].includes(entry.status),
+    ).length ?? 0;
+  const warningVerifications =
+    draft?.planning.verifications.filter((entry) => entry.status === "needs_live_check").length ??
+    0;
   const canQuickApply =
     draft?.plannerStatus === "ready" &&
     blueprintStatus === "ready" &&
     blockingSetupActions === 0 &&
+    blockingVerifications === 0 &&
     !state.builderApplyResult;
   const integrationByConnectorId = new Map(
     (draft?.planning.integrations ?? []).map(
@@ -601,28 +611,27 @@ export function renderBuilder(props: BuilderProps) {
     state.chatModelCatalog,
   );
   const configuredModelOverrideOptions = modelOverrideOptions.filter((option) => option.configured);
-  const unconfiguredModelOverrideOptions = modelOverrideOptions.filter(
-    (option) => !option.configured,
-  );
   const selectedModelOption = state.builderModelId
     ? (modelOverrideOptions.find((option) => option.value === state.builderModelId) ?? null)
     : null;
   const selectedModelNeedsSetup = Boolean(
     state.builderModelId && selectedModelOption && !selectedModelOption.configured,
   );
+  const currentUnconfiguredModelOption = selectedModelNeedsSetup ? selectedModelOption : null;
   const selectedModelProvider =
     selectedModelOption?.provider ?? normalizeModelProvider(state.builderModelId);
   const selectedModelProviderLabel = selectedModelProvider
     ? titleCaseWords(selectedModelProvider)
     : "Selected model provider";
+  const builderDefaultModelLabel = resolveBuilderDefaultModelLabel(state.configForm);
 
   return html`
     <div class="builder-layout">
       <section class="card">
-        <div class="card-title section-title">Describe the Agent</div>
+        <div class="card-title section-title">Describe What You Need</div>
         <div class="card-sub" style="margin-bottom:12px;">
-          Write the job in plain English. The builder extracts requirements, picks the best
-          starter template, and shows what's ready, what needs setup, and what's blocked.
+          Tell us what you want your agent to do, in your own words. We'll figure out the
+          connections, schedule, and setup for you.
         </div>
 
         <label class="field builder-brief-field" style="margin-bottom:12px;">
@@ -630,14 +639,14 @@ export function renderBuilder(props: BuilderProps) {
           <textarea
             rows="5"
             .value=${state.builderBrief}
-            placeholder="Create a bot on Telegram that summarizes my daily emails and sends me a briefing every morning at 9am."
+            placeholder="Example: Every morning at 9am, read my Gmail newsletters about AI and send me a summary of business ideas on WhatsApp."
             @input=${(event: Event) =>
               props.onSetBrief((event.target as HTMLTextAreaElement).value)}
           ></textarea>
         </label>
 
         <label class="field" style="max-width:360px;">
-          <span>Template Override</span>
+          <span>Template</span>
           <select
             .value=${state.builderTemplateId}
             @change=${(event: Event) =>
@@ -659,17 +668,17 @@ export function renderBuilder(props: BuilderProps) {
               props.onSetAgentName((event.target as HTMLInputElement).value)}
           />
           <span class="card-sub" style="margin-top:6px;">
-            Sets the coordinator agent name created by Apply Plan.
+            Give your agent a custom name, or leave blank to use the default.
           </span>
         </label>
 
         <label class="field" style="max-width:360px; margin-top:12px;">
-          <span>Model Override (optional)</span>
+          <span>AI Model Override (optional)</span>
           <select
             .value=${state.builderModelId}
             @change=${(event: Event) => props.onSetModel((event.target as HTMLSelectElement).value)}
           >
-            <option value="">Use system default</option>
+            <option value="">Use OpenClaw default (${builderDefaultModelLabel})</option>
             ${
               configuredModelOverrideOptions.length > 0
                 ? html`
@@ -685,22 +694,20 @@ export function renderBuilder(props: BuilderProps) {
                 : nothing
             }
             ${
-              unconfiguredModelOverrideOptions.length > 0
+              currentUnconfiguredModelOption
                 ? html`
-                    <optgroup label="Not configured (needs setup)">
-                      ${unconfiguredModelOverrideOptions.map(
-                        (option) =>
-                          html`<option value=${option.value}>
-                            ${option.label} [Not configured]
-                          </option>`,
-                      )}
+                    <optgroup label="Current selection (needs setup)">
+                      <option value=${currentUnconfiguredModelOption.value}>
+                        ${currentUnconfiguredModelOption.label} [Not configured]
+                      </option>
                     </optgroup>
                   `
                 : nothing
             }
           </select>
           <span class="card-sub" style="margin-top:6px;">
-            Sets the primary model for the created agent and its scheduled runs.
+            OpenClaw starts from its fixed default model unless you explicitly choose another
+            configured model for this agent.
           </span>
           ${
             selectedModelNeedsSetup
@@ -756,7 +763,7 @@ export function renderBuilder(props: BuilderProps) {
                           ? html`
                               <span class="loading-spinner" style="font-size: 12px">Verifying...</span>
                             `
-                          : "Run Live Verification"
+                          : "Check Connections"
                       }
                     </button>
                     <button
@@ -1062,17 +1069,16 @@ function renderBuilderApplySection(
     return html`
       <section class="card applied-banner">
         <div class="card-title section-title" style="color:var(--ok);">
-          Builder Applied
+          Agent Created
         </div>
         <div class="builder-grid">
-          ${kv("Agent ID", result.agent.agentId)}
           ${kv("Name", result.agent.name)}
-          ${kv("Workspace", result.agent.workspaceDir)}
+          ${kv("Agent ID", result.agent.agentId)}
         </div>
         ${
           state.builderApplyResult.graphResults.length > 1
             ? html`
-                <div class="label" style="margin-top:12px;">Runtime Graph Nodes</div>
+                <div class="label" style="margin-top:12px;">Workflow Steps</div>
                 ${state.builderApplyResult.graphResults.map(
                   (node) => html`
                     <div class="tpl-plan-file">
@@ -1090,7 +1096,7 @@ function renderBuilderApplySection(
         ${
           result.workspace.files.length > 0
             ? html`
-                <div class="label" style="margin-top:12px;">Workspace Files</div>
+                <div class="label" style="margin-top:12px;">Agent Files</div>
                 ${result.workspace.files.map(
                   (file) => html`
                     <div class="tpl-plan-file">
@@ -1105,7 +1111,7 @@ function renderBuilderApplySection(
         ${
           result.automation.jobs.length > 0
             ? html`
-                <div class="label" style="margin-top:12px;">Scheduled Tasks</div>
+                <div class="label" style="margin-top:12px;">Schedule</div>
                 ${result.automation.jobs.map(
                   (job) => html`
                     <div class="tpl-plan-file">
@@ -1127,6 +1133,14 @@ function renderBuilderApplySection(
               `
             : nothing
         }
+        <div style="display:flex; gap:8px; margin-top:12px;">
+          <button type="button" class="btn primary" @click=${() => props.onOpenChat?.()}>
+            Start Chatting
+          </button>
+          <button type="button" class="btn" @click=${() => state.setTab("agents")}>
+            Manage Agents
+          </button>
+        </div>
       </section>
     `;
   }
@@ -1134,9 +1148,13 @@ function renderBuilderApplySection(
   if (state.builderApplyError) {
     return html`
       <section class="card">
-        <div class="callout danger">${state.builderApplyError}</div>
+        <div class="callout danger">
+          Something went wrong while creating your agent. You can try again — your settings are
+          saved.
+        </div>
+        <div class="tpl-note" style="margin-top:4px; margin-bottom:8px;">${state.builderApplyError}</div>
         <button type="button" class="btn primary" style="margin-top:12px;" @click=${props.onApply}>
-          Retry Apply
+          Try Again
         </button>
       </section>
     `;
@@ -1153,14 +1171,14 @@ function renderBuilderApplySection(
   if (state.builderConfirmApply) {
     return html`
       <section class="card confirm-banner">
-        <div class="card-title section-title">Confirm Apply</div>
+        <div class="card-title section-title">Create Your Agent</div>
         <div class="card-sub" style="margin-bottom:12px;">
-          This will create or update <strong>${draft.displayName}</strong> from the builder
-          plan and write settings, files, and scheduled tasks.
+          This will create <strong>${draft.displayName}</strong> with its schedule, files, and
+          connection settings. You can edit these later.
         </div>
         <div style="display:flex; gap:8px;">
-          <button type="button" class="btn primary" @click=${props.onApply}>Yes, Apply</button>
-          <button type="button" class="btn" @click=${props.onCancelApply}>Cancel</button>
+          <button type="button" class="btn primary" @click=${props.onApply}>Create Agent</button>
+          <button type="button" class="btn" @click=${props.onCancelApply}>Go Back</button>
         </div>
       </section>
     `;
@@ -1170,6 +1188,12 @@ function renderBuilderApplySection(
   const hasPendingBlockingSetupAction = draft.buildSpec.setupActions.some(
     (action) => (action.blocking ?? false) && action.status !== "completed",
   );
+  const hasBlockingVerification = draft.planning.verifications.some((entry) =>
+    ["blocked", "failed"].includes(entry.status),
+  );
+  const hasWarningVerification = draft.planning.verifications.some(
+    (entry) => entry.status === "needs_live_check",
+  );
   const policyReady = isBuilderPolicyReady(draft);
   return html`
     <section class="card" style="padding:24px;">
@@ -1178,29 +1202,46 @@ function renderBuilderApplySection(
       <button
         type="button"
         class="btn primary"
-        ?disabled=${!canApply || hasPendingBlockingSetupAction || !policyReady}
+        ?disabled=${!canApply || hasPendingBlockingSetupAction || hasBlockingVerification || !policyReady}
         @click=${props.onConfirmApply}
       >
         Apply Builder Plan
       </button>
       ${
-        canApply && !hasPendingBlockingSetupAction && policyReady
-          ? html`
-              <div class="card-sub" style="margin-top: 8px">Creates the agent from the inferred blueprint.</div>
-            `
+        canApply && !hasPendingBlockingSetupAction && !hasBlockingVerification && policyReady
+          ? hasWarningVerification
+            ? html`
+                <div class="card-sub" style="margin-top: 8px">
+                  Ready to create your agent. Some optional checks could not run automatically
+                  but will not block setup.
+                </div>
+              `
+            : html`
+                <div class="card-sub" style="margin-top: 8px">
+                  Everything looks good. Click to create your agent and set up its schedule.
+                </div>
+              `
           : hasPendingBlockingSetupAction
             ? html`
                 <div class="card-sub" style="margin-top: 8px">
-                  Finish the pending setup actions and rerun verification before apply.
+                  Complete the setup steps above before applying.
                 </div>
               `
+            : hasBlockingVerification
+              ? html`
+                  <div class="card-sub" style="margin-top: 8px">
+                    Fix the failed checks above, then try again.
+                  </div>
+                `
             : !policyReady
               ? html`
-                  <div class="card-sub" style="margin-top: 8px">Resolve the safety policy blockers before apply.</div>
+                  <div class="card-sub" style="margin-top: 8px">
+                    Choose a safety policy before applying.
+                  </div>
                 `
               : html`
                   <div class="card-sub" style="margin-top: 8px">
-                    Resolve planner gaps or blueprint issues before apply.
+                    Some required settings are still missing. Check the items above.
                   </div>
                 `
       }
@@ -2073,7 +2114,10 @@ function builderPreApplyChecklist(
     (action) => (action.blocking ?? false) && action.status !== "completed",
   ).length;
   const blockedVerifications = draft.planning.verifications.filter((entry) =>
-    ["blocked", "failed", "needs_live_check"].includes(entry.status),
+    ["blocked", "failed"].includes(entry.status),
+  ).length;
+  const warningVerifications = draft.planning.verifications.filter(
+    (entry) => entry.status === "needs_live_check",
   ).length;
   const readyGraphPlans = graphPlans.filter(
     (entry) => readString(asObject(entry.plan), "status", "ready") === "ready",
@@ -2106,52 +2150,59 @@ function builderPreApplyChecklist(
   const items = [
     {
       label: "Setup and verification",
-      status: blockingSetupActions === 0 && blockedVerifications === 0 ? "ready" : "blocked",
-      detail:
+      status:
         blockingSetupActions === 0 && blockedVerifications === 0
-          ? "All blocking setup actions are cleared and live verification is clean."
-          : `${blockingSetupActions} blocking setup action${blockingSetupActions === 1 ? "" : "s"} and ${blockedVerifications} verification item${blockedVerifications === 1 ? "" : "s"} still need attention.`,
+          ? warningVerifications > 0
+            ? "ready"
+            : "ready"
+          : "blocked",
+      detail:
+        blockingSetupActions > 0 || blockedVerifications > 0
+          ? `${blockingSetupActions > 0 ? `${blockingSetupActions} setup step${blockingSetupActions === 1 ? " needs" : "s need"} to be completed` : ""}${blockingSetupActions > 0 && blockedVerifications > 0 ? " and " : ""}${blockedVerifications > 0 ? `${blockedVerifications} check${blockedVerifications === 1 ? "" : "s"} failed` : ""}.`
+          : warningVerifications > 0
+            ? `All required setup is done. ${warningVerifications} optional check${warningVerifications === 1 ? "" : "s"} could not run automatically — this is normal and won't block your agent.`
+            : "All setup steps and checks passed.",
     },
     {
-      label: "Runtime graph review",
+      label: "Agent workflow",
       status: graphPlans.length > 0 && pendingGraphPlans === 0 ? "ready" : "pending",
       detail:
         graphPlans.length > 0
-          ? `${readyGraphPlans} node plan${readyGraphPlans === 1 ? "" : "s"} ready for activation review.`
-          : `Graph topology is visible in Builder, but node-specific runtime plans are not generated yet.`,
+          ? `${readyGraphPlans} workflow step${readyGraphPlans === 1 ? "" : "s"} configured and ready.`
+          : "Your agent's workflow steps are still being set up.",
     },
     {
-      label: "Safety and action policy",
+      label: "Safety policy",
       status: policyReady ? "ready" : "blocked",
       detail: policy
         ? `${policy.summary}${policy.approval.blockers.length > 0 ? ` ${policy.approval.blockers.join(" ")}` : ""}`
         : draft.plannerStatus === "unsafe_without_policy"
-          ? "Builder still needs policy choices before apply."
-          : "No additional safety policy blockers were detected.",
+          ? "Choose a safety policy before the agent can be created."
+          : "Safety policy is set — your agent will follow safe defaults.",
     },
     {
-      label: "Workspace authoring review",
+      label: "Agent files",
       status: totalWorkspaceFiles > 0 && pendingWorkspaceArtifacts === 0 ? "ready" : "pending",
       detail:
         totalWorkspaceFiles > 0
-          ? `${totalWorkspaceFiles} generated workspace doc${totalWorkspaceFiles === 1 ? "" : "s"} ready for review, ${editedWorkspaceFiles} edited in Builder, ${pendingWorkspaceArtifacts} still pending generation.`
+          ? `${totalWorkspaceFiles} file${totalWorkspaceFiles === 1 ? "" : "s"} ready${editedWorkspaceFiles > 0 ? `, ${editedWorkspaceFiles} customized` : ""}${pendingWorkspaceArtifacts > 0 ? `, ${pendingWorkspaceArtifacts} still generating` : ""}.`
           : draft.buildSpec.workspaceArtifacts.length > 0
-            ? `${draft.buildSpec.workspaceArtifacts.length} workspace doc${draft.buildSpec.workspaceArtifacts.length === 1 ? "" : "s"} planned, but generated review text is still pending.`
-            : "No managed workspace docs are attached to this Builder draft yet.",
+            ? `${draft.buildSpec.workspaceArtifacts.length} file${draft.buildSpec.workspaceArtifacts.length === 1 ? "" : "s"} planned, still generating.`
+            : "No extra files needed for this agent.",
     },
     {
-      label: "Blueprint apply readiness",
+      label: "Ready to apply",
       status: draft.plannerStatus === "ready" && planStatus === "ready" ? "ready" : "blocked",
       detail:
         draft.plannerStatus === "ready" && planStatus === "ready"
-          ? "Planner and blueprint compilation are both ready for apply."
-          : `Planner is ${titleCaseWords(draft.plannerStatus)} and blueprint status is ${titleCaseWords(planStatus)}.`,
+          ? "Your agent blueprint is compiled and ready to go."
+          : `Still working on the blueprint (planner: ${titleCaseWords(draft.plannerStatus)}, blueprint: ${titleCaseWords(planStatus)}).`,
     },
   ] as const;
 
   return html`
     <div style="text-align:left;">
-      <div class="label" style="margin-bottom:8px;">Pre-Apply Checklist</div>
+      <div class="label" style="margin-bottom:8px;">Readiness Checklist</div>
       ${items.map(
         (item) => html`
           <div class="tpl-plan-file">
@@ -2342,7 +2393,13 @@ function builderIntegrationList(
               <div class="callout warn builder-issue-row">
                 <span>${issue}</span>
                 ${
-                  hasLink && hasPendingTask
+                  // Always offer a one-click fix when there's a config page to
+                  // jump to. Previously this button was gated on
+                  // `hasPendingTask`, but the planner doesn't always register
+                  // a task for at-runtime failures (e.g., Gmail keyring
+                  // corruption) — so failures surfaced without any actionable
+                  // button, leaving the user staring at a terminal command.
+                  hasLink
                     ? html`
                         <button
                           type="button"
@@ -2442,7 +2499,7 @@ function builderSetupActionList(
   }
   return html`
     <div>
-      <div class="label" style="margin-bottom:8px;">Setup Actions</div>
+      <div class="label" style="margin-bottom:8px;">Setup Steps</div>
       ${values.map((value) => {
         const refsTarget = value.refs.length > 0 ? resolveConfigTarget(value.refs) : null;
         const connectorRef = connectorIdToConfigRef(value.connectorId);
@@ -2453,9 +2510,8 @@ function builderSetupActionList(
           <div class="tpl-plan-file">
             <span>
               ${value.title}
-              ${value.kind ? html` <span class="mono">(${value.kind})</span>` : nothing}
             </span>
-            <span class="tpl-pill ${value.status === "completed" ? "tpl-pill--ok" : "tpl-pill--error"}">${value.status}</span>
+            <span class="tpl-pill ${value.status === "completed" ? "tpl-pill--ok" : "tpl-pill--error"}">${value.status === "completed" ? "Done" : "To Do"}</span>
           </div>
           <div class="tpl-note builder-issue-row">
             <span>${value.detail}</span>
@@ -2523,7 +2579,8 @@ function builderSetupActionList(
             value.connectorId === "channel:whatsapp" && canNavigate
               ? html`
                   <div class="tpl-note">
-                    Open WhatsApp setup to pair and optionally override the destination number/group.
+                    Link your WhatsApp by scanning a QR code. You can also choose which number or
+                    group receives messages.
                   </div>
                 `
               : nothing
@@ -2567,9 +2624,10 @@ function builderVerificationList(
   }
   return html`
     <div>
-      <div class="label" style="margin-bottom:8px;">Verification</div>
+      <div class="label" style="margin-bottom:8px;">Connection Checks</div>
       ${values.map((value) => {
         const isBlocked = value.status === "blocked" || value.status === "failed";
+        const isSkipped = value.status === "needs_live_check";
         const configRef = value.connectorId ? connectorIdToConfigRef(value.connectorId) : null;
         const hasPendingTask = hasPendingSetupTask(setupTasks, value.connectorId);
         const hasLink =
@@ -2580,7 +2638,7 @@ function builderVerificationList(
             <span class="tpl-pill ${verificationStatusPillClass(value.status)}">${formatVerificationStatus(value.status)}</span>
           </div>
           ${
-            value.source || value.checkedAt
+            !isSkipped && (value.source || value.checkedAt)
               ? html`
                   <div class="tpl-note">
                     ${value.source ?? "preflight"}${value.checkedAt ? ` @ ${value.checkedAt}` : ""}
@@ -2589,7 +2647,7 @@ function builderVerificationList(
               : nothing
           }
           <div class="tpl-note builder-issue-row">
-            <span>${value.detail}</span>
+            <span>${isSkipped ? "This check will run automatically when the agent executes. It does not block setup." : value.detail}</span>
             ${
               hasLink
                 ? html`
@@ -2725,7 +2783,7 @@ function formatVerificationStatus(status: string): string {
     passed: "Passed",
     failed: "Failed",
     blocked: "Blocked",
-    needs_live_check: "Needs Check",
+    needs_live_check: "Skipped (OK)",
   };
   return labels[status] ?? status;
 }

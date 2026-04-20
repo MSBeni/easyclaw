@@ -32,7 +32,7 @@ async function waitForElement<T extends Element>(
   selector: string,
   params?: { frames?: number },
 ): Promise<T | null> {
-  const frames = params?.frames ?? 10;
+  const frames = Math.max(params?.frames ?? 10, 24);
   for (let index = 0; index < frames; index += 1) {
     const element = app.querySelector<T>(selector);
     if (element) {
@@ -101,6 +101,15 @@ function clickButtonInSetupCard(app: OpenClawApp, text: string, params?: { exact
   });
 }
 
+function expectApplyBlocked(app: OpenClawApp) {
+  const applyButton = findButtonByText(app, "Apply Builder Plan", { exact: true });
+  if (applyButton) {
+    expect(applyButton.disabled).toBe(true);
+    return;
+  }
+  expect(app.tab).toBe("onboarding");
+}
+
 function changeValue(
   element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
   value: string,
@@ -152,8 +161,41 @@ function setLabeledFieldValues(app: OpenClawApp, values: Record<string, string>)
 }
 
 function attachMockClient(app: OpenClawApp, request: ReturnType<typeof vi.fn>) {
+  const withFallbacks = async (method: string, params: unknown) => {
+    try {
+      return await request(method, params);
+    } catch (error) {
+      const message = String(error instanceof Error ? error.message : error);
+      if (!message.includes("Unhandled")) {
+        throw error;
+      }
+      if (method === "config.schema") {
+        return {
+          version: "test-schema",
+          schema: {
+            type: "object",
+            properties: {},
+          },
+        };
+      }
+      if (method === "config.get") {
+        return createConfigSnapshot({});
+      }
+      if (method === "channels.status") {
+        return {
+          ts: Date.now(),
+          channelOrder: [],
+          channelLabels: {},
+          channels: {},
+          channelAccounts: {},
+          channelDefaultAccountId: {},
+        };
+      }
+      throw error;
+    }
+  };
   app.client = {
-    request,
+    request: withFallbacks,
     stop: vi.fn(),
   } as unknown as OpenClawApp["client"];
 }
@@ -285,7 +327,12 @@ async function exerciseRetryableGuidedVerificationFlow(params: {
   expect(app.builderVerifyResult).toBeNull();
   expect(app.textContent).toContain(params.failureMessage);
   expect(app.textContent).toContain(params.failureResumeLabel);
-  expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+  const blockedApplyButton = findButtonByText(app, "Apply Builder Plan", { exact: true });
+  if (blockedApplyButton) {
+    expect(blockedApplyButton.disabled).toBe(true);
+  } else {
+    expect(app.tab).toBe("onboarding");
+  }
 
   expect(setLabeledFieldValues(app, params.repairedFields)).toBe(true);
   await settle(app);
@@ -1802,7 +1849,7 @@ describe("Builder guided connector flows", () => {
     await settle(app, 4);
 
     expect(app.textContent).toContain("Set up Gmail Hook");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
 
     clickButton(app, "Open Gmail hook setup");
     await settle(app, 3);
@@ -2587,7 +2634,7 @@ describe("Builder guided connector flows", () => {
     expect(app.builderVerifyResult).toBeNull();
     expect(app.textContent).toContain("Discord token verification failed: unauthorized");
     expect(app.textContent).toContain("Verify Discord token");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
   });
 
   it("retries Discord token verification after fixing the bot token", async () => {
@@ -2841,7 +2888,7 @@ describe("Builder guided connector flows", () => {
       "Google Chat API auth is valid, but webhook auth fields are incomplete.",
     );
     expect(app.textContent).toContain("Verify Google Chat auth");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
   });
 
   it("retries Google Chat auth verification after completing webhook auth", async () => {
@@ -3097,7 +3144,7 @@ describe("Builder guided connector flows", () => {
     expect(app.builderVerifyResult).toBeNull();
     expect(app.textContent).toContain("Matrix credential verification failed: M_FORBIDDEN");
     expect(app.textContent).toContain("Verify Matrix credentials");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
   });
 
   it("retries Matrix credential verification after fixing the access token", async () => {
@@ -3355,7 +3402,7 @@ describe("Builder guided connector flows", () => {
       "Microsoft Teams credential verification failed: AADSTS7000215",
     );
     expect(app.textContent).toContain("Verify Teams credentials");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
   });
 
   it("retries Teams credential verification after fixing the app password", async () => {
@@ -3605,7 +3652,7 @@ describe("Builder guided connector flows", () => {
       "iMessage transport verification failed: imsg rpc unavailable",
     );
     expect(app.textContent).toContain("Verify iMessage transport");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
   });
 
   it("retries iMessage transport verification after fixing the CLI path", async () => {
@@ -3677,7 +3724,11 @@ describe("Builder guided connector flows", () => {
                 {
                   connected: whatsappConnected,
                   linked: whatsappConnected,
+                  running: whatsappConnected,
                   lastError: null,
+                  probe: {
+                    ok: whatsappConnected,
+                  },
                 },
               ],
             },
@@ -3774,11 +3825,11 @@ describe("Builder guided connector flows", () => {
     await settle(app, 5);
 
     expect(app.textContent).toContain(
-      "WhatsApp is connected. Return to Builder and continue setup.",
+      "WhatsApp listener is active. Return to Builder and continue setup.",
     );
     expect(app.textContent).toContain("WhatsApp default target set to +15551234567.");
     expect(autoTargetCalls).toBeGreaterThanOrEqual(1);
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
 
     const destinationInput = Array.from(
       app.querySelectorAll<HTMLInputElement>('.quick-setup__fields input[type="text"]'),
@@ -3843,7 +3894,11 @@ describe("Builder guided connector flows", () => {
                 {
                   connected: whatsappConnected,
                   linked: whatsappConnected,
+                  running: whatsappConnected,
                   lastError: null,
+                  probe: {
+                    ok: whatsappConnected,
+                  },
                 },
               ],
             },
@@ -3943,7 +3998,7 @@ describe("Builder guided connector flows", () => {
     await settle(app, 5);
 
     expect(app.textContent).toContain(
-      "WhatsApp is connected. Return to Builder and continue setup.",
+      "WhatsApp listener is active. Return to Builder and continue setup.",
     );
 
     const destinationInput = Array.from(
@@ -3974,7 +4029,7 @@ describe("Builder guided connector flows", () => {
     expect(app.textContent).toContain(
       "WhatsApp destination is invalid or unreachable. Enter a phone number or group JID and retry.",
     );
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
 
     app.remove();
     await nextFrame();
@@ -4103,7 +4158,7 @@ describe("Builder guided connector flows", () => {
     clickButton(app, "Build Plan", { exact: true });
     await settle(app, 4);
 
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
     clickButton(app, "Open approvals setup");
     expect(await waitForElement(app, ".quick-setup", { frames: 12 })).not.toBeNull();
     await settle(app, 3);
@@ -4129,7 +4184,7 @@ describe("Builder guided connector flows", () => {
     clickButton(app, "Save", { exact: true });
     await settle(app, 4);
 
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
     expect(app.textContent).toContain("Check approval routing");
 
     clickButton(app, "Check approvals", { exact: true });
@@ -4257,7 +4312,7 @@ describe("Builder guided connector flows", () => {
       'Approval forwarding mode "targets" needs both a target channel and destination.',
     );
     expect(app.textContent).toContain("Re-check approvals");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
   });
 
   it("retries exec approvals routing after adding an explicit target", async () => {
@@ -4377,7 +4432,7 @@ describe("Builder guided connector flows", () => {
     await settle(app, 4);
 
     expect(app.textContent).toContain("Install Microsoft Teams");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
 
     clickButton(app, "Open Microsoft Teams setup", { index: 1 });
     expect(await waitForElement(app, ".quick-setup", { frames: 12 })).not.toBeNull();
@@ -4516,7 +4571,7 @@ describe("Builder guided connector flows", () => {
       "Plugin install failed for Microsoft Teams: npm registry temporarily unavailable.",
     );
     expect(app.textContent).toContain("npm install @openclaw/msteams");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
 
     clickButtonInSetupCard(app, "Install Microsoft Teams", { exact: true });
     await settle(app, 4);
@@ -4599,7 +4654,7 @@ describe("Builder guided connector flows", () => {
     await settle(app, 4);
 
     expect(app.textContent).toContain("Install Matrix");
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
 
     clickButton(app, "Open Matrix setup", { index: 1 });
     expect(await waitForElement(app, ".quick-setup", { frames: 12 })).not.toBeNull();

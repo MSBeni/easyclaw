@@ -113,10 +113,16 @@ async function ensureGmailSetupAuth(account: string, interactive: boolean) {
   const missing: string[] = [];
   const gcloudAccount = await getActiveGcloudAccount();
   if (!gcloudAccount) {
+    // Keep the "gcloud login required" phrase — the Builder UI matches it
+    // to drive the gcloud sign-in step. The user-facing UI replaces it
+    // with a friendly Setup button.
     missing.push("gcloud login required. Run `gcloud auth login`.");
   }
   const gogStatus = await getGogAuthStatus();
   if (!gogStatus.credentialsExists) {
+    // Keep the "gog OAuth client credentials missing" phrase for matching;
+    // the Builder quick-setup card shows a file upload UI when it detects
+    // this.
     missing.push(
       "gog OAuth client credentials missing. Import them with `gog auth credentials set --client openclaw-gmail-hook <credentials.json>`.",
     );
@@ -130,7 +136,11 @@ async function ensureGmailSetupAuth(account: string, interactive: boolean) {
     }
   }
   if (missing.length > 0) {
-    throw new Error(`${missing.join(" ")} Retry after both are complete.`);
+    // Prefix with a user-facing hint so whenever this bubbles up to the UI
+    // (agent run errors, verification failures) the user knows where to go.
+    throw new Error(
+      `Gmail is not fully connected yet. Open Gmail Setup in EasyClaw (Setup → Gmail Hook) to finish — it walks you through uploading your credentials file and signing in with Google. ${missing.join(" ")} Retry after both are complete.`,
+    );
   }
 }
 

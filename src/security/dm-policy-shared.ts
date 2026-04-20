@@ -114,7 +114,10 @@ export function resolveDmGroupAccessDecision(params: {
   reasonCode: DmGroupAccessReasonCode;
   reason: string;
 } {
-  const dmPolicy = params.dmPolicy ?? "pairing";
+  // Default to "allowlist" so an uncofigured channel silently ignores unknown
+  // senders instead of replying to them with a pairing challenge. See the
+  // matching note in extensions/whatsapp/src/inbound/access-control.ts.
+  const dmPolicy = params.dmPolicy ?? "allowlist";
   const groupPolicy: GroupPolicy =
     params.groupPolicy === "open" || params.groupPolicy === "disabled"
       ? params.groupPolicy

@@ -19,6 +19,7 @@ import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
+import { loadBuilderPlan, verifyBuilderPlan } from "./controllers/builder.ts";
 import {
   deleteAgentWithFullCleanup,
   loadAgents,
@@ -87,6 +88,7 @@ import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
 import {
   normalizeBasePath,
+  primaryNavTabForTab,
   TAB_GROUPS,
   subtitleForTab,
   titleForTab,
@@ -283,10 +285,37 @@ type AutomationSectionKey = (typeof AUTOMATION_SECTION_KEYS)[number];
 type InfrastructureSectionKey = (typeof INFRASTRUCTURE_SECTION_KEYS)[number];
 type AiAgentsSectionKey = (typeof AI_AGENTS_SECTION_KEYS)[number];
 
+function resetBuilderSetupState(state: AppViewState) {
+  state.builderSetupFocus = null;
+  state.builderSetupInputs = {};
+  state.builderSetupError = null;
+  state.builderSetupResult = null;
+  state.builderSetupRunningConnectorId = null;
+  clearBuilderSetupSession();
+}
+
+function returnToBuilderAfterSetup(state: AppViewState) {
+  saveBuilderDraft({
+    brief: state.builderBrief,
+    approvalPosture: state.builderApprovalPosture,
+    templateId: state.builderTemplateId,
+    modelId: state.builderModelId,
+    agentName: state.builderAgentName,
+  });
+  resetBuilderSetupState(state);
+  state.setTab("builder");
+  if (!state.builderBrief.trim()) {
+    return;
+  }
+  void (async () => {
+    await loadBuilderPlan(state);
+    await verifyBuilderPlan(state);
+  })();
+}
+
 function renderBuilderSetupNotice(state: AppViewState, tab: Tab) {
   const focus = state.builderSetupFocus;
-  const allowBuilderFallback = tab === "builder" && focus?.targetTab === "onboarding";
-  if (!focus || (focus.targetTab !== tab && !allowBuilderFallback)) {
+  if (!focus || focus.targetTab !== tab) {
     return nothing;
   }
   // Try the guided quick-setup first; fall back to the plain banner
@@ -307,21 +336,74 @@ function renderBuilderSetupNotice(state: AppViewState, tab: Tab) {
       </div>
       <div class="builder-setup-banner__actions">
         <button type="button" class="builder-config-link" @click=${() => {
-          state.builderSetupFocus = null;
-          clearBuilderSetupSession();
-          state.setTab("builder");
+          returnToBuilderAfterSetup(state);
         }}>
           ${state.tab === "builder" ? "Close setup" : "Return to Builder"}
         </button>
         <button type="button" class="btn btn--sm" @click=${() => {
-          state.builderSetupFocus = null;
-          clearBuilderSetupSession();
+          resetBuilderSetupState(state);
           state.setTab(state.tab);
         }}>
           Dismiss
         </button>
       </div>
     </div>
+  `;
+}
+
+function renderAdvancedHub(state: AppViewState) {
+  const sections = [
+    {
+      title: "Runtime",
+      actions: [
+        { label: "AI & Agents", tab: "aiAgents" as Tab },
+        { label: "Infrastructure", tab: "infrastructure" as Tab },
+        { label: "Config", tab: "config" as Tab },
+      ],
+    },
+    {
+      title: "Operations",
+      actions: [
+        { label: "Sessions", tab: "sessions" as Tab },
+        { label: "Usage", tab: "usage" as Tab },
+        { label: "Scheduled Tasks", tab: "cron" as Tab },
+      ],
+    },
+    {
+      title: "Diagnostics",
+      actions: [
+        { label: "Devices", tab: "nodes" as Tab },
+        { label: "Debug", tab: "debug" as Tab },
+        { label: "Logs", tab: "logs" as Tab },
+      ],
+    },
+  ];
+
+  return html`
+    <section class="card">
+      <div class="card-title section-title">Advanced</div>
+      <div class="card-sub">
+        Raw runtime controls, config surfaces, automation, and diagnostics live here.
+      </div>
+      <div class="builder-grid" style="margin-top:16px;">
+        ${sections.map(
+          (section) => html`
+            <div class="card" style="padding:16px;">
+              <div class="label" style="margin-bottom:10px;">${section.title}</div>
+              <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                ${section.actions.map(
+                  (action) => html`
+                    <button type="button" class="btn" @click=${() => state.setTab(action.tab)}>
+                      ${action.label}
+                    </button>
+                  `,
+                )}
+              </div>
+            </div>
+          `,
+        )}
+      </div>
+    </section>
   `;
 }
 
@@ -517,7 +599,7 @@ export function renderApp(state: AppViewState) {
                     : html`
                         <img class="sidebar-brand__logo" src="${agentLogoUrl(basePath)}" alt="EasyClaw" />
                         <span class="sidebar-brand__copy">
-                          <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
+                          <span class="sidebar-brand__eyebrow">Agent Builder</span>
                           <span class="sidebar-brand__title">EasyClaw</span>
                         </span>
                       `
@@ -541,7 +623,9 @@ export function renderApp(state: AppViewState) {
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-                  const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+                  const hasActiveTab = group.tabs.some(
+                    (tab) => tab === primaryNavTabForTab(state.tab),
+                  );
                   const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
 
                   return html`
@@ -1331,6 +1415,12 @@ export function renderApp(state: AppViewState) {
         }
 
         ${
+          state.tab === "advanced"
+            ? html`${renderAdvancedHub(state)}`
+            : nothing
+        }
+
+        ${
           state.tab === "builder"
             ? html`
                 ${renderBuilderSetupNotice(state, "builder")}
@@ -1340,6 +1430,7 @@ export function renderApp(state: AppViewState) {
                     onSetBrief: (brief) => {
                       state.builderBrief = brief;
                       state.builderWorkspaceDocEdits = {};
+                      resetBuilderSetupState(state);
                       saveBuilderDraft({
                         brief: state.builderBrief,
                         approvalPosture: state.builderApprovalPosture,
@@ -1436,6 +1527,9 @@ export function renderApp(state: AppViewState) {
                     },
                     onApply: () => {
                       m.triggerBuilderApply(state);
+                    },
+                    onOpenChat: () => {
+                      state.setTab("chat" as import("./navigation.ts").Tab);
                     },
                   }),
                 )}

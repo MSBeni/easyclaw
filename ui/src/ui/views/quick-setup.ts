@@ -11,10 +11,11 @@ import {
   loadBuilderPlan,
   runBuilderSetupAction,
   updateBuilderSetupInput,
+  verifyBuilderPlan,
 } from "../controllers/builder.ts";
 import { updateConfigFormValue, saveConfig, applyConfig } from "../controllers/config.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
-import { clearBuilderSetupSession } from "../storage.ts";
+import { clearBuilderSetupSession, saveBuilderDraft } from "../storage.ts";
 
 // ---------------------------------------------------------------------------
 // Essential field definitions per integration
@@ -1173,7 +1174,7 @@ export function resolveQuickSetupForFocus(focus: BuilderSetupFocus): QuickSetupD
           help: "Shared secret for authenticating push callbacks.",
         },
       ],
-      docsHint: "https://docs.openclaw.ai/automation/hooks",
+      docsHint: "https://docs.openclaw.ai/automation/gmail-pubsub",
     };
   }
 
@@ -1438,6 +1439,46 @@ function readAssistValue(
     return readConfigValue(form, field.configPath);
   }
   return "";
+}
+
+function readChannelSnapshotBoolean(
+  state: AppViewState,
+  channelId: string,
+  key: keyof NonNullable<AppViewState["channelsSnapshot"]>["channelAccounts"][string][number],
+): boolean {
+  const account = state.channelsSnapshot?.channelAccounts?.[channelId]?.[0];
+  const value = account?.[key];
+  return value === true;
+}
+
+function readChannelSnapshotString(
+  state: AppViewState,
+  channelId: string,
+  key: keyof NonNullable<AppViewState["channelsSnapshot"]>["channelAccounts"][string][number],
+): string {
+  const account = state.channelsSnapshot?.channelAccounts?.[channelId]?.[0];
+  const value = account?.[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readChannelProbeError(state: AppViewState, channelId: string): string {
+  const account = state.channelsSnapshot?.channelAccounts?.[channelId]?.[0];
+  const probe =
+    account?.probe && typeof account.probe === "object" && !Array.isArray(account.probe)
+      ? (account.probe as Record<string, unknown>)
+      : null;
+  const value = probe?.error;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readChannelProbeOk(state: AppViewState, channelId: string): boolean | null {
+  const account = state.channelsSnapshot?.channelAccounts?.[channelId]?.[0];
+  const probe =
+    account?.probe && typeof account.probe === "object" && !Array.isArray(account.probe)
+      ? (account.probe as Record<string, unknown>)
+      : null;
+  const value = probe?.ok;
+  return typeof value === "boolean" ? value : null;
 }
 
 function mapAssistInputs(
@@ -1891,16 +1932,50 @@ function renderWhatsAppInlineSetup(
     targetAssistConnectorId
       ? state.builderSetupResult
       : null;
+  const linked = readChannelSnapshotBoolean(state, "whatsapp", "linked");
+  const running = readChannelSnapshotBoolean(state, "whatsapp", "running");
+  const connected = readChannelSnapshotBoolean(state, "whatsapp", "connected");
+  const linkedIdentity =
+    readChannelSnapshotString(state, "whatsapp", "name") ||
+    readChannelSnapshotString(state, "whatsapp", "accountId");
+  const listenerDetail =
+    readChannelSnapshotString(state, "whatsapp", "lastError") ||
+    readChannelProbeError(state, "whatsapp");
+  const probeOk = readChannelProbeOk(state, "whatsapp");
+  const runtimeReady = probeOk === true || (running && connected);
+  const linkedButListenerDown = linked && !running && !connected;
+  const qrTimedOut =
+    state.whatsappLoginMessage?.toLowerCase().includes("timed out waiting for whatsapp qr") ??
+    false;
   return html`
     <div class="quick-setup__assist">
       <div class="quick-setup__assist-header">
         <div>
           <div class="quick-setup__assist-title">Pair WhatsApp</div>
           <div class="quick-setup__assist-description">
-            Start QR pairing directly here, then wait for scan confirmation.
+            ${
+              linkedButListenerDown
+                ? "WhatsApp is already linked, but the live listener is not healthy. Restore the runtime first, or explicitly replace the linked session."
+                : "Start QR pairing directly here, then wait for scan confirmation."
+            }
           </div>
         </div>
       </div>
+
+      ${
+        linkedButListenerDown
+          ? html`
+              <div class="callout danger" style="margin-top:12px;">
+                WhatsApp is already linked${linkedIdentity ? ` (${linkedIdentity})` : ""}, but no active listener is running for this account.
+                ${listenerDetail ? html`<div style="margin-top:6px;">Last runtime detail: ${listenerDetail}</div>` : nothing}
+                <div style="margin-top:6px;">
+                  Try restarting the gateway first. If you really want a fresh pairing, use
+                  <strong>Logout</strong>, then <strong>Show QR</strong>.
+                </div>
+              </div>
+            `
+          : nothing
+      }
 
       <div class="quick-setup__actions">
         <div class="quick-setup__actions-left">
@@ -1923,7 +1998,7 @@ function renderWhatsAppInlineSetup(
           <button
             type="button"
             class="btn btn--sm"
-            ?disabled=${state.whatsappBusy || !state.connected}
+            ?disabled=${state.whatsappBusy || !state.connected || !state.whatsappLoginQrDataUrl}
             @click=${() => void state.handleWhatsAppWait()}
           >
             Wait for scan
@@ -1995,13 +2070,29 @@ function renderWhatsAppInlineSetup(
           : nothing
       }
       ${
-        state.whatsappLoginConnected === true
+        qrTimedOut && linkedButListenerDown
           ? html`
-              <div class="callout success" style="margin-top: 12px">
-                WhatsApp is connected. Return to Builder and continue setup.
+              <div class="callout danger" style="margin-top:12px;">
+                EasyClaw timed out waiting for a fresh QR because the WhatsApp runtime is still down. Restart the gateway first. If you need a completely new link, use Logout and then Show QR.
               </div>
             `
           : nothing
+      }
+      ${
+        runtimeReady
+          ? html`
+              <div class="callout success" style="margin-top: 12px">
+                WhatsApp listener is active. Return to Builder and continue setup.
+              </div>
+            `
+          : state.whatsappLoginConnected === true
+            ? html`
+                <div class="callout warn" style="margin-top: 12px">
+                  WhatsApp linked successfully, but the live listener is still coming up. Stay on
+                  this page a moment longer or restart the gateway if it does not recover.
+                </div>
+              `
+            : nothing
       }
       ${
         state.whatsappLoginQrDataUrl
@@ -2048,6 +2139,29 @@ export function renderQuickSetup(state: AppViewState): unknown {
           ? "Advanced"
           : null;
   const canOpenSetupTab = state.tab === "builder" && focus.targetTab === "onboarding";
+  const returnToBuilderAfterSetup = () => {
+    saveBuilderDraft({
+      brief: state.builderBrief,
+      approvalPosture: state.builderApprovalPosture,
+      templateId: state.builderTemplateId,
+      modelId: state.builderModelId,
+      agentName: state.builderAgentName,
+    });
+    state.builderSetupFocus = null;
+    state.builderSetupInputs = {};
+    state.builderSetupError = null;
+    state.builderSetupResult = null;
+    state.builderSetupRunningConnectorId = null;
+    clearBuilderSetupSession();
+    state.setTab("builder");
+    if (!state.builderBrief.trim()) {
+      return;
+    }
+    void (async () => {
+      await loadBuilderPlan(state);
+      await verifyBuilderPlan(state);
+    })();
+  };
 
   return html`
     <div class="quick-setup">
@@ -2094,12 +2208,7 @@ export function renderQuickSetup(state: AppViewState): unknown {
           <button
             type="button"
             class="builder-config-link"
-            @click=${() => {
-              state.builderSetupFocus = null;
-              clearBuilderSetupSession();
-              state.setTab("builder");
-              void loadBuilderPlan(state);
-            }}
+            @click=${returnToBuilderAfterSetup}
           >
             ${state.tab === "builder" ? "Close setup" : "Return to Builder"}
           </button>
@@ -2108,6 +2217,10 @@ export function renderQuickSetup(state: AppViewState): unknown {
             class="btn btn--sm"
             @click=${() => {
               state.builderSetupFocus = null;
+              state.builderSetupInputs = {};
+              state.builderSetupError = null;
+              state.builderSetupResult = null;
+              state.builderSetupRunningConnectorId = null;
               clearBuilderSetupSession();
               state.setTab(state.tab);
             }}

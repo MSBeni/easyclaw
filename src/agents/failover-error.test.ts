@@ -201,6 +201,15 @@ describe("failover-error", () => {
     ).toBe("billing");
   });
 
+  it("treats OpenAI current-quota errors as billing instead of rate_limit", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.",
+      }),
+    ).toBe("billing");
+  });
+
   it("treats zhipuai weekly/monthly limit exhausted as rate_limit", () => {
     expect(
       resolveFailoverReasonFromError({

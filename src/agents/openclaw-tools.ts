@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -136,6 +137,7 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const exposeCronTool = !isCronRunSessionKey(options?.agentSessionKey);
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -153,9 +155,13 @@ export function createOpenClawTools(
       modelHasVision: options?.modelHasVision,
       allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
     }),
-    createCronTool({
-      agentSessionKey: options?.agentSessionKey,
-    }),
+    ...(exposeCronTool
+      ? [
+          createCronTool({
+            agentSessionKey: options?.agentSessionKey,
+          }),
+        ]
+      : []),
     ...(messageTool ? [messageTool] : []),
     createTtsTool({
       agentChannel: options?.agentChannel,

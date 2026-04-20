@@ -34,6 +34,16 @@ function expectSilentlyBlocked(result: { allowed: boolean }) {
 describe("checkInboundAccessControl pairing grace", () => {
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
+    // Pairing mode is now opt-in (runtime default is "allowlist" which
+    // silently ignores unknown senders). These tests explicitly exercise
+    // the pairing-grace window, so opt in here.
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+        },
+      },
+    });
     return await checkInboundAccessControl({
       accountId: "default",
       from: "+15550001111",

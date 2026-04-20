@@ -67,6 +67,12 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text, { errorContext: true })).toContain("billing error");
   });
 
+  it("rewrites OpenAI current-quota errors as billing in error context", () => {
+    const text =
+      "You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.";
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain("billing error");
+  });
+
   it("sanitizes raw API error payloads", () => {
     const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(

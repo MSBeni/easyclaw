@@ -79,6 +79,9 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "identity", kind: "none" },
   { prefix: "wizard", kind: "none" },
   { prefix: "logging", kind: "none" },
+  // Exec approval forwarding is read dynamically by the approval forwarder.
+  // Avoid restarting the gateway just to change where prompts are routed.
+  { prefix: "approvals", kind: "none" },
   { prefix: "agents", kind: "none" },
   { prefix: "tools", kind: "none" },
   { prefix: "bindings", kind: "none" },

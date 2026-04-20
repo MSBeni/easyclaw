@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  ONBOARDING_STEPS,
+  isStepConfigured,
+  resolveStepLiveVerificationIssue,
+  summarizeStepLiveVerificationIssue,
+} from "./onboarding.ts";
 import { resolveQuickSetupForFocus } from "./quick-setup.ts";
 
 type BuilderSetupFocus = Parameters<typeof resolveQuickSetupForFocus>[0];
@@ -34,6 +40,49 @@ function buildActionFocus(params: {
     refs: [params.ref],
     targetTab: "builder",
   };
+}
+
+function onboardingStepById(id: string) {
+  const step = ONBOARDING_STEPS.find((entry) => entry.id === id);
+  expect(step).toBeDefined();
+  return step!;
+}
+
+function createOnboardingVerificationState(params: {
+  connectorId: string;
+  detail: string;
+  source?: "live" | "preflight" | "persisted";
+  status?: "failed" | "blocked" | "passed" | "needs_live_check";
+  focusConnectorId?: string | null;
+}) {
+  return {
+    channelsSnapshot: null,
+    whatsappLoginConnected: null,
+    builderSetupFocus:
+      params.focusConnectorId === undefined
+        ? null
+        : {
+            connectorId: params.focusConnectorId,
+          },
+    builderPlan: {
+      draft: {
+        planning: {
+          verifications: [
+            {
+              id: `${params.connectorId}:status`,
+              connectorId: params.connectorId,
+              connectorLabel: "Test Connector",
+              probeKind: "status",
+              probeLabel: "Status probe",
+              status: params.status ?? "failed",
+              detail: params.detail,
+              source: params.source ?? "live",
+            },
+          ],
+        },
+      },
+    },
+  } as never;
 }
 
 describe("quick setup connector assist parity", () => {
@@ -142,6 +191,17 @@ describe("quick setup connector assist parity", () => {
     expect(setup?.assist?.actionId).toBe("tools:web:configure");
     expect(setup?.assist?.runLabel).toBe("Configure and Verify");
     expect(setup?.docsHint).toBe("https://docs.openclaw.ai/tools/web");
+  });
+
+  it("points Gmail hook setup to the detailed Gmail Pub/Sub docs", () => {
+    const setup = resolveQuickSetupForFocus(
+      buildFocus({
+        connectorId: "platform:gmail-hook",
+        ref: "hooks.gmail",
+      }),
+    );
+
+    expect(setup?.docsHint).toBe("https://docs.openclaw.ai/automation/gmail-pubsub");
   });
 
   it("builds action-driven quick setup from required field metadata", () => {
@@ -370,5 +430,91 @@ describe("quick setup connector assist parity", () => {
         }),
       ]),
     );
+  });
+});
+
+describe("onboarding readiness", () => {
+  it("requires the full Gmail hook config before marking the setup step ready", () => {
+    const step = onboardingStepById("gmail-hook");
+
+    expect(
+      isStepConfigured(
+        {
+          hooks: {
+            gmail: {
+              account: "automation@example.com",
+            },
+          },
+        },
+        step,
+      ),
+    ).toBe(false);
+
+    expect(
+      isStepConfigured(
+        {
+          hooks: {
+            token: "hook-token",
+            gmail: {
+              account: "automation@example.com",
+              topic: "projects/example/topics/gmail-push",
+              pushToken: "push-token",
+            },
+          },
+        },
+        step,
+      ),
+    ).toBe(true);
+  });
+
+  it("surfaces Gmail live verification failures in onboarding", () => {
+    const step = onboardingStepById("gmail-hook");
+    const state = createOnboardingVerificationState({
+      connectorId: "platform:gmail-hook",
+      detail: "Gmail needs to be reconnected: its sign-in state is corrupted.",
+    });
+
+    expect(resolveStepLiveVerificationIssue(step, state)).toBe(
+      "Gmail needs to be reconnected: its sign-in state is corrupted.",
+    );
+
+    expect(
+      isStepConfigured(
+        {
+          hooks: {
+            token: "hook-token",
+            gmail: {
+              account: "automation@example.com",
+              topic: "projects/example/topics/gmail-push",
+              pushToken: "push-token",
+            },
+          },
+        },
+        step,
+        state,
+      ),
+    ).toBe(false);
+  });
+
+  it("summarizes Gmail keyring integrity failures with reconnect guidance", () => {
+    const step = onboardingStepById("gmail-hook");
+
+    expect(
+      summarizeStepLiveVerificationIssue(
+        step,
+        "aes.KeyUnwrap(): integrity check failed while loading the gog token",
+      ),
+    ).toContain("Validate or reconnect Gmail auth");
+  });
+
+  it("ignores Gmail verification issues while another connector is actively focused", () => {
+    const step = onboardingStepById("gmail-hook");
+    const state = createOnboardingVerificationState({
+      connectorId: "platform:gmail-hook",
+      detail: "Gmail sign-in has expired.",
+      focusConnectorId: "channel:slack",
+    });
+
+    expect(resolveStepLiveVerificationIssue(step, state)).toBeNull();
   });
 });

@@ -96,6 +96,27 @@ describe("capability requirements", () => {
     expect(requirements.plannerStatus).toBe("unsafe_without_policy");
   });
 
+  it('does not treat "anything like this" as a risky social browser action', () => {
+    const requirements = buildRequirementSet({
+      brief:
+        "Search for any available program, story time, fun event, or anything like this happening in downtown Vancouver and send me a Telegram schedule every morning at 8am.",
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+          },
+        },
+      },
+    });
+
+    expect(requirements.intentTags).not.toContain("browser");
+    expect(requirements.intentTags).not.toContain("social-action");
+    expect(requirements.actions.map((entry) => entry.id)).not.toContain("browser-action");
+    expect(requirements.setupGaps.map((gap) => gap.code)).not.toContain("browser-site-session");
+    expect(requirements.policyGaps.map((gap) => gap.code)).not.toContain("approval-route");
+    expect(requirements.policyGaps.map((gap) => gap.code)).not.toContain("approval-posture");
+  });
+
   it("treats missing approval posture as a policy blocker even when routing is configured", () => {
     const requirements = buildRequirementSet({
       brief: "Open the links on X and comment on my behalf.",

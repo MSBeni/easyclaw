@@ -50,6 +50,7 @@ import {
   getTailscaleConnectionSummary,
   importGogCredentialsJson,
   installMacAppWithBrew,
+  probeGogGmailApi,
   validatePublicPushEndpoint,
 } from "../../hooks/gmail-setup-utils.js";
 import { OPENCLAW_GOG_CLIENT } from "../../hooks/gmail.js";
@@ -529,17 +530,78 @@ function withInferredWhatsAppDefaultTarget(
     channel: "whatsapp",
   });
   if (existingTarget) {
-    return cfg;
+    // Even when defaultTo already exists, ensure access control is locked down.
+    return withInferredWhatsAppAccessControl(cfg);
   }
   const detected = detectWhatsAppLinkedSelfTarget({ cfg });
   if (!detected) {
     return cfg;
   }
-  return setChannelDefaultTargetInConfig({
+  let next = setChannelDefaultTargetInConfig({
     cfg,
     channel: "whatsapp",
     target: detected.target,
   });
+  next = withInferredWhatsAppAccessControl(next);
+  return next;
+}
+
+/**
+ * Ensures Builder-created WhatsApp configs have safe access control defaults.
+ *
+ * Without this, dmPolicy defaults to "pairing" at runtime, which sends an
+ * "access not configured" challenge reply to every unknown sender — terrible UX
+ * when WhatsApp is used only for outbound delivery.
+ *
+ * Sets dmPolicy to "allowlist" and populates allowFrom with the owner's own
+ * phone number (detected from the linked WhatsApp auth state) when neither
+ * field is already configured.
+ */
+function withInferredWhatsAppAccessControl(
+  cfg: ReturnType<typeof loadConfig>,
+): ReturnType<typeof loadConfig> {
+  const channels = asRecord(cfg.channels);
+  const whatsappConfig = asRecord(channels?.whatsapp);
+  const accounts = asRecord(whatsappConfig?.accounts);
+  const defaultAccount = asRecord(accounts?.default);
+
+  // If dmPolicy is already explicitly set, respect it.
+  const existingDmPolicy = defaultAccount?.dmPolicy ?? whatsappConfig?.dmPolicy;
+  if (existingDmPolicy) {
+    return cfg;
+  }
+
+  // Detect the owner's phone number from the linked WhatsApp session.
+  const detected = detectWhatsAppLinkedSelfTarget({ cfg });
+  const selfE164 = detected?.e164;
+
+  const nextChannels = channels ? { ...channels } : {};
+  const nextWhatsappConfig = whatsappConfig ? { ...whatsappConfig } : {};
+  const nextAccounts = accounts ? { ...accounts } : {};
+  const nextDefaultAccount = defaultAccount ? { ...defaultAccount } : {};
+
+  // Lock down to allowlist so unknown senders are silently ignored.
+  nextDefaultAccount.dmPolicy = "allowlist";
+
+  // Auto-populate allowFrom with the owner's number so they can still message
+  // their own agent (e.g. for testing). Keep any existing entries.
+  if (selfE164) {
+    const existing: string[] = Array.isArray(nextDefaultAccount.allowFrom)
+      ? nextDefaultAccount.allowFrom
+      : [];
+    if (!existing.includes(selfE164)) {
+      nextDefaultAccount.allowFrom = [...existing, selfE164];
+    }
+  }
+
+  nextAccounts.default = nextDefaultAccount;
+  nextWhatsappConfig.accounts = nextAccounts;
+  nextChannels.whatsapp = nextWhatsappConfig;
+
+  return {
+    ...cfg,
+    channels: nextChannels,
+  } as ReturnType<typeof loadConfig>;
 }
 
 function setSignalHttpUrlInConfig(params: {
@@ -830,6 +892,156 @@ function buildGmailCredentialImport(inputs: Record<string, unknown>) {
       detail:
         "After Google downloads the Desktop app OAuth client JSON, EasyClaw can find the newest matching file in Downloads, import it into gog, and continue into gog login automatically.",
     },
+  };
+}
+
+function buildGmailValidateResume(account: string, inputs: Record<string, unknown>) {
+  return {
+    actionId: "platform:gmail-hook:validate",
+    connectorId: "platform:gmail-hook",
+    label: "Validate Gmail connection",
+    detail: "Re-run the Gmail auth check after the sign-in steps are complete.",
+    inputs: {
+      account,
+      project: stringInput(inputs, "project"),
+      topic: stringInput(inputs, "topic"),
+      subscription: stringInput(inputs, "subscription"),
+      pushEndpoint: stringInput(inputs, "pushEndpoint"),
+    },
+  };
+}
+
+async function validateGmailConnection(account: string, inputs: Record<string, unknown>) {
+  const resume = buildGmailValidateResume(account, inputs);
+  let gogStatus: Awaited<ReturnType<typeof getGogAuthStatus>>;
+  try {
+    gogStatus = await getGogAuthStatus();
+  } catch (error) {
+    const detail = String(error instanceof Error ? error.message : error).trim();
+    return {
+      connectorId: "platform:gmail-hook",
+      actionId: "platform:gmail-hook:validate",
+      status: "needs_auth" as const,
+      message: detail
+        ? `EasyClaw could not inspect the current Gmail gog session. Reconnect Gmail auth, then validate again. ${detail}`
+        : "EasyClaw could not inspect the current Gmail gog session. Reconnect Gmail auth, then validate again.",
+      updatedRefs: [] as string[],
+      authSteps: buildGmailAuthSteps({
+        account,
+        includeGcloud: false,
+        includeGog: true,
+      }),
+      resume,
+    };
+  }
+
+  if (!gogStatus.credentialsExists) {
+    return {
+      connectorId: "platform:gmail-hook",
+      actionId: "platform:gmail-hook:validate",
+      status: "needs_credentials" as const,
+      message:
+        "Gmail validation cannot run yet because the Google OAuth client JSON is missing from gog.",
+      updatedRefs: [] as string[],
+      credentialImport: buildGmailCredentialImport(inputs),
+      resume,
+    };
+  }
+
+  if (gogStatus.email !== account) {
+    return {
+      connectorId: "platform:gmail-hook",
+      actionId: "platform:gmail-hook:validate",
+      status: "needs_auth" as const,
+      message: gogStatus.email
+        ? `Gmail auth is currently signed in as ${gogStatus.email}, not ${account}. Reconnect Gmail auth, then validate again.`
+        : `Gmail auth is not signed in for ${account}. Reconnect Gmail auth, then validate again.`,
+      updatedRefs: [] as string[],
+      authSteps: buildGmailAuthSteps({
+        account,
+        includeGcloud: false,
+        includeGog: true,
+      }),
+      resume,
+    };
+  }
+
+  const probe = await probeGogGmailApi({ account });
+  if (probe.ok) {
+    return {
+      connectorId: "platform:gmail-hook",
+      actionId: "platform:gmail-hook:validate",
+      status: "configured" as const,
+      message:
+        "Gmail authentication looks healthy. EasyClaw decrypted the saved gog token and the Gmail API probe succeeded.",
+      updatedRefs: [] as string[],
+    };
+  }
+
+  if (probe.kind === "keyring") {
+    return {
+      connectorId: "platform:gmail-hook",
+      actionId: "platform:gmail-hook:validate",
+      status: "needs_auth" as const,
+      message:
+        "Gmail auth is saved, but this machine can no longer decrypt the gog token. Reconnect Gmail auth, then validate again.",
+      updatedRefs: [] as string[],
+      authSteps: buildGmailAuthSteps({
+        account,
+        includeGcloud: false,
+        includeGog: true,
+      }),
+      resume,
+    };
+  }
+
+  if (probe.kind === "scopes") {
+    return {
+      connectorId: "platform:gmail-hook",
+      actionId: "platform:gmail-hook:validate",
+      status: "needs_auth" as const,
+      message:
+        "Gmail auth is signed in, but the current gog token is missing Gmail scopes. Re-consent, then validate again.",
+      updatedRefs: [] as string[],
+      authSteps: buildGmailAuthSteps({
+        account,
+        includeGcloud: false,
+        includeGog: true,
+        gmailScopes: true,
+      }),
+      resume,
+    };
+  }
+
+  if (probe.kind === "auth") {
+    return {
+      connectorId: "platform:gmail-hook",
+      actionId: "platform:gmail-hook:validate",
+      status: "needs_auth" as const,
+      message:
+        "Gmail auth needs sign-in again before EasyClaw can read this mailbox. Reconnect Gmail auth, then validate again.",
+      updatedRefs: [] as string[],
+      authSteps: buildGmailAuthSteps({
+        account,
+        includeGcloud: false,
+        includeGog: true,
+      }),
+      resume,
+    };
+  }
+
+  return {
+    connectorId: "platform:gmail-hook",
+    actionId: "platform:gmail-hook:validate",
+    status: "needs_auth" as const,
+    message: `Gmail validation failed. Reconnect Gmail auth, then validate again. ${probe.detail}`,
+    updatedRefs: [] as string[],
+    authSteps: buildGmailAuthSteps({
+      account,
+      includeGcloud: false,
+      includeGog: true,
+    }),
+    resume,
   };
 }
 
@@ -1299,6 +1511,22 @@ export const builderHandlers: GatewayRequestHandlers = {
           }
           const summary = await runGmailSetup(gmailSetupArgsFromInputs(account, parsed.inputs));
           respond(true, gmailConfiguredPayload(connectorId, summary), undefined);
+          return;
+        }
+        case "platform:gmail-hook:validate": {
+          const account = stringInput(parsed.inputs, "account");
+          if (!account) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "agents.builder.setup.run for platform:gmail-hook:validate requires an `account` input.",
+              ),
+            );
+            return;
+          }
+          respond(true, await validateGmailConnection(account, parsed.inputs), undefined);
           return;
         }
         case "tools:web":

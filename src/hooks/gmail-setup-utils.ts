@@ -685,12 +685,87 @@ export async function getGogAuthStatus(): Promise<GogAuthStatus> {
   }
 }
 
+export type GogGmailApiProbe =
+  | { ok: true }
+  | { ok: false; kind: "keyring"; detail: string }
+  | { ok: false; kind: "scopes"; detail: string }
+  | { ok: false; kind: "auth"; detail: string }
+  | { ok: false; kind: "unknown"; detail: string };
+
+/**
+ * Runs a minimal, read-only Gmail API call via the `gog` CLI to confirm the
+ * keyring can actually decrypt the token and the token still has Gmail scopes.
+ *
+ * `gog auth status` only inspects metadata and cannot detect a corrupted
+ * keyring (the `aes.KeyUnwrap(): integrity check failed` failure mode).
+ * This probe forces token decryption and hits the Gmail API the same way
+ * the agent runtime does, so verify catches runtime breakage up front.
+ *
+ * The probe is a single message lookup, timeout-bounded. It is intentionally
+ * non-destructive and cheap: one search for anything from the last day,
+ * capped at one result.
+ */
+export async function probeGogGmailApi(params: {
+  account: string;
+  timeoutMs?: number;
+}): Promise<GogGmailApiProbe> {
+  await ensureGogKeyringBackend();
+  const timeoutMs = params.timeoutMs ?? 20_000;
+  const args = [
+    "gmail",
+    "messages",
+    "search",
+    "in:inbox",
+    "--max",
+    "1",
+    "--client",
+    OPENCLAW_GOG_CLIENT,
+    "--account",
+    params.account,
+  ];
+  const result = await runCommandWithTimeout(["gog", ...args], {
+    timeoutMs,
+    env: await getGogCommandEnv(),
+  });
+  if (result.code === 0) {
+    return { ok: true };
+  }
+  const combined = `${result.stderr}\n${result.stdout}`;
+  const lower = combined.toLowerCase();
+  const trimmed = trimOutput(combined) || "gog gmail probe failed";
+  if (/keyunwrap|integrity check failed|keyring/i.test(combined)) {
+    return { ok: false, kind: "keyring", detail: trimmed };
+  }
+  if (
+    lower.includes("insufficientpermissions") ||
+    lower.includes("insufficient authentication scopes") ||
+    lower.includes("access_token_scope_insufficient")
+  ) {
+    return { ok: false, kind: "scopes", detail: trimmed };
+  }
+  if (
+    lower.includes("unauthenticated") ||
+    lower.includes("invalid_grant") ||
+    lower.includes("login required") ||
+    lower.includes("token expired")
+  ) {
+    return { ok: false, kind: "auth", detail: trimmed };
+  }
+  return { ok: false, kind: "unknown", detail: trimmed };
+}
+
 export async function ensureGogAuth(account: string, interactive = true) {
   await ensureGogKeyringBackend();
   const status = await getGogAuthStatus();
+  // User-facing lead sentence so the error is understandable if it bubbles up
+  // to the UI. The matcher-friendly phrases ("gog OAuth client credentials
+  // missing", "gog login required", "gog is signed in as") are preserved so
+  // the Builder can still identify the right setup step.
+  const uiHint =
+    "Open Gmail Setup in EasyClaw (Setup → Gmail Hook) to connect Gmail without a terminal.";
   if (!status.credentialsExists) {
     throw new Error(
-      "gog OAuth client credentials missing. Import them with `gog auth credentials set --client openclaw-gmail-hook <credentials.json>` and retry.",
+      `${uiHint} gog OAuth client credentials missing. Import them with \`gog auth credentials set --client openclaw-gmail-hook <credentials.json>\` and retry.`,
     );
   }
   if (status.email === account) {
@@ -699,11 +774,11 @@ export async function ensureGogAuth(account: string, interactive = true) {
   if (!interactive) {
     if (status.email && status.email !== account) {
       throw new Error(
-        `gog is signed in as ${status.email}. Run \`gog login ${account} --client ${OPENCLAW_GOG_CLIENT} --services gmail --gmail-scope full --force-consent\` and retry.`,
+        `${uiHint} gog is signed in as ${status.email}. Run \`gog login ${account} --client ${OPENCLAW_GOG_CLIENT} --services gmail --gmail-scope full --force-consent\` and retry.`,
       );
     }
     throw new Error(
-      `gog login required. Run \`gog login ${account} --client ${OPENCLAW_GOG_CLIENT} --services gmail --gmail-scope full --force-consent\` and retry.`,
+      `${uiHint} gog login required. Run \`gog login ${account} --client ${OPENCLAW_GOG_CLIENT} --services gmail --gmail-scope full --force-consent\` and retry.`,
     );
   }
   const login = await runCommandWithTimeout(

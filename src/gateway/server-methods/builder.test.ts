@@ -100,6 +100,7 @@ const mocks = vi.hoisted(() => ({
   getActiveGcloudAccount: vi.fn(),
   getGogKeyringPasswordPath: vi.fn(),
   getGogAuthStatus: vi.fn(),
+  probeGogGmailApi: vi.fn(),
   importGogCredentialsJson: vi.fn(),
 }));
 
@@ -241,6 +242,7 @@ vi.mock("../../hooks/gmail-setup-utils.js", () => ({
   getTailscaleConnectionSummary: mocks.getTailscaleConnectionSummary,
   importGogCredentialsJson: mocks.importGogCredentialsJson,
   installMacAppWithBrew: mocks.installMacAppWithBrew,
+  probeGogGmailApi: mocks.probeGogGmailApi,
   validatePublicPushEndpoint: mocks.validatePublicPushEndpoint,
 }));
 
@@ -448,6 +450,7 @@ describe("builder gateway handlers", () => {
       credentialsExists: true,
       email: "automation@example.com",
     });
+    mocks.probeGogGmailApi.mockResolvedValue({ ok: true });
     mocks.getTailscaleConnectionSummary.mockResolvedValue({
       appInstalled: true,
       connected: false,
@@ -2385,6 +2388,100 @@ describe("builder gateway handlers", () => {
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+  });
+
+  it("validates a healthy Gmail gog session without re-running setup", async () => {
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "platform:gmail-hook:validate",
+      inputs: {
+        account: "automation@example.com",
+      },
+    });
+    await invoke();
+
+    expect(mocks.runGmailSetup).not.toHaveBeenCalled();
+    expect(mocks.probeGogGmailApi).toHaveBeenCalledWith({
+      account: "automation@example.com",
+    });
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        actionId: "platform:gmail-hook:validate",
+        connectorId: "platform:gmail-hook",
+        status: "configured",
+        message: expect.stringContaining("Gmail authentication looks healthy"),
+      }),
+    );
+  });
+
+  it("returns a reconnect handoff when Gmail validation hits the keyring integrity failure", async () => {
+    mocks.probeGogGmailApi.mockResolvedValue({
+      ok: false,
+      kind: "keyring",
+      detail: "aes.KeyUnwrap(): integrity check failed",
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "platform:gmail-hook:validate",
+      inputs: {
+        account: "automation@example.com",
+      },
+    });
+    await invoke();
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        actionId: "platform:gmail-hook:validate",
+        connectorId: "platform:gmail-hook",
+        status: "needs_auth",
+        message: expect.stringContaining("can no longer decrypt the gog token"),
+        authSteps: expect.arrayContaining([
+          expect.objectContaining({
+            connectorId: "platform:gmail-hook:gog-auth",
+            command:
+              "gog login automation@example.com --client openclaw-gmail-hook --services gmail --gmail-scope full --force-consent",
+          }),
+        ]),
+        resume: expect.objectContaining({
+          actionId: "platform:gmail-hook:validate",
+          connectorId: "platform:gmail-hook",
+        }),
+      }),
+    );
+  });
+
+  it("guides Gmail validation to credential import when gog has no OAuth client JSON", async () => {
+    mocks.getGogAuthStatus.mockResolvedValue({
+      credentialsExists: false,
+      email: null,
+    });
+
+    const { respond, invoke } = createInvokeParams("agents.builder.setup.run", {
+      connectorId: "platform:gmail-hook:validate",
+      inputs: {
+        account: "automation@example.com",
+        project: "project-123",
+      },
+    });
+    await invoke();
+
+    expect(mocks.probeGogGmailApi).not.toHaveBeenCalled();
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        actionId: "platform:gmail-hook:validate",
+        connectorId: "platform:gmail-hook",
+        status: "needs_credentials",
+        credentialImport: expect.objectContaining({
+          connectorId: "platform:gmail-hook:gog-credentials",
+          consoleUrl: "https://console.cloud.google.com/apis/credentials?project=project-123",
+        }),
+      }),
+    );
   });
 
   it("returns a structured auth handoff when Gmail setup needs login", async () => {

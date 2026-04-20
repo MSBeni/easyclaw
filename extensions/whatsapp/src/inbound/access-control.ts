@@ -59,7 +59,14 @@ export async function checkInboundAccessControl(params: {
     cfg,
     accountId: params.accountId,
   });
-  const dmPolicy = account.dmPolicy ?? "pairing";
+  // Default to "allowlist" (silently ignore unknown senders) rather than
+  // "pairing" (reply with an "OpenClaw: access not configured" challenge).
+  // The pairing default was a footgun: every contact who messaged the owner
+  // received the challenge, which is terrible UX for real humans who aren't
+  // bot operators. With "allowlist", the owner can still message themselves
+  // (owner self-E164 is allow-listed automatically below) and admins can
+  // opt into "pairing" explicitly in config when they want it.
+  const dmPolicy = account.dmPolicy ?? "allowlist";
   const configuredAllowFrom = account.allowFrom ?? [];
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "whatsapp",

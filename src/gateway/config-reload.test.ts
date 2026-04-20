@@ -9,6 +9,7 @@ import {
   buildGatewayReloadPlan,
   diffConfigPaths,
   resolveGatewayReloadSettings,
+  shouldScheduleRestartForConfigWrite,
   startGatewayConfigReloader,
 } from "./config-reload.js";
 
@@ -192,6 +193,12 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
   });
 
+  it("treats approvals.exec routing changes as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan(["approvals.exec.targets.0.to"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("approvals.exec.targets.0.to");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
@@ -215,6 +222,11 @@ describe("buildGatewayReloadPlan", () => {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "approvals.exec.mode",
+      expectRestartGateway: false,
+      expectNoopPath: "approvals.exec.mode",
     },
     {
       path: "unknownField",
@@ -250,6 +262,41 @@ describe("resolveGatewayReloadSettings", () => {
     const settings = resolveGatewayReloadSettings({});
     expect(settings.mode).toBe("hybrid");
     expect(settings.debounceMs).toBe(300);
+  });
+});
+
+describe("shouldScheduleRestartForConfigWrite", () => {
+  it("skips restart for hot-reloadable model changes in hybrid mode", () => {
+    expect(
+      shouldScheduleRestartForConfigWrite({
+        nextConfig: {},
+        changedPaths: ["models.providers.google.baseUrl"],
+      }),
+    ).toBe(false);
+  });
+
+  it("restarts for restart-required changes in hybrid mode", () => {
+    expect(
+      shouldScheduleRestartForConfigWrite({
+        nextConfig: {},
+        changedPaths: ["gateway.port"],
+      }),
+    ).toBe(true);
+  });
+
+  it("respects explicit restart mode even for hot-reloadable changes", () => {
+    expect(
+      shouldScheduleRestartForConfigWrite({
+        nextConfig: {
+          gateway: {
+            reload: {
+              mode: "restart",
+            },
+          },
+        },
+        changedPaths: ["models.providers.google.baseUrl"],
+      }),
+    ).toBe(true);
   });
 });
 

@@ -741,6 +741,90 @@ describe("builder controller", () => {
     );
   });
 
+  it("keeps a setup action open when verification still reports the same blocker after refresh", async () => {
+    const { state, request } = createState();
+    state.builderBrief =
+      "Search public event sites and send the schedule to Telegram every morning at 8am.";
+    state.setTab = vi.fn();
+    request
+      .mockResolvedValueOnce({
+        connectorId: "tools:ui",
+        actionId: "tools:ui:configure",
+        status: "configured",
+        message: "OpenClaw UI Tools is ready for this workflow.",
+        updatedRefs: ["browser.enabled"],
+      })
+      .mockResolvedValueOnce({
+        hash: "config-hash",
+        valid: true,
+        config: { browser: { enabled: true } },
+        raw: '{\n  "browser": { "enabled": true }\n}',
+        issues: [],
+      })
+      .mockResolvedValueOnce({
+        draft: {
+          buildSpec: {
+            setupActions: [
+              {
+                id: "tools:ui:configure",
+                connectorId: "tools:ui",
+                status: "pending",
+                title: "OpenClaw UI Tools configured",
+                detail:
+                  "Connect and authenticate a browser-backed session for the target site before activation.",
+              },
+            ],
+          },
+        },
+        workspacePreviews: [],
+        plan: { status: "needs_setup" },
+        graphPlans: [],
+        verification: {
+          fingerprint: "verify-ui-123",
+          checkedAt: "2026-04-15T15:51:44.632Z",
+          passedCount: 2,
+          failedCount: 0,
+          blockedCount: 0,
+          unresolvedCount: 1,
+          results: [],
+        },
+      });
+
+    await runBuilderSetupAction(state, {
+      actionId: "tools:ui:configure",
+      connectorId: "tools:ui",
+      inputs: {},
+    });
+
+    expect(request.mock.calls).toEqual([
+      [
+        "agents.builder.setup.run",
+        {
+          actionId: "tools:ui:configure",
+          connectorId: "tools:ui",
+          inputs: {},
+        },
+      ],
+      ["config.get", {}],
+      [
+        "agents.builder.verify",
+        {
+          brief: "Search public event sites and send the schedule to Telegram every morning at 8am.",
+        },
+      ],
+    ]);
+    expect(state.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "tools:ui:configure",
+        connectorId: "tools:ui",
+        status: "needs_setup",
+        message:
+          "Connect and authenticate a browser-backed session for the target site before activation.",
+      }),
+    );
+    expect(state.setTab).not.toHaveBeenCalled();
+  });
+
   it("falls back to a Gmail scope re-consent handoff when the gateway returns a raw auth error", async () => {
     const { state, request } = createState();
     request.mockRejectedValueOnce(

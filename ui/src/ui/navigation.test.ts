@@ -28,6 +28,7 @@ describe("iconForTab", () => {
   it("returns stable icons for known tabs", () => {
     expect(iconForTab("chat")).toBe("messageSquare");
     expect(iconForTab("overview")).toBe("barChart");
+    expect(iconForTab("advanced")).toBe("settings");
     expect(iconForTab("channels")).toBe("link");
     expect(iconForTab("instances")).toBe("radio");
     expect(iconForTab("sessions")).toBe("fileText");
@@ -58,6 +59,7 @@ describe("titleForTab", () => {
   it("returns expected titles", () => {
     expect(titleForTab("chat")).toBe("Chat");
     expect(titleForTab("overview")).toBe("Overview");
+    expect(titleForTab("advanced")).toBe("Advanced");
     expect(titleForTab("cron")).toBe("Scheduled Tasks");
   });
 });
@@ -71,8 +73,8 @@ describe("subtitleForTab", () => {
   });
 
   it("returns descriptive subtitles", () => {
-    expect(subtitleForTab("chat")).toContain("quick interventions");
-    expect(subtitleForTab("config")).toContain("openclaw.json");
+    expect(subtitleForTab("chat")).toContain("Chat directly");
+    expect(subtitleForTab("advanced")).toContain("runtime");
   });
 });
 
@@ -117,6 +119,8 @@ describe("pathForTab", () => {
   it("returns correct path without base", () => {
     expect(pathForTab("chat")).toBe("/chat");
     expect(pathForTab("overview")).toBe("/overview");
+    expect(pathForTab("onboarding")).toBe("/setup");
+    expect(pathForTab("advanced")).toBe("/advanced");
   });
 
   it("prepends base path", () => {
@@ -129,11 +133,13 @@ describe("tabFromPath", () => {
   it("returns tab for valid path", () => {
     expect(tabFromPath("/chat")).toBe("chat");
     expect(tabFromPath("/overview")).toBe("overview");
+    expect(tabFromPath("/setup")).toBe("onboarding");
+    expect(tabFromPath("/advanced")).toBe("advanced");
     expect(tabFromPath("/sessions")).toBe("sessions");
   });
 
-  it("returns chat for root path", () => {
-    expect(tabFromPath("/")).toBe("chat");
+  it("returns builder for root path", () => {
+    expect(tabFromPath("/")).toBe("builder");
   });
 
   it("handles base paths", () => {
@@ -175,10 +181,11 @@ describe("inferBasePathFromPathname", () => {
 describe("TAB_GROUPS", () => {
   it("contains all expected groups", () => {
     const labels = TAB_GROUPS.map((g) => g.label);
+    expect(labels).toContain("builder");
+    expect(labels).toContain("setup");
     expect(labels).toContain("chat");
-    expect(labels).toContain("control");
-    expect(labels).toContain("agent");
-    expect(labels).toContain("settings");
+    expect(labels).toContain("agents");
+    expect(labels).toContain("advanced");
   });
 
   it("all tabs are unique", () => {

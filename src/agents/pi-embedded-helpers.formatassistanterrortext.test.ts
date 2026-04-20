@@ -89,6 +89,13 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("returns a billing message for OpenAI current-quota errors", () => {
+    const msg = makeAssistantError(
+      "You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
   it("includes provider and assistant model in billing message when provider is given", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });

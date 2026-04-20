@@ -1,4 +1,4 @@
-import { getActiveWebListener } from "../../../extensions/whatsapp/src/active-listener.js";
+import { getActiveWebListener } from "../../channel-web.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
@@ -12,14 +12,16 @@ import type { PluginRuntime } from "./types.js";
 const sendMessageWhatsAppLazy: PluginRuntime["channel"]["whatsapp"]["sendMessageWhatsApp"] = async (
   ...args
 ) => {
-  const { sendMessageWhatsApp } = await loadWebOutbound();
+  // Use the same lazy boundary as monitorWebChannel so outbound sends and
+  // listener registration share one in-memory registry.
+  const { sendMessageWhatsApp } = await loadWebChannel();
   return sendMessageWhatsApp(...args);
 };
 
 const sendPollWhatsAppLazy: PluginRuntime["channel"]["whatsapp"]["sendPollWhatsApp"] = async (
   ...args
 ) => {
-  const { sendPollWhatsApp } = await loadWebOutbound();
+  const { sendPollWhatsApp } = await loadWebChannel();
   return sendPollWhatsApp(...args);
 };
 
@@ -59,17 +61,10 @@ let webLoginQrPromise: Promise<
   typeof import("../../../extensions/whatsapp/src/login-qr.js")
 > | null = null;
 let webChannelPromise: Promise<typeof import("../../channels/web/index.js")> | null = null;
-let webOutboundPromise: Promise<typeof import("./runtime-whatsapp-outbound.runtime.js")> | null =
-  null;
 let webLoginPromise: Promise<typeof import("./runtime-whatsapp-login.runtime.js")> | null = null;
 let whatsappActionsPromise: Promise<
   typeof import("../../agents/tools/whatsapp-actions.js")
 > | null = null;
-
-function loadWebOutbound() {
-  webOutboundPromise ??= import("./runtime-whatsapp-outbound.runtime.js");
-  return webOutboundPromise;
-}
 
 function loadWebLogin() {
   webLoginPromise ??= import("./runtime-whatsapp-login.runtime.js");

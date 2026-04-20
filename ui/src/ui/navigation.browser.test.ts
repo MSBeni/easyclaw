@@ -91,7 +91,7 @@ describe("control UI routing", () => {
     expect(app.textContent).toContain("Configure and verify web search");
   });
 
-  it("opens builder quick setup inline before jumping to the setup tab", async () => {
+  it("opens builder quick setup on the setup tab immediately", async () => {
     const app = mountApp("/builder");
     await app.updateComplete;
 
@@ -102,19 +102,7 @@ describe("control UI routing", () => {
       refs: ["tools.web.search"],
       targetTab: "onboarding",
     };
-    await app.updateComplete;
-    await nextFrame();
-
-    expect(app.tab).toBe("builder");
-    expect(window.location.pathname).toBe("/builder");
-    expect(app.textContent).toContain("Configure Web Tools");
-
-    const button = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find((entry) =>
-      entry.textContent?.includes("Open Setup Tab"),
-    );
-    expect(button).toBeTruthy();
-    button?.click();
-
+    app.setTab("onboarding");
     await app.updateComplete;
     await nextFrame();
 
@@ -143,6 +131,23 @@ describe("control UI routing", () => {
     );
     expect(app.textContent).toContain("Configure Web Tools");
     expect(app.textContent).toContain("Configure and verify web search");
+  });
+
+  it("migrates legacy guided setup URLs onto the setup tab", async () => {
+    const app = mountApp(
+      "/builder?builderSetupConnectorId=channel%3Awhatsapp&builderSetupTitle=Set+up+WhatsApp&builderSetupDetail=Pair+WhatsApp&builderSetupTargetTab=builder&builderSetupRef=channels.whatsapp",
+    );
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(app.builderSetupFocus).toEqual(
+      expect.objectContaining({
+        connectorId: "channel:whatsapp",
+        targetTab: "onboarding",
+      }),
+    );
+    expect(app.tab).toBe("onboarding");
+    expect(window.location.pathname).toBe("/onboarding");
   });
 
   it("renders the refreshed top navigation shell", async () => {

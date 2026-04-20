@@ -1608,7 +1608,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
         type: "secret",
       },
     ],
-    docsLink: "https://docs.openclaw.ai/automation/hooks",
+    docsLink: "https://docs.openclaw.ai/automation/gmail-pubsub",
     configCheck: ["hooks", "gmail", "account"],
     advancedTarget: { tab: "automation" },
   },
@@ -1789,9 +1789,22 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-type WhatsAppOnboardingState = Pick<AppViewState, "channelsSnapshot" | "whatsappLoginConnected">;
+type OnboardingState = Pick<
+  AppViewState,
+  "channelsSnapshot" | "whatsappLoginConnected" | "builderPlan" | "builderSetupFocus"
+>;
 
 const WHATSAPP_AUTH_FAILURE_HINTS = ["401", "unauthorized", "logged out", "connection failure"];
+const ONBOARDING_VERIFICATION_CONNECTORS: Partial<Record<OnboardingStep["id"], string>> = {
+  slack: "channel:slack",
+  "gmail-hook": "platform:gmail-hook",
+};
+const GMAIL_HOOK_REQUIRED_PATHS: Array<Array<string | number>> = [
+  ["hooks", "token"],
+  ["hooks", "gmail", "account"],
+  ["hooks", "gmail", "topic"],
+  ["hooks", "gmail", "pushToken"],
+];
 
 function readRecordBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
   if (!record) {
@@ -1810,7 +1823,7 @@ function readRecordString(record: Record<string, unknown> | null, key: string): 
 }
 
 function resolvePrimaryWhatsAppAccount(
-  state?: WhatsAppOnboardingState,
+  state?: OnboardingState,
 ): Record<string, unknown> | null {
   const accounts = state?.channelsSnapshot?.channelAccounts?.whatsapp;
   if (!Array.isArray(accounts) || accounts.length === 0) {
@@ -1819,25 +1832,49 @@ function resolvePrimaryWhatsAppAccount(
   return asObject(accounts[0]);
 }
 
-function resolveWhatsAppConnected(state?: WhatsAppOnboardingState): boolean {
-  if (!state) {
-    return false;
-  }
-  if (state.whatsappLoginConnected === true) {
-    return true;
-  }
+function resolveWhatsAppConnected(state?: OnboardingState): boolean {
   const account = resolvePrimaryWhatsAppAccount(state);
   return readRecordBoolean(account, "connected") === true;
 }
 
-function resolveWhatsAppLinked(state?: WhatsAppOnboardingState): boolean {
+function resolveWhatsAppLinked(state?: OnboardingState): boolean {
   const account = resolvePrimaryWhatsAppAccount(state);
   return readRecordBoolean(account, "linked") === true;
 }
 
-function resolveWhatsAppLastError(state?: WhatsAppOnboardingState): string | null {
+function resolveWhatsAppRunning(state?: OnboardingState): boolean {
   const account = resolvePrimaryWhatsAppAccount(state);
-  return readRecordString(account, "lastError");
+  return readRecordBoolean(account, "running") === true;
+}
+
+function resolveWhatsAppProbeOk(state?: OnboardingState): boolean {
+  const account = resolvePrimaryWhatsAppAccount(state);
+  const probe =
+    account?.probe && typeof account.probe === "object" && !Array.isArray(account.probe)
+      ? (account.probe as Record<string, unknown>)
+      : null;
+  return readRecordBoolean(probe, "ok") === true;
+}
+
+function resolveWhatsAppProbeError(state?: OnboardingState): string | null {
+  const account = resolvePrimaryWhatsAppAccount(state);
+  const probe =
+    account?.probe && typeof account.probe === "object" && !Array.isArray(account.probe)
+      ? (account.probe as Record<string, unknown>)
+      : null;
+  return readRecordString(probe, "error");
+}
+
+function resolveWhatsAppReady(state?: OnboardingState): boolean {
+  if (resolveWhatsAppProbeOk(state)) {
+    return true;
+  }
+  return resolveWhatsAppRunning(state) && resolveWhatsAppConnected(state);
+}
+
+function resolveWhatsAppLastError(state?: OnboardingState): string | null {
+  const account = resolvePrimaryWhatsAppAccount(state);
+  return readRecordString(account, "lastError") ?? resolveWhatsAppProbeError(state);
 }
 
 function hasWhatsAppAuthFailureHint(value: string | null | undefined): boolean {
@@ -1848,52 +1885,68 @@ function hasWhatsAppAuthFailureHint(value: string | null | undefined): boolean {
   return WHATSAPP_AUTH_FAILURE_HINTS.some((hint) => normalized.includes(hint));
 }
 
-function isStepConfigured(
+function isConfiguredValue(value: string): boolean {
+  return value !== "" && value !== "false" && value !== "undefined";
+}
+
+function isGmailHookStepConfigured(form: Record<string, unknown> | null): boolean {
+  return GMAIL_HOOK_REQUIRED_PATHS.every((path) => isConfiguredValue(readConfigValue(form, path)));
+}
+
+export function isStepConfigured(
   form: Record<string, unknown> | null,
   step: OnboardingStep,
-  state?: WhatsAppOnboardingState,
+  state?: OnboardingState,
 ): boolean {
   if (step.id === "whatsapp") {
-    return resolveWhatsAppConnected(state);
+    return resolveWhatsAppReady(state);
+  }
+  if (step.id === "gmail-hook") {
+    if (!isGmailHookStepConfigured(form)) {
+      return false;
+    }
+    return !resolveStepLiveVerificationIssue(step, state);
   }
   if (!step.configCheck) {
     return false;
   }
   const val = readConfigValue(form, step.configCheck);
-  const configured = val !== "" && val !== "false" && val !== "undefined";
+  const configured = isConfiguredValue(val);
   if (!configured) {
     return false;
   }
   return !resolveStepLiveVerificationIssue(step, state);
 }
 
-function resolveStepLiveVerificationIssue(
+export function resolveStepLiveVerificationIssue(
   step: OnboardingStep,
-  state?: WhatsAppOnboardingState,
+  state?: OnboardingState,
 ): string | null {
-  if (step.id !== "slack") {
+  const connectorId = ONBOARDING_VERIFICATION_CONNECTORS[step.id];
+  if (!connectorId) {
     return null;
   }
-  if (state?.builderSetupFocus?.connectorId !== "channel:slack") {
+  const focusConnectorId = state?.builderSetupFocus?.connectorId ?? null;
+  if (focusConnectorId && focusConnectorId !== connectorId) {
     return null;
   }
-  const verifications = state.builderPlan?.draft.planning.verifications ?? [];
+  const verifications = state?.builderPlan?.draft.planning.verifications ?? [];
   const failedVerification =
     verifications.find(
       (verification) =>
-        verification.connectorId === "channel:slack" &&
+        verification.connectorId === connectorId &&
         verification.source === "live" &&
         (verification.status === "failed" || verification.status === "blocked"),
     ) ??
     verifications.find(
       (verification) =>
-        verification.connectorId === "channel:slack" &&
+        verification.connectorId === connectorId &&
         (verification.status === "failed" || verification.status === "blocked"),
     );
   return failedVerification?.detail?.trim() || null;
 }
 
-function summarizeStepLiveVerificationIssue(
+export function summarizeStepLiveVerificationIssue(
   step: OnboardingStep,
   detail: string | null,
 ): string | null {
@@ -1902,6 +1955,16 @@ function summarizeStepLiveVerificationIssue(
   }
   if (step.id === "slack" && detail.includes("not a member of")) {
     return "Credential saved, but the bot still needs access to the selected Slack channel.";
+  }
+  if (step.id === "gmail-hook") {
+    const normalized = detail.toLowerCase();
+    if (normalized.includes("keyunwrap") || normalized.includes("integrity check failed")) {
+      return "Gmail is saved, but the current gog sign-in can no longer be decrypted. Validate or reconnect Gmail auth.";
+    }
+    if (normalized.includes("scope")) {
+      return "Gmail is saved, but the current gog sign-in is missing Gmail scopes. Reconnect Gmail auth.";
+    }
+    return "Gmail is saved, but live verification still needs attention. Validate or reconnect Gmail auth.";
   }
   return "Credential saved, but live verification still needs attention.";
 }
@@ -2112,6 +2175,8 @@ function renderOnboardingStepDetail(
   const matrixVerifyConnectorId = "channel:matrix:verify-credentials";
   const msteamsVerifyConnectorId = "channel:msteams:verify-credentials";
   const imessageVerifyConnectorId = "channel:imessage:verify-transport";
+  const gmailValidateConnectorId = "platform:gmail-hook:validate";
+  const gmailReconnectConnectorId = "platform:gmail-hook:gog-auth";
   const telegramAccountIdDraftKey = "onboarding.telegram.accountId";
   const telegramAccountTokenDraftKey = "onboarding.telegram.accountBotToken";
   const telegramAccountTargetDraftKey = "onboarding.telegram.accountDefaultTo";
@@ -2130,14 +2195,26 @@ function renderOnboardingStepDetail(
   const isMSTeamsStep = step.id === "msteams";
   const isIMessageStep = step.id === "imessage";
   const isWhatsAppStep = step.id === "whatsapp";
+  const isGmailHookStep = step.id === "gmail-hook";
+  const whatsappReady = isWhatsAppStep ? resolveWhatsAppReady(state) : false;
   const whatsappConnected = isWhatsAppStep ? resolveWhatsAppConnected(state) : false;
+  const whatsappRunning = isWhatsAppStep ? resolveWhatsAppRunning(state) : false;
   const whatsappLinked = isWhatsAppStep ? resolveWhatsAppLinked(state) : false;
   const whatsappLastError = isWhatsAppStep ? resolveWhatsAppLastError(state) : null;
+  const whatsappListenerDown =
+    isWhatsAppStep && whatsappLinked && !whatsappReady && !whatsappRunning && !whatsappConnected;
   const whatsappHasAuthFailure =
     isWhatsAppStep &&
-    !whatsappConnected &&
+    !whatsappReady &&
     whatsappLinked &&
     hasWhatsAppAuthFailureHint(whatsappLastError);
+  const gmailAccount = isGmailHookStep
+    ? readConfigValue(form, ["hooks", "gmail", "account"]).trim()
+    : "";
+  const gmailValidateRunning =
+    isGmailHookStep && state.builderSetupRunningConnectorId === gmailValidateConnectorId;
+  const gmailReconnectRunning =
+    isGmailHookStep && state.builderSetupRunningConnectorId === gmailReconnectConnectorId;
   const showInlineSetup = step.fields.length > 0 || isWhatsAppStep;
   const telegramBotToken = isTelegramStep
     ? readConfigValue(form, ["channels", "telegram", "botToken"]).trim()
@@ -2332,6 +2409,18 @@ function renderOnboardingStepDetail(
       state.builderSetupResult.connectorId.startsWith(`${imessageVerifyConnectorId}:`))
       ? state.builderSetupResult
       : null;
+  const gmailValidateResult =
+    isGmailHookStep &&
+    state.builderSetupResult &&
+    state.builderSetupResult.actionId === gmailValidateConnectorId
+      ? state.builderSetupResult
+      : null;
+  const gmailReconnectResult =
+    isGmailHookStep &&
+    state.builderSetupResult &&
+    state.builderSetupResult.actionId === gmailReconnectConnectorId
+      ? state.builderSetupResult
+      : null;
   const slackSetupError =
     isSlackStep && !slackVerifyRunning && state.builderSetupError && !slackVerifyResult
       ? state.builderSetupError
@@ -2363,8 +2452,25 @@ function renderOnboardingStepDetail(
     isIMessageStep && !imessageVerifyRunning && state.builderSetupError && !imessageVerifyResult
       ? state.builderSetupError
       : null;
+  const gmailSetupError =
+    isGmailHookStep &&
+    !gmailValidateRunning &&
+    !gmailReconnectRunning &&
+    state.builderSetupError &&
+    !gmailValidateResult &&
+    !gmailReconnectResult
+      ? state.builderSetupError
+      : null;
+  const gmailLiveIssue = isGmailHookStep ? resolveStepLiveVerificationIssue(step, state) : null;
+  const gmailLiveIssueSummary = isGmailHookStep
+    ? summarizeStepLiveVerificationIssue(step, gmailLiveIssue)
+    : null;
   const connectorVerifyDisabled =
     !showInlineSetup || configLoading || state.configSaving || state.configApplying;
+  const gmailValidateDisabled =
+    !isGmailHookStep || connectorVerifyDisabled || !gmailAccount || gmailReconnectRunning;
+  const gmailReconnectDisabled =
+    !isGmailHookStep || connectorVerifyDisabled || !gmailAccount || gmailValidateRunning;
   const telegramCreateOrUpdateAccountDisabled =
     !isTelegramStep ||
     !telegramAccountId ||
@@ -2389,6 +2495,7 @@ function renderOnboardingStepDetail(
   const diffLabel =
     step.difficulty === "easy" ? "Easy" : step.difficulty === "moderate" ? "Moderate" : "Advanced";
   const advancedTitle = step.advancedTarget ? titleForTab(step.advancedTarget.tab) : "Settings";
+  const advancedActionLabel = isGmailHookStep ? "Open Gmail helper" : "Advanced Settings";
 
   // Find index for prev/next
   const idx = ONBOARDING_STEPS.findIndex((s) => s.id === step.id);
@@ -2989,6 +3096,58 @@ function renderOnboardingStepDetail(
                         : nothing
                     }
                     ${
+                      isGmailHookStep
+                        ? html`
+                            <button
+                              class="btn"
+                              ?disabled=${gmailValidateDisabled || gmailValidateRunning}
+                              @click=${async () => {
+                                if (state.configFormDirty) {
+                                  await saveConfig(state as Parameters<typeof saveConfig>[0]);
+                                  if (state.configFormDirty || state.lastError) {
+                                    return;
+                                  }
+                                }
+                                await runBuilderSetupAction(
+                                  state as Parameters<typeof runBuilderSetupAction>[0],
+                                  {
+                                    connectorId: gmailValidateConnectorId,
+                                    inputs: {
+                                      account: gmailAccount,
+                                    },
+                                  },
+                                );
+                              }}
+                            >
+                              ${gmailValidateRunning ? "Validating…" : "Validate Gmail connection"}
+                            </button>
+                            <button
+                              class="btn"
+                              ?disabled=${gmailReconnectDisabled || gmailReconnectRunning}
+                              @click=${async () => {
+                                if (state.configFormDirty) {
+                                  await saveConfig(state as Parameters<typeof saveConfig>[0]);
+                                  if (state.configFormDirty || state.lastError) {
+                                    return;
+                                  }
+                                }
+                                await runBuilderSetupAction(
+                                  state as Parameters<typeof runBuilderSetupAction>[0],
+                                  {
+                                    connectorId: gmailReconnectConnectorId,
+                                    inputs: {
+                                      account: gmailAccount,
+                                    },
+                                  },
+                                );
+                              }}
+                            >
+                              ${gmailReconnectRunning ? "Reconnecting…" : "Reconnect Gmail auth"}
+                            </button>
+                          `
+                        : nothing
+                    }
+                    ${
                       isWhatsAppStep
                         ? html`
                             <button
@@ -3007,7 +3166,7 @@ function renderOnboardingStepDetail(
                             </button>
                             <button
                               class="btn"
-                              ?disabled=${state.whatsappBusy || !state.connected}
+                              ?disabled=${state.whatsappBusy || !state.connected || !state.whatsappLoginQrDataUrl}
                               @click=${() => void state.handleWhatsAppWait()}
                             >
                               Wait for scan
@@ -3100,12 +3259,30 @@ function renderOnboardingStepDetail(
                                                           Verify iMessage transport checks local imsg RPC availability.
                                                         </span>
                                                       `
-                                                    : isWhatsAppStep
-                                                      ? whatsappConnected
+                                                    : isGmailHookStep
+                                                      ? !gmailAccount
                                                         ? html`
-                                                            <span class="onboarding__dirty">WhatsApp is linked and connected.</span>
+                                                            <span class="onboarding__dirty">
+                                                              Save a Gmail account first, then validate or reconnect Gmail auth.
+                                                            </span>
                                                           `
-                                                        : whatsappLinked
+                                                        : html`
+                                                            <span class="onboarding__dirty">
+                                                              Validate checks gog token decryption and a read-only Gmail API probe. Reconnect opens gog login again without changing your Gmail watch.
+                                                            </span>
+                                                          `
+                                                    : isWhatsAppStep
+                                                      ? whatsappReady
+                                                        ? html`
+                                                            <span class="onboarding__dirty">WhatsApp listener is active and ready.</span>
+                                                          `
+                                                        : whatsappListenerDown
+                                                          ? html`
+                                                              <span class="onboarding__dirty">
+                                                                WhatsApp is linked, but the live listener is down. Restart the gateway before moving on.
+                                                              </span>
+                                                            `
+                                                          : whatsappLinked
                                                           ? html`
                                                               <span class="onboarding__dirty">
                                                                 WhatsApp is linked but not connected. Click Relink for a fresh QR if this persists.
@@ -3141,7 +3318,7 @@ function renderOnboardingStepDetail(
                               }
                             }}
                           >
-                            Advanced Settings
+                            ${advancedActionLabel}
                           </button>`
                         : nothing
                     }
@@ -3389,10 +3566,79 @@ function renderOnboardingStepDetail(
                     : nothing
                 }
                 ${
+                  gmailSetupError
+                    ? html`
+                        <div class="callout danger" style="margin-top: 12px;">
+                          ${gmailSetupError}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  gmailLiveIssue && !gmailValidateResult && !gmailReconnectResult
+                    ? html`
+                        <div class="callout warn" style="margin-top: 12px;">
+                          <div>${gmailLiveIssueSummary ?? "Gmail needs attention."}</div>
+                          <div style="margin-top: 6px;">${gmailLiveIssue}</div>
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  gmailValidateResult
+                    ? html`
+                        <div
+                          class="callout ${
+                            gmailValidateResult.status === "configured" ? "success" : "warn"
+                          }"
+                          style="margin-top: 12px;"
+                        >
+                          ${gmailValidateResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  gmailReconnectResult
+                    ? html`
+                        <div
+                          class="callout ${
+                            gmailReconnectResult.status === "configured"
+                              ? "success"
+                              : gmailReconnectResult.status === "started"
+                                ? ""
+                                : "warn"
+                          }"
+                          style="margin-top: 12px;"
+                        >
+                          ${gmailReconnectResult.message}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
                   isWhatsAppStep && state.whatsappLoginMessage
                     ? html`
                         <div class="callout" style="margin-top: 12px;">
                           ${state.whatsappLoginMessage}
+                        </div>
+                      `
+                    : nothing
+                }
+                ${
+                  isWhatsAppStep && whatsappListenerDown
+                    ? html`
+                        <div class="callout warn" style="margin-top: 12px">
+                          WhatsApp is linked, but no active listener is running for this account.
+                          ${
+                            whatsappLastError
+                              ? html`<div style="margin-top: 6px;">Last runtime detail: ${whatsappLastError}</div>`
+                              : nothing
+                          }
+                          <div style="margin-top: 6px;">
+                            Restart the gateway first. Only use Relink or Logout if you want to replace
+                            the current linked session.
+                          </div>
                         </div>
                       `
                     : nothing
@@ -3408,10 +3654,10 @@ function renderOnboardingStepDetail(
                     : nothing
                 }
                 ${
-                  isWhatsAppStep && whatsappConnected
+                  isWhatsAppStep && whatsappReady
                     ? html`
                         <div class="callout success" style="margin-top: 12px">
-                          WhatsApp is connected. You can move to the next setup step.
+                          WhatsApp listener is active. You can move to the next setup step.
                         </div>
                       `
                     : nothing

@@ -209,6 +209,7 @@ describe("loadSettings default gateway URL derivation", () => {
       focus: {
         actionId: "tools:web:configure",
         connectorId: "tools:web",
+        targetTab: "builder",
         title: "Configure Web Tools",
       },
       inputs: {
@@ -227,6 +228,7 @@ describe("loadSettings default gateway URL derivation", () => {
       focus: {
         actionId: "tools:web:configure",
         connectorId: "tools:web",
+        targetTab: "onboarding",
         title: "Configure Web Tools",
       },
       inputs: {
@@ -244,6 +246,35 @@ describe("loadSettings default gateway URL derivation", () => {
     clearBuilderSetupSession();
     expect(loadBuilderSetupSession()).toEqual({
       focus: null,
+      inputs: {},
+      result: null,
+    });
+  });
+
+  it("migrates legacy guided builder setup sessions onto the setup tab", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/builder",
+    });
+
+    const { loadBuilderSetupSession, saveBuilderSetupSession } = await import("./storage.ts");
+    saveBuilderSetupSession({
+      focus: {
+        connectorId: "channel:whatsapp",
+        title: "Set up WhatsApp",
+        targetTab: "builder",
+      },
+      inputs: {},
+      result: null,
+    });
+
+    expect(loadBuilderSetupSession()).toEqual({
+      focus: {
+        connectorId: "channel:whatsapp",
+        title: "Set up WhatsApp",
+        targetTab: "onboarding",
+      },
       inputs: {},
       result: null,
     });

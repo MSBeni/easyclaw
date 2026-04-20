@@ -356,7 +356,23 @@ function hasBrowserLanguage(brief: string): boolean {
 }
 
 function hasSocialActionLanguage(brief: string): boolean {
-  return /\b(follow|comment|post|reply|retweet|like|tweet)\b/i.test(brief);
+  return (
+    /\bfollow\b\s+(?:the\s+)?(?:account|user|profile|page|creator|channel)\b/i.test(brief) ||
+    /\bcomment\b\s+(?:on|under)\s+(?:the\s+)?(?:post|tweet|thread|reply|comment|photo|video|story|reel)s?\b/i.test(
+      brief,
+    ) ||
+    /\breply\b\s+to\s+(?:the\s+)?(?:post|tweet|thread|comment|reply|photo|video|story|reel)s?\b/i.test(
+      brief,
+    ) ||
+    /\bpost\b\s+(?:on|to)\s+(?:x|twitter|social(?:\s+media)?|timeline|feed|profile|account)\b/i.test(
+      brief,
+    ) ||
+    /\bretweet\b/i.test(brief) ||
+    /\btweet\b/i.test(brief) ||
+    /\blike\b\s+(?:the\s+)?(?:post|tweet|thread|reply|comment|photo|video|story|reel|account|profile)s?\b/i.test(
+      brief,
+    )
+  );
 }
 
 function hasOnBehalfLanguage(brief: string): boolean {
@@ -686,7 +702,7 @@ export function buildRequirementSet(params: RequirementExtractionParams): Requir
     hasBrowserLanguage(text) || hasSocialActionLanguage(text) || /\b(x|twitter)\b/i.test(brief);
   const riskyActionRequest =
     hasOnBehalfLanguage(text) ||
-    /\b(follow|comment|post|retweet|like)\b/i.test(brief) ||
+    hasSocialActionLanguage(brief) ||
     (/\breply\b/i.test(brief) && hasOnBehalfLanguage(text));
   const deliveryRequest =
     /\b(send|deliver|post|share|publish)\b/i.test(brief) ||

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildBuilderSetupUrl, resolveBuilderQuestionSetupConnectorId } from "./builder.ts";
 
 describe("buildBuilderSetupUrl", () => {
-  it("builds an onboarding URL for guided web setup", () => {
+  it("builds a setup URL for guided web setup", () => {
     const url = buildBuilderSetupUrl("http://127.0.0.1:18789/builder?session=main", "", {
       actionId: "tools:web:configure",
       connectorId: "tools:web",
@@ -21,7 +21,7 @@ describe("buildBuilderSetupUrl", () => {
     });
 
     const parsed = new URL(url);
-    expect(parsed.pathname).toBe("/onboarding");
+    expect(parsed.pathname).toBe("/setup");
     expect(parsed.searchParams.get("session")).toBe(null);
     expect(parsed.searchParams.get("builderSetupConnectorId")).toBe("tools:web");
     expect(parsed.searchParams.get("builderSetupActionId")).toBe("tools:web:configure");

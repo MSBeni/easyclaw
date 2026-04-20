@@ -159,6 +159,37 @@ function normalizeBuilderSetupResult(value: unknown): BuilderSetupSessionState["
   return value as BuilderSetupRunResult;
 }
 
+function shouldNormalizeGuidedSetupTargetTab(connectorId: unknown): boolean {
+  if (typeof connectorId !== "string") {
+    return false;
+  }
+  const normalized = connectorId.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.startsWith("channel:") ||
+    normalized === "tools:web" ||
+    normalized === "platform:exec-approvals" ||
+    normalized === "platform:gmail-hook" ||
+    normalized === "platform:core-model"
+  );
+}
+
+function normalizeBuilderSetupFocus(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const focus = { ...(value as Record<string, unknown>) };
+  if (
+    shouldNormalizeGuidedSetupTargetTab(focus.connectorId) &&
+    (focus.targetTab == null || focus.targetTab === "builder")
+  ) {
+    focus.targetTab = "onboarding";
+  }
+  return focus;
+}
+
 export function loadBuilderDraft(): BuilderDraftSettings {
   const defaults: BuilderDraftSettings = {
     brief: "",
@@ -230,10 +261,7 @@ export function loadBuilderSetupSession(): BuilderSetupSessionState {
     }
     const parsed = JSON.parse(raw) as Partial<BuilderSetupSessionState>;
     return {
-      focus:
-        parsed.focus && typeof parsed.focus === "object" && !Array.isArray(parsed.focus)
-          ? parsed.focus
-          : null,
+      focus: normalizeBuilderSetupFocus(parsed.focus),
       inputs: normalizeStringRecord(parsed.inputs),
       result: normalizeBuilderSetupResult(parsed.result),
     };

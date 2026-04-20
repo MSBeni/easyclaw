@@ -18,6 +18,7 @@ const WEB_LOGIN_PROVIDER_UNAVAILABLE = "web login provider is not available";
 const WHATSAPP_ALREADY_LINKED = "whatsapp is already linked";
 const WHATSAPP_LOGIN_RETRY_DELAYS_MS = [300, 700, 1200];
 const WHATSAPP_CONNECTED_CONVERGENCE_DELAYS_MS = [400, 800, 1200, 1600];
+const WHATSAPP_READY_CONVERGENCE_DELAYS_MS = [500, 900, 1400, 2200, 3200];
 const WHATSAPP_AUTH_FAILURE_HINTS = ["401", "unauthorized", "logged out", "connection failure"];
 const WHATSAPP_AUTO_TARGET_CONNECTOR_ID = "channel:whatsapp:auto-default-target";
 
@@ -123,6 +124,76 @@ function shouldAutoWaitForWhatsAppScan(host: OpenClawApp): boolean {
   return Boolean(host.whatsappLoginQrDataUrl) && host.whatsappLoginConnected !== true;
 }
 
+function readWhatsAppProbeError(host: OpenClawApp): string | null {
+  const account = resolveWhatsAppPrimaryAccount(host);
+  if (!account) {
+    return null;
+  }
+  const probe = asRecord(account.probe);
+  return readRecordString(probe, "error");
+}
+
+function readWhatsAppProbeOk(host: OpenClawApp): boolean | null {
+  const account = resolveWhatsAppPrimaryAccount(host);
+  if (!account) {
+    return null;
+  }
+  const probe = asRecord(account.probe);
+  return readRecordBoolean(probe, "ok");
+}
+
+function readWhatsAppIdentity(host: OpenClawApp): string | null {
+  const account = resolveWhatsAppPrimaryAccount(host);
+  if (!account) {
+    return null;
+  }
+  return (
+    readRecordString(account, "name") ??
+    readRecordString(account, "accountId") ??
+    null
+  );
+}
+
+function isWhatsAppLinkedButListenerDown(host: OpenClawApp): boolean {
+  const account = resolveWhatsAppPrimaryAccount(host);
+  if (!account) {
+    return false;
+  }
+  const linked = readRecordBoolean(account, "linked") === true;
+  const running = readRecordBoolean(account, "running") === true;
+  const connected = readRecordBoolean(account, "connected") === true;
+  return linked && !running && !connected;
+}
+
+function isWhatsAppReadyInSnapshot(host: OpenClawApp): boolean {
+  const probeOk = readWhatsAppProbeOk(host);
+  if (probeOk === true) {
+    return true;
+  }
+  const account = resolveWhatsAppPrimaryAccount(host);
+  if (!account) {
+    return false;
+  }
+  const running = readRecordBoolean(account, "running") === true;
+  const connected = readRecordBoolean(account, "connected") === true;
+  return running && connected;
+}
+
+function setWhatsAppListenerRecoveryMessage(host: OpenClawApp, context: "linked" | "timeout") {
+  if (!isWhatsAppLinkedButListenerDown(host)) {
+    return;
+  }
+  const who = readWhatsAppIdentity(host) ?? "this account";
+  const lastError = readRecordString(resolveWhatsAppPrimaryAccount(host), "lastError");
+  const probeError = readWhatsAppProbeError(host);
+  const detail = lastError?.trim() || probeError?.trim();
+  const detailSuffix = detail ? ` Last runtime detail: ${detail}` : "";
+  host.whatsappLoginMessage =
+    context === "timeout"
+      ? `WhatsApp is already linked (${who}), but the live listener is not running. Builder timed out waiting for a fresh QR because the runtime is still unhealthy.${detailSuffix} Restart the gateway first. If you really want a brand-new pairing, use Logout, then Show QR.`
+      : `WhatsApp is already linked (${who}), but the live listener is not running.${detailSuffix} Restart the gateway first. You usually do not need a fresh QR unless you want to replace the linked session.`;
+}
+
 async function convergeWhatsAppConnectedState(host: OpenClawApp) {
   if (host.whatsappLoginConnected !== true) {
     return;
@@ -135,6 +206,22 @@ async function convergeWhatsAppConnectedState(host: OpenClawApp) {
     await loadChannels(host, true);
     syncWhatsAppConnectedFromSnapshot(host);
     if (isWhatsAppConnectedInSnapshot(host)) {
+      host.whatsappLoginConnected = true;
+      return;
+    }
+  }
+}
+
+async function convergeWhatsAppReadyState(host: OpenClawApp) {
+  if (isWhatsAppReadyInSnapshot(host)) {
+    host.whatsappLoginConnected = true;
+    return;
+  }
+  for (const delayMs of WHATSAPP_READY_CONVERGENCE_DELAYS_MS) {
+    await waitMs(delayMs);
+    await loadChannels(host, true);
+    syncWhatsAppConnectedFromSnapshot(host);
+    if (isWhatsAppReadyInSnapshot(host)) {
       host.whatsappLoginConnected = true;
       return;
     }
@@ -255,6 +342,15 @@ export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
   }
   await loadChannels(host, true);
   syncWhatsAppConnectedFromSnapshot(host);
+  if (!force && isWhatsAppAlreadyLinked(host.whatsappLoginMessage)) {
+    setWhatsAppListenerRecoveryMessage(host, "linked");
+  }
+  if (
+    force &&
+    host.whatsappLoginMessage?.toLowerCase().includes("timed out waiting for whatsapp qr")
+  ) {
+    setWhatsAppListenerRecoveryMessage(host, "timeout");
+  }
   if (shouldAutoWaitForWhatsAppScan(host)) {
     await waitWhatsAppLogin(host);
     const waitReportedConnected = host.whatsappLoginConnected === true;
@@ -262,9 +358,14 @@ export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
     syncWhatsAppConnectedFromSnapshot(host);
     if (waitReportedConnected) {
       await convergeWhatsAppConnectedState(host);
+      await convergeWhatsAppReadyState(host);
+      if (!isWhatsAppReadyInSnapshot(host)) {
+        setWhatsAppListenerRecoveryMessage(host, "linked");
+        host.whatsappLoginConnected = false;
+      }
     }
   }
-  if (host.whatsappLoginConnected === true || isWhatsAppConnectedInSnapshot(host)) {
+  if (isWhatsAppReadyInSnapshot(host)) {
     await autoConfigureWhatsAppDefaultTarget(host);
   }
 }
@@ -276,8 +377,13 @@ export async function handleWhatsAppWait(host: OpenClawApp) {
   syncWhatsAppConnectedFromSnapshot(host);
   if (waitReportedConnected) {
     await convergeWhatsAppConnectedState(host);
+    await convergeWhatsAppReadyState(host);
+    if (!isWhatsAppReadyInSnapshot(host)) {
+      setWhatsAppListenerRecoveryMessage(host, "linked");
+      host.whatsappLoginConnected = false;
+    }
   }
-  if (host.whatsappLoginConnected === true || isWhatsAppConnectedInSnapshot(host)) {
+  if (isWhatsAppReadyInSnapshot(host)) {
     await autoConfigureWhatsAppDefaultTarget(host);
   }
 }

@@ -4,6 +4,7 @@ import { parseSlackTarget } from "../../../extensions/slack/src/targets.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getGogAuthStatus, probeGogGmailApi } from "../../hooks/gmail-setup-utils.js";
 import { writePlannerIntegrations } from "./integration-store.js";
 import type {
   PlannedIntegrationInstance,
@@ -187,6 +188,116 @@ function failedLiveResult(
 
 function normalizeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Live verification for the Gmail Hook (gog OAuth client).
+ *
+ * Previously this returned `needs_live_check`, which meant the Builder would
+ * happily create agents that referenced Gmail even when the underlying `gog`
+ * keyring was corrupted or the OAuth client credentials were missing. That
+ * produced runtime failures like `read token: aes.KeyUnwrap(): integrity check
+ * failed`, with no chance for the user to fix things during setup.
+ *
+ * This actually calls `gog auth status --json --client openclaw-gmail-hook`
+ * via the shared helper and classifies common failure modes so the verify step
+ * surfaces them before apply.
+ */
+async function runGmailHookLiveVerification(params: {
+  result: PlannedVerificationResult;
+  integration: PlannedIntegrationInstance;
+  checkedAt: string;
+}): Promise<PlannedVerificationResult> {
+  // User-facing guidance: point to the EasyClaw Gmail setup page instead of
+  // raw terminal commands. The setup page walks users through uploading
+  // credentials.json and signing in with Google; it's the primary way
+  // non-technical users should recover from broken Gmail auth.
+  const openGmailSetupHint = "Open Gmail Setup in EasyClaw (Setup → Gmail Hook) to reconnect.";
+  try {
+    const status = await getGogAuthStatus();
+    if (!status.credentialsExists) {
+      return failedLiveResult(
+        params.result,
+        "failed",
+        `Gmail is not connected yet. ${openGmailSetupHint} You'll upload a credentials file once and sign in with Google — no terminal needed.`,
+        params.checkedAt,
+      );
+    }
+    if (!status.email) {
+      return failedLiveResult(
+        params.result,
+        "failed",
+        `Gmail credentials are loaded, but no account is signed in. ${openGmailSetupHint}`,
+        params.checkedAt,
+      );
+    }
+    // Metadata is fine; now confirm the keyring can actually decrypt the
+    // stored token and the token still has Gmail scopes. This is the only
+    // check that catches the `aes.KeyUnwrap(): integrity check failed`
+    // state that otherwise only surfaces when the agent runs.
+    const apiProbe = await probeGogGmailApi({ account: status.email });
+    if (!apiProbe.ok) {
+      switch (apiProbe.kind) {
+        case "keyring":
+          return failedLiveResult(
+            params.result,
+            "failed",
+            `Gmail needs to be reconnected: its sign-in state is corrupted. ${openGmailSetupHint}`,
+            params.checkedAt,
+          );
+        case "scopes":
+          return failedLiveResult(
+            params.result,
+            "failed",
+            `Gmail is connected but is missing the permissions EasyClaw needs. ${openGmailSetupHint} Make sure to grant the full Gmail permission when signing in.`,
+            params.checkedAt,
+          );
+        case "auth":
+          return failedLiveResult(
+            params.result,
+            "failed",
+            `Gmail sign-in has expired. ${openGmailSetupHint}`,
+            params.checkedAt,
+          );
+        default:
+          return failedLiveResult(
+            params.result,
+            "failed",
+            `Gmail access check failed. ${openGmailSetupHint} Details: ${apiProbe.detail}`,
+            params.checkedAt,
+          );
+      }
+    }
+    return passedLiveResult(
+      params.result,
+      `Gmail is connected for ${status.email} and can read messages.`,
+      params.checkedAt,
+    );
+  } catch (error) {
+    const message = normalizeErrorMessage(error);
+    if (/KeyUnwrap|integrity check failed/i.test(message)) {
+      return failedLiveResult(
+        params.result,
+        "failed",
+        `Gmail needs to be reconnected: its sign-in state is corrupted. ${openGmailSetupHint}`,
+        params.checkedAt,
+      );
+    }
+    if (/ENOENT|not found|missing/i.test(message)) {
+      return failedLiveResult(
+        params.result,
+        "blocked",
+        `EasyClaw can't reach the Gmail helper on this machine. ${openGmailSetupHint} If the setup page says the helper is missing, complete it once — it installs what's needed.`,
+        params.checkedAt,
+      );
+    }
+    return failedLiveResult(
+      params.result,
+      "failed",
+      `Gmail access check failed. ${openGmailSetupHint} Details: ${message}`,
+      params.checkedAt,
+    );
+  }
 }
 
 async function runSlackSendTestResult(params: {
@@ -458,8 +569,13 @@ async function runLiveVerificationResult(params: {
                 `${integration.label} is not configured enough for live verification.`,
               params.checkedAt,
             );
-      case "platform:core-model":
       case "platform:gmail-hook":
+        return runGmailHookLiveVerification({
+          result: params.result,
+          integration,
+          checkedAt: params.checkedAt,
+        });
+      case "platform:core-model":
         return liveCheckUnavailable(
           params.result,
           `${integration.label} does not have a non-destructive live verification path yet.`,

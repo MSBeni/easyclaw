@@ -27,7 +27,7 @@ async function waitForElement<T extends Element>(
   selector: string,
   params?: { frames?: number },
 ): Promise<T | null> {
-  const frames = params?.frames ?? 10;
+  const frames = Math.max(params?.frames ?? 10, 24);
   for (let index = 0; index < frames; index += 1) {
     const element = app.querySelector<T>(selector);
     if (element) {
@@ -63,6 +63,15 @@ function clickButton(app: OpenClawApp, text: string, params?: { exact?: boolean 
   return button;
 }
 
+function expectApplyBlocked(app: OpenClawApp) {
+  const applyButton = findButtonByText(app, "Apply Builder Plan", { exact: true });
+  if (applyButton) {
+    expect(applyButton.disabled).toBe(true);
+    return;
+  }
+  expect(app.tab).toBe("onboarding");
+}
+
 function changeValue(
   element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
   value: string,
@@ -75,6 +84,56 @@ function changeValue(
       composed: true,
     }),
   );
+}
+
+function createConfigSnapshot(config: Record<string, unknown>, hash = "config-hash") {
+  return {
+    hash,
+    valid: true,
+    config,
+    raw: JSON.stringify(config, null, 2),
+    issues: [],
+  };
+}
+
+function attachMockClient(app: OpenClawApp, request: ReturnType<typeof vi.fn>) {
+  const withFallbacks = async (method: string, params: unknown) => {
+    try {
+      return await request(method, params);
+    } catch (error) {
+      const message = String(error instanceof Error ? error.message : error);
+      if (!message.includes("Unhandled")) {
+        throw error;
+      }
+      if (method === "config.schema") {
+        return {
+          version: "test-schema",
+          schema: {
+            type: "object",
+            properties: {},
+          },
+        };
+      }
+      if (method === "config.get") {
+        return createConfigSnapshot({});
+      }
+      if (method === "channels.status") {
+        return {
+          ts: Date.now(),
+          channelOrder: [],
+          channelLabels: {},
+          channels: {},
+          channelAccounts: {},
+          channelDefaultAccountId: {},
+        };
+      }
+      throw error;
+    }
+  };
+  app.client = {
+    request: withFallbacks,
+    stop: vi.fn(),
+  } as unknown as OpenClawApp["client"];
 }
 
 function createBuilderPlanResult(params: { setupComplete: boolean }): BuilderPlanResult {
@@ -934,6 +993,414 @@ function createSwarmBuilderPlanResult(): BuilderPlanResult {
   };
 }
 
+function createPhase14PromptBuilderPlanResult(params: {
+  gmailSetupComplete: boolean;
+  whatsappSetupComplete: boolean;
+}): BuilderPlanResult {
+  const result = createSwarmBuilderPlanResult();
+  const readyIntegrationCount =
+    1 + Number(params.gmailSetupComplete) + Number(params.whatsappSetupComplete);
+  const unresolvedIntegrationCount =
+    Number(!params.gmailSetupComplete) + Number(!params.whatsappSetupComplete);
+  const setupActions = [
+    ...(!params.gmailSetupComplete
+      ? [
+          {
+            id: "platform:gmail-hook",
+            connectorId: "platform:gmail-hook",
+            connectorLabel: "Gmail Hook",
+            title: "Set up Gmail Hook",
+            detail: "Finish Gmail sign-in and Pub/Sub setup before apply is allowed.",
+            status: "pending" as const,
+            kind: "configure" as const,
+            source: "runtime-auth" as const,
+            blocking: true,
+            refs: ["hooks.gmail"],
+            workflowRoles: ["Opportunity Orchestrator", "Signal Scout"],
+            uiSchema: {
+              variant: "guided-setup" as const,
+              section: "hooks.gmail",
+              fieldKeys: [],
+            },
+            completionSignal: {
+              kind: "verification" as const,
+              target: "platform:gmail-hook:ready",
+              detail: "Pass Gmail hook readiness before apply is allowed.",
+            },
+          },
+        ]
+      : []),
+    ...(!params.whatsappSetupComplete
+      ? [
+          {
+            id: "channel:whatsapp:auto-default-target",
+            connectorId: "channel:whatsapp",
+            connectorLabel: "WhatsApp",
+            title: "Set up WhatsApp delivery",
+            detail: "Pair WhatsApp and set a delivery destination before apply is allowed.",
+            status: "pending" as const,
+            kind: "connect" as const,
+            source: "setup-task" as const,
+            blocking: true,
+            refs: ["channels.whatsapp"],
+            workflowRoles: ["Opportunity Orchestrator"],
+            uiSchema: {
+              variant: "guided-setup" as const,
+              section: "channels.whatsapp",
+              fieldKeys: [],
+            },
+            completionSignal: {
+              kind: "verification" as const,
+              target: "channel:whatsapp:ready",
+              detail: "Pass WhatsApp delivery readiness before apply is allowed.",
+            },
+          },
+        ]
+      : []),
+  ];
+  const setupTasks = [
+    ...(!params.gmailSetupComplete
+      ? [
+          {
+            id: "platform:gmail-hook:setup",
+            connectorId: "platform:gmail-hook",
+            connectorLabel: "Gmail Hook",
+            kind: "configure" as const,
+            status: "pending" as const,
+            title: "Set up Gmail Hook",
+            detail: "Finish Gmail auth and Pub/Sub configuration.",
+            refs: ["hooks.gmail"],
+          },
+        ]
+      : []),
+    ...(!params.whatsappSetupComplete
+      ? [
+          {
+            id: "channel:whatsapp:setup",
+            connectorId: "channel:whatsapp",
+            connectorLabel: "WhatsApp",
+            kind: "connect" as const,
+            status: "pending" as const,
+            title: "Set up WhatsApp delivery",
+            detail: "Pair the session and set the default destination.",
+            refs: ["channels.whatsapp"],
+          },
+        ]
+      : []),
+  ];
+  const verifications = [
+    {
+      id: "platform:gmail-hook:ready",
+      connectorId: "platform:gmail-hook",
+      connectorLabel: "Gmail Hook",
+      probeKind: "source",
+      probeLabel: "Gmail watch readiness",
+      status: params.gmailSetupComplete ? ("passed" as const) : ("blocked" as const),
+      detail: params.gmailSetupComplete
+        ? "Gmail watch is authenticated and receiving newsletter updates."
+        : "Gmail setup still needs interactive sign-in and a resumed helper run.",
+      source: "live" as const,
+      checkedAt: "2026-04-12T16:05:00.000Z",
+    },
+    {
+      id: "platform:core-model:ready",
+      connectorId: "platform:core-model",
+      connectorLabel: "OpenClaw Core Model Runtime",
+      probeKind: "runtime",
+      probeLabel: "Model runtime readiness",
+      status: "passed" as const,
+      detail: "The configured runtime model is available.",
+      source: "live" as const,
+      checkedAt: "2026-04-12T16:05:00.000Z",
+    },
+    {
+      id: "channel:whatsapp:ready",
+      connectorId: "channel:whatsapp",
+      connectorLabel: "WhatsApp",
+      probeKind: "delivery",
+      probeLabel: "WhatsApp delivery readiness",
+      status: params.whatsappSetupComplete ? ("passed" as const) : ("blocked" as const),
+      detail: params.whatsappSetupComplete
+        ? "WhatsApp is paired and the delivery target is saved."
+        : "WhatsApp still needs a connected session and a verified destination.",
+      source: "live" as const,
+      checkedAt: "2026-04-12T16:05:00.000Z",
+    },
+  ];
+
+  return {
+    ...result,
+    draft: {
+      ...result.draft,
+      brief:
+        "Read my Gmail AI newsletters, give me business ideas and opportunities every day at 9am PST, and send the result to my WhatsApp",
+      ready: params.gmailSetupComplete && params.whatsappSetupComplete,
+      reasons: [
+        "Matched a recurring briefing workflow with Gmail as the source and WhatsApp as the delivery channel.",
+      ],
+      assumptions: [
+        "Normalize 9am PST to America/Los_Angeles so the runtime schedule is explicit before activation.",
+      ],
+      buildSpec: {
+        ...result.draft.buildSpec,
+        context: {
+          ...result.draft.buildSpec.context,
+          readyIntegrationCount,
+          unresolvedIntegrationCount,
+        },
+        integrations: result.draft.buildSpec.integrations.map((integration) => {
+          if (integration.connectorId === "platform:gmail-hook") {
+            return {
+              ...integration,
+              status: params.gmailSetupComplete ? "verified" : "configured",
+              issues: params.gmailSetupComplete
+                ? []
+                : ["Gmail setup still needs interactive sign-in."],
+            };
+          }
+          if (integration.connectorId === "channel:whatsapp") {
+            return {
+              ...integration,
+              status: params.whatsappSetupComplete ? "verified" : "configured",
+              issues: params.whatsappSetupComplete
+                ? []
+                : ["WhatsApp still needs a connected session and delivery target."],
+            };
+          }
+          return integration;
+        }),
+        setupActions,
+      },
+      requirements: {
+        ...result.draft.requirements,
+        intentTags: ["briefing", "gmail", "whatsapp", "opportunities", "swarm"],
+        triggers: [{ detail: "Run every day at 9:00 AM Pacific Time." }],
+        inputs: [{ detail: "Read Gmail AI newsletters and prior captured signals." }],
+        transforms: [
+          { detail: "Extract business ideas and opportunities from the source material." },
+          { detail: "Rank the strongest opportunities before delivery." },
+        ],
+        actions: [{ detail: "Send a final ranked brief." }],
+        outputs: [{ detail: "Deliver the result to WhatsApp." }],
+      },
+      planning: {
+        ...result.draft.planning,
+        integrations: result.draft.planning.integrations.map((integration) => {
+          if (integration.connectorId === "platform:gmail-hook") {
+            return {
+              ...integration,
+              status: params.gmailSetupComplete ? "verified" : "configured",
+              issues: params.gmailSetupComplete
+                ? []
+                : ["Gmail setup still needs interactive sign-in."],
+            };
+          }
+          if (integration.connectorId === "channel:whatsapp") {
+            return {
+              ...integration,
+              status: params.whatsappSetupComplete ? "verified" : "configured",
+              issues: params.whatsappSetupComplete
+                ? []
+                : ["WhatsApp still needs a connected session and delivery target."],
+            };
+          }
+          return integration;
+        }),
+        setupTasks,
+        verifications,
+        graph: {
+          ...result.draft.planning.graph,
+          nodes: result.draft.planning.graph.nodes.map((node) => {
+            if (node.id === "orchestrator") {
+              return {
+                ...node,
+                responsibilities: ["Coordinate workers", "Assemble the final opportunity brief"],
+                schedule: "Daily at 9:00 AM Pacific Time",
+              };
+            }
+            if (node.id === "scout") {
+              return {
+                ...node,
+                responsibilities: [
+                  "Read Gmail AI newsletters",
+                  "Capture business ideas and opportunities",
+                ],
+              };
+            }
+            if (node.id === "analyst") {
+              return {
+                ...node,
+                responsibilities: ["Rank opportunities", "Explain why each idea matters"],
+              };
+            }
+            return node;
+          }),
+        },
+      },
+      extracted: {
+        ...result.draft.extracted,
+        sourceChannels: ["gmail"],
+        deliveryTarget: "WhatsApp default target",
+        schedule: "Daily at 9:00 AM Pacific Time",
+      },
+    },
+  };
+}
+
+function createPhase14PromptBuilderVerifyResult(params: {
+  gmailSetupComplete: boolean;
+  whatsappSetupComplete: boolean;
+  fingerprint: string;
+}): BuilderVerifyResult {
+  const plan = createPhase14PromptBuilderPlanResult({
+    gmailSetupComplete: params.gmailSetupComplete,
+    whatsappSetupComplete: params.whatsappSetupComplete,
+  });
+  return {
+    ...plan,
+    verification: {
+      fingerprint: params.fingerprint,
+      checkedAt: "2026-04-12T16:05:00.000Z",
+      passedCount: plan.draft.planning.verifications.filter((entry) => entry.status === "passed")
+        .length,
+      failedCount: 0,
+      blockedCount: plan.draft.planning.verifications.filter((entry) => entry.status === "blocked")
+        .length,
+      unresolvedCount: 0,
+      results: plan.draft.planning.verifications,
+    },
+  };
+}
+
+function createPhase14PromptBuilderApplyResult() {
+  const draft = createPhase14PromptBuilderPlanResult({
+    gmailSetupComplete: true,
+    whatsappSetupComplete: true,
+  }).draft;
+  const makeNodeResult = (params: {
+    agentId: string;
+    name: string;
+    workspaceDir: string;
+    agentDir: string;
+  }) => ({
+    status: "applied" as const,
+    agent: {
+      agentId: params.agentId,
+      name: params.name,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+    },
+    workspace: {
+      metadataPath: `${params.agentDir}/easyclaw-blueprint.json`,
+      files: [
+        { name: "AGENTS.md", status: "updated" },
+        { name: "MEMORY.md", status: "updated" },
+      ],
+    },
+    bindings: {
+      added: [],
+      removed: [],
+      updated: [],
+      skipped: [],
+      conflicts: [],
+      ignored: [],
+    },
+    automation: {
+      jobs: [
+        {
+          id: "cron-ai-opportunity-swarm",
+          name: "AI Opportunity Swarm",
+          status: "enabled",
+        },
+      ],
+    },
+    warnings: [],
+  });
+  const orchestratorResult = makeNodeResult({
+    agentId: "ai-opportunity-swarm",
+    name: "AI Opportunity Swarm",
+    workspaceDir: "/tmp/ai-opportunity-swarm",
+    agentDir: "/tmp/ai-opportunity-swarm/agent",
+  });
+  return {
+    draft,
+    result: orchestratorResult,
+    graphResults: [
+      {
+        nodeId: "orchestrator",
+        roleId: "orchestrator",
+        entry: true,
+        result: orchestratorResult,
+      },
+      {
+        nodeId: "scout",
+        roleId: "scout",
+        entry: false,
+        result: makeNodeResult({
+          agentId: "ai-opportunity-swarm-scout",
+          name: "AI Opportunity Swarm Scout",
+          workspaceDir: "/tmp/ai-opportunity-swarm-scout",
+          agentDir: "/tmp/ai-opportunity-swarm-scout/agent",
+        }),
+      },
+      {
+        nodeId: "analyst",
+        roleId: "analyst",
+        entry: false,
+        result: makeNodeResult({
+          agentId: "ai-opportunity-swarm-analyst",
+          name: "AI Opportunity Swarm Analyst",
+          workspaceDir: "/tmp/ai-opportunity-swarm-analyst",
+          agentDir: "/tmp/ai-opportunity-swarm-analyst/agent",
+        }),
+      },
+    ],
+  };
+}
+
+function createLiveCheckBlockedBuilderPlanResult(): BuilderPlanResult {
+  const result = createBuilderPlanResult({ setupComplete: true });
+  return {
+    ...result,
+    draft: {
+      ...result.draft,
+      brief: "Send my daily briefing to WhatsApp after checking Gmail.",
+      buildSpec: {
+        ...result.draft.buildSpec,
+        setupActions: [],
+      },
+      planning: {
+        ...result.draft.planning,
+        verifications: [
+          {
+            id: "platform:gmail-hook:read-test",
+            connectorId: "platform:gmail-hook",
+            connectorLabel: "Gmail Hook",
+            probeKind: "source",
+            probeLabel: "Gmail Hook: Read test",
+            status: "needs_live_check",
+            detail: "Gmail Hook looks configured, but read test still needs a live runtime check.",
+            source: "preflight",
+            checkedAt: "2026-04-12T18:00:00.000Z",
+          },
+          {
+            id: "channel:whatsapp:send-test",
+            connectorId: "channel:whatsapp",
+            connectorLabel: "WhatsApp",
+            probeKind: "delivery",
+            probeLabel: "WhatsApp: Send test",
+            status: "needs_live_check",
+            detail:
+              "WhatsApp looks configured, but send test still needs a live runtime check.",
+            source: "preflight",
+            checkedAt: "2026-04-12T18:00:00.000Z",
+          },
+        ],
+      },
+    },
+  };
+}
+
 function createUnsafePolicyBuilderPlanResult(): BuilderPlanResult {
   const result = createBuilderPlanResult({ setupComplete: true });
   return {
@@ -1157,10 +1624,7 @@ describe("Builder setup loop", () => {
       }
     });
 
-    app.client = {
-      request,
-      stop: vi.fn(),
-    } as unknown as OpenClawApp["client"];
+    attachMockClient(app, request);
 
     const briefInput = await waitForElement<HTMLTextAreaElement>(
       app,
@@ -1239,10 +1703,7 @@ describe("Builder setup loop", () => {
       }
     });
 
-    app.client = {
-      request,
-      stop: vi.fn(),
-    } as unknown as OpenClawApp["client"];
+    attachMockClient(app, request);
 
     const briefInput = await waitForElement<HTMLTextAreaElement>(
       app,
@@ -1324,6 +1785,578 @@ describe("Builder setup loop", () => {
     );
   });
 
+  it("drives the canonical Gmail opportunity prompt through setup, review, and apply", async () => {
+    const prompt =
+      "Read my Gmail AI newsletters, give me business ideas and opportunities every day at 9am PST, and send the result to my WhatsApp";
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let gmailResumeReady = false;
+    let gmailConfigured = false;
+    let whatsappConnected = false;
+    let whatsappConfigured = false;
+    let whatsappTarget = "";
+    let verifyRuns = 0;
+
+    const request = vi.fn(async (method: string, params: unknown) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createPhase14PromptBuilderPlanResult({
+            gmailSetupComplete: gmailConfigured,
+            whatsappSetupComplete: whatsappConfigured,
+          });
+        case "agents.builder.setup.run": {
+          const record =
+            params && typeof params === "object" && !Array.isArray(params)
+              ? (params as Record<string, unknown>)
+              : {};
+          const inputs =
+            record.inputs && typeof record.inputs === "object" && !Array.isArray(record.inputs)
+              ? (record.inputs as Record<string, unknown>)
+              : {};
+          const actionId =
+            typeof record.actionId === "string"
+              ? record.actionId
+              : typeof record.connectorId === "string"
+                ? record.connectorId
+                : "";
+
+          if (actionId === "platform:gmail-hook" && !gmailResumeReady && !gmailConfigured) {
+            return {
+              actionId: "platform:gmail-hook",
+              connectorId: "platform:gmail-hook",
+              status: "needs_auth" as const,
+              message:
+                "Gmail setup needs sign-in before EasyClaw can finish the newsletter watch setup.",
+              updatedRefs: [],
+              authSteps: [
+                {
+                  id: "gcloud-auth",
+                  actionId: "platform:gmail-hook:gcloud-auth",
+                  label: "Sign in to Google Cloud",
+                  detail: "Log in to the Google Cloud CLI.",
+                  command: "gcloud auth login",
+                  connectorId: "platform:gmail-hook",
+                  inputs: {},
+                },
+              ],
+              resume: {
+                actionId: "platform:gmail-hook",
+                connectorId: "platform:gmail-hook",
+                label: "Retry Gmail setup",
+                detail: "Run Gmail auto-setup again after the sign-in steps are complete.",
+                inputs: {
+                  account: "automation@example.com",
+                  project: "",
+                  topic: "",
+                  subscription: "",
+                  pushEndpoint: "",
+                },
+              },
+            };
+          }
+          if (actionId === "platform:gmail-hook:gcloud-auth") {
+            return {
+              actionId: "platform:gmail-hook:gcloud-auth",
+              connectorId: "platform:gmail-hook",
+              status: "needs_auth" as const,
+              message: "Google Cloud sign-in launched. Finish it, then authorize gog.",
+              updatedRefs: [],
+              authSteps: [
+                {
+                  id: "gog-auth",
+                  actionId: "platform:gmail-hook:gog-auth",
+                  label: "Sign in to gog",
+                  detail: "Authorize gog for Gmail access.",
+                  command:
+                    "gog login automation@example.com --client openclaw-gmail-hook --services gmail --gmail-scope full --force-consent",
+                  connectorId: "platform:gmail-hook",
+                  inputs: {
+                    account: "automation@example.com",
+                  },
+                },
+              ],
+              resume: {
+                actionId: "platform:gmail-hook",
+                connectorId: "platform:gmail-hook",
+                label: "Retry Gmail setup",
+                detail: "Run Gmail auto-setup again after the sign-in steps are complete.",
+                inputs: {
+                  account: "automation@example.com",
+                  project: "",
+                  topic: "",
+                  subscription: "",
+                  pushEndpoint: "",
+                },
+              },
+            };
+          }
+          if (actionId === "platform:gmail-hook:gog-auth") {
+            gmailResumeReady = true;
+            return {
+              actionId: "platform:gmail-hook:gog-auth",
+              connectorId: "platform:gmail-hook",
+              status: "needs_auth" as const,
+              message: "Gmail auth finished. Retry Gmail setup to continue.",
+              updatedRefs: [],
+              resume: {
+                actionId: "platform:gmail-hook",
+                connectorId: "platform:gmail-hook",
+                label: "Retry Gmail setup",
+                detail: "Run Gmail auto-setup again after the sign-in steps are complete.",
+                inputs: {
+                  account: "automation@example.com",
+                  project: "",
+                  topic: "",
+                  subscription: "",
+                  pushEndpoint: "",
+                },
+              },
+            };
+          }
+          if (actionId === "platform:gmail-hook" && gmailResumeReady) {
+            gmailConfigured = true;
+            return {
+              actionId: "platform:gmail-hook",
+              connectorId: "platform:gmail-hook",
+              status: "configured" as const,
+              message: "Gmail hook configured for newsletter ingestion.",
+              updatedRefs: ["hooks.gmail", "hooks.gmail.topic"],
+              summary: {
+                topic: "projects/project-123/topics/gmail-push",
+              },
+            };
+          }
+          if (actionId === "channel:whatsapp:auto-default-target") {
+            const manualTarget =
+              typeof inputs["whatsapp.target"] === "string" ? inputs["whatsapp.target"] : "";
+            whatsappConfigured = true;
+            whatsappTarget = manualTarget || "+14155551234";
+            return {
+              actionId: "channel:whatsapp:auto-default-target",
+              connectorId: "channel:whatsapp",
+              status: "configured" as const,
+              message: `WhatsApp default target set to ${whatsappTarget}.`,
+              updatedRefs: ["channels.whatsapp.defaultTo"],
+            };
+          }
+          throw new Error(`Unhandled setup action in phase 14 builder test: ${actionId}`);
+        }
+        case "web.login.start":
+          return {
+            message: "Scan this QR code with WhatsApp.",
+            qrDataUrl: "data:image/png;base64,whatsapp-qr",
+          };
+        case "web.login.wait":
+          whatsappConnected = true;
+          return {
+            message: "Linked.",
+            connected: true,
+          };
+        case "channels.status":
+          return {
+            channelAccounts: {
+              whatsapp: [
+                {
+                  connected: whatsappConnected,
+                  linked: whatsappConnected,
+                  running: whatsappConnected,
+                  lastError: null,
+                  probe: {
+                    ok: whatsappConnected,
+                  },
+                },
+              ],
+            },
+          };
+        case "config.get":
+          return createConfigSnapshot(
+            {
+              hooks: gmailConfigured
+                ? {
+                    gmail: {
+                      account: "automation@example.com",
+                      topic: "projects/project-123/topics/gmail-push",
+                    },
+                  }
+                : {},
+              channels: whatsappTarget
+                ? {
+                    whatsapp: {
+                      defaultTo: whatsappTarget,
+                    },
+                  }
+                : {},
+            },
+            "phase14-config",
+          );
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createPhase14PromptBuilderVerifyResult({
+            gmailSetupComplete: gmailConfigured,
+            whatsappSetupComplete: whatsappConfigured,
+            fingerprint: `phase14-verify-${verifyRuns}`,
+          });
+        case "agents.builder.apply":
+          return createPhase14PromptBuilderApplyResult();
+        case "agents.list":
+          return {
+            defaultId: "main",
+            mainKey: "agent:main:main",
+            scope: "per-sender",
+            agents: [{ id: "ai-opportunity-swarm", name: "AI Opportunity Swarm" }],
+          };
+        case "cron.list":
+          return {
+            jobs: [
+              {
+                id: "cron-ai-opportunity-swarm",
+                name: "AI Opportunity Swarm",
+                enabled: true,
+                createdAtMs: 0,
+                updatedAtMs: 0,
+                schedule: {
+                  kind: "cron",
+                  expr: "0 9 * * *",
+                },
+                sessionTarget: "main",
+                wakeMode: "next-heartbeat",
+                agentId: "ai-opportunity-swarm",
+                payload: {
+                  kind: "agentTurn",
+                  message: "Read Gmail AI newsletters and deliver the best opportunities.",
+                  model: "openai/gpt-5.4",
+                },
+                delivery: {
+                  mode: "announce",
+                  channel: "whatsapp",
+                  to: whatsappTarget || "+14155551234",
+                },
+                state: {
+                  nextRunAtMs: 1_775_980_800_000,
+                  lastRunAtMs: 1_775_894_400_000,
+                  lastRunStatus: "ok",
+                  lastStatus: "ok",
+                },
+              },
+            ],
+            total: 1,
+            limit: 25,
+            offset: 0,
+            hasMore: false,
+            nextOffset: null,
+          };
+        case "cron.status":
+          return {
+            enabled: true,
+            jobs: 1,
+          };
+        default:
+          throw new Error(`Unhandled phase 14 builder method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, prompt);
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    const initialText = normalizeText(app.textContent);
+    expect(initialText).toContain("Runtime Graph");
+    expect(initialText).toContain("swarm 3 nodes");
+    expect(initialText).toContain("Daily at 9:00 AM Pacific Time");
+    expect(initialText).toContain("Workspace Authoring Review");
+    expect(initialText).toContain("4 reviewable files across 3 runtime nodes.");
+    expect(initialText).toContain("Set up Gmail Hook");
+    expect(initialText).toContain("Set up WhatsApp delivery");
+    expectApplyBlocked(app);
+
+    clickButton(app, "Open Gmail hook setup");
+    await settle(app, 3);
+
+    const gmailAccountInput = Array.from(
+      app.querySelectorAll<HTMLInputElement>('.quick-setup__assist input[type="text"]'),
+    ).find((entry) => {
+      const label = entry.closest("label")?.querySelector(".quick-setup__field-label")?.textContent;
+      return normalizeText(label).includes("Gmail Account");
+    });
+    expect(gmailAccountInput).not.toBeNull();
+    if (!gmailAccountInput) {
+      return;
+    }
+    changeValue(gmailAccountInput, "automation@example.com");
+    await settle(app);
+
+    clickButton(app, "Auto-configure Gmail hook", { exact: true });
+    await settle(app, 3);
+
+    expect(app.builderSetupResult).toEqual(
+      expect.objectContaining({
+        actionId: "platform:gmail-hook",
+        connectorId: "platform:gmail-hook",
+        status: "needs_auth",
+      }),
+    );
+    expect(app.textContent).toContain(
+      "Gmail setup needs sign-in before EasyClaw can finish the newsletter watch setup.",
+    );
+
+    app.remove();
+    await nextFrame();
+
+    const restoredApp = mountApp("/builder");
+    await settle(restoredApp, 3);
+    attachMockClient(restoredApp, request);
+    await settle(restoredApp, 2);
+
+    expect(restoredApp.builderBrief).toBe(prompt);
+    expect(restoredApp.builderSetupFocus).toEqual(
+      expect.objectContaining({
+        connectorId: "platform:gmail-hook",
+      }),
+    );
+    expect(restoredApp.builderSetupInputs).toEqual(
+      expect.objectContaining({
+        "gmail.account": "automation@example.com",
+      }),
+    );
+
+    clickButton(restoredApp, "Sign in to Google Cloud", { exact: true });
+    await settle(restoredApp, 3);
+    clickButton(restoredApp, "Sign in to gog", { exact: true });
+    await settle(restoredApp, 3);
+    clickButton(restoredApp, "Retry Gmail setup", { exact: true });
+    await settle(restoredApp, 4);
+
+    expect(restoredApp.builderVerifyResult?.verification.fingerprint).toBe("phase14-verify-1");
+    expect(restoredApp.textContent).toContain("Set up WhatsApp delivery");
+    expect(findButtonByText(restoredApp, "Apply Builder Plan", { exact: true })?.disabled).toBe(
+      true,
+    );
+
+    const postGmailText = normalizeText(restoredApp.textContent);
+    expect(postGmailText).toContain("Runtime Graph");
+    expect(postGmailText).toContain("Workspace Authoring Review");
+    expect(postGmailText).toContain("2 workspace docs ready for review before apply.");
+
+    clickButton(restoredApp, "Open WhatsApp setup");
+    await settle(restoredApp, 3);
+
+    clickButton(restoredApp, "Show QR", { exact: true });
+    await settle(restoredApp, 5);
+
+    expect(restoredApp.textContent).toContain(
+      "WhatsApp listener is active. Return to Builder and continue setup.",
+    );
+
+    const destinationInput = Array.from(
+      restoredApp.querySelectorAll<HTMLInputElement>('.quick-setup__fields input[type="text"]'),
+    ).find((entry) => {
+      const label = entry.closest("label")?.querySelector(".quick-setup__field-label")?.textContent;
+      return normalizeText(label).includes("Default destination");
+    });
+    expect(destinationInput).not.toBeNull();
+    if (!destinationInput) {
+      return;
+    }
+    changeValue(destinationInput, "+14155551234");
+    await settle(restoredApp);
+
+    clickButton(restoredApp, "Set Destination", { exact: true });
+    await settle(restoredApp, 4);
+
+    expect(restoredApp.builderVerifyResult?.verification.fingerprint).toBe("phase14-verify-2");
+    expect(findButtonByText(restoredApp, "Apply Builder Plan", { exact: true })?.disabled).toBe(
+      false,
+    );
+
+    clickButton(restoredApp, "Apply Builder Plan", { exact: true });
+    await settle(restoredApp, 2);
+    expect(restoredApp.textContent).toContain("Confirm Apply");
+
+    clickButton(restoredApp, "Yes, Apply", { exact: true });
+    await settle(restoredApp, 4);
+
+    const appliedText = normalizeText(restoredApp.textContent);
+    expect(appliedText).toContain("Builder Applied");
+    expect(appliedText).toContain("AI Opportunity Swarm");
+    expect(appliedText).toContain("Runtime Graph Nodes");
+    expect(appliedText).toContain("Entry orchestrator");
+    expect(appliedText).toContain("Worker scout");
+    expect(appliedText).toContain("Worker analyst");
+    expect(appliedText).toContain("Scheduled Tasks");
+    expect(appliedText).toContain("AI Opportunity Swarm enabled");
+  });
+
+  it("clears stale builder setup focus when the brief changes", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    app.builderSetupFocus = {
+      connectorId: "channel:slack",
+      connectorLabel: "Slack",
+      title: "Open Slack setup",
+      detail: "Configure Slack, then return to Builder.",
+      refs: ["channels.slack"],
+      targetTab: "onboarding",
+    };
+    await settle(app, 2);
+
+    expect(normalizeText(app.textContent)).not.toContain("Set up Slack");
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Create a Gmail briefing and send it to WhatsApp.");
+    await settle(app, 2);
+
+    expect(app.builderSetupFocus).toBeNull();
+    expect(normalizeText(app.textContent)).not.toContain("Set up Slack");
+  });
+
+  it("reruns planning and live verification when returning from the setup tab", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    let verifyRuns = 0;
+    const request = vi.fn(async (method: string) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createBuilderPlanResult({ setupComplete: false });
+        case "agents.builder.verify":
+          verifyRuns += 1;
+          return createBuilderVerifyResult({
+            setupComplete: false,
+            fingerprint: `return-verify-${verifyRuns}`,
+          });
+        default:
+          throw new Error(`Unhandled builder setup return method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Use web research in this workflow.");
+    await settle(app);
+    app.builderModelId = "openai/gpt-5.4";
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    clickButton(app, "Open web tools setup");
+    await settle(app, 3);
+
+    expect(app.tab).toBe("onboarding");
+    expect(window.location.pathname).toBe("/onboarding");
+
+    clickButton(app, "Return to Builder", { exact: true });
+    await settle(app, 6);
+
+    expect(app.tab).toBe("builder");
+    expect(window.location.pathname).toBe("/builder");
+    expect(request.mock.calls.filter(([method]) => method === "agents.builder.plan")).toHaveLength(
+      2,
+    );
+    expect(request.mock.calls.filter(([method]) => method === "agents.builder.verify")).toHaveLength(
+      1,
+    );
+    expect(request.mock.calls.filter(([method, params]) => {
+      return (
+        method === "agents.builder.plan" &&
+        params &&
+        typeof params === "object" &&
+        !Array.isArray(params) &&
+        (params as Record<string, unknown>).modelId === "openai/gpt-5.4"
+      );
+    })).toHaveLength(2);
+    expect(request.mock.calls.filter(([method, params]) => {
+      return (
+        method === "agents.builder.verify" &&
+        params &&
+        typeof params === "object" &&
+        !Array.isArray(params) &&
+        (params as Record<string, unknown>).modelId === "openai/gpt-5.4"
+      );
+    })).toHaveLength(1);
+    expect(sessionStorage.getItem("openclaw.control.builder-draft.v1")).toContain(
+      "\"modelId\":\"openai/gpt-5.4\"",
+    );
+    expect(app.builderVerifyResult?.verification.fingerprint).toBe("return-verify-1");
+    expectApplyBlocked(app);
+  });
+
+  it("keeps both apply buttons blocked when live verification still needs checks", async () => {
+    const app = mountApp("/builder");
+    await settle(app, 3);
+
+    const request = vi.fn(async (method: string) => {
+      switch (method) {
+        case "agents.builder.plan":
+          return createLiveCheckBlockedBuilderPlanResult();
+        default:
+          throw new Error(`Unhandled live-check builder method: ${method}`);
+      }
+    });
+
+    attachMockClient(app, request);
+
+    const briefInput = await waitForElement<HTMLTextAreaElement>(
+      app,
+      ".builder-brief-field textarea",
+      {
+        frames: 12,
+      },
+    );
+    expect(briefInput).not.toBeNull();
+    if (!briefInput) {
+      return;
+    }
+    changeValue(briefInput, "Send my daily briefing to WhatsApp after checking Gmail.");
+    await settle(app);
+
+    clickButton(app, "Build Plan", { exact: true });
+    await settle(app, 4);
+
+    const builderText = normalizeText(app.textContent);
+    expect(builderText).toContain("Needs Check");
+    expect(builderText).toContain("Resolve the live verification issues before apply.");
+    expect(findButtonByText(app, "Apply Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
+  });
+
   it("shows safety policy review and keeps apply blocked when approval posture is unresolved", async () => {
     const app = mountApp("/builder");
     await settle(app, 3);
@@ -1337,10 +2370,7 @@ describe("Builder setup loop", () => {
       }
     });
 
-    app.client = {
-      request,
-      stop: vi.fn(),
-    } as unknown as OpenClawApp["client"];
+    attachMockClient(app, request);
 
     const briefInput = await waitForElement<HTMLTextAreaElement>(
       app,
@@ -1402,10 +2432,7 @@ describe("Builder setup loop", () => {
       }
     });
 
-    app.client = {
-      request,
-      stop: vi.fn(),
-    } as unknown as OpenClawApp["client"];
+    attachMockClient(app, request);
 
     const briefInput = await waitForElement<HTMLTextAreaElement>(
       app,
@@ -1532,10 +2559,7 @@ describe("Builder setup loop", () => {
       }
     });
 
-    app.client = {
-      request,
-      stop: vi.fn(),
-    } as unknown as OpenClawApp["client"];
+    attachMockClient(app, request);
 
     const briefInput = await waitForElement<HTMLTextAreaElement>(
       app,
@@ -1567,8 +2591,8 @@ describe("Builder setup loop", () => {
     clickButton(app, "Open web tools setup");
     await settle(app, 3);
 
-    expect(app.tab).toBe("builder");
-    expect(window.location.pathname).toBe("/builder");
+    expect(app.tab).toBe("onboarding");
+    expect(window.location.pathname).toBe("/onboarding");
     expect(app.textContent).toContain("Configure and verify web search");
 
     const providerSelect = app.querySelector<HTMLSelectElement>(".quick-setup__assist select");
@@ -1591,11 +2615,11 @@ describe("Builder setup loop", () => {
     );
     expect(app.builderVerifyResult?.verification.fingerprint).toBe("verify-1");
     expect(app.builderVerifyResult?.verification.blockedCount).toBe(1);
-    expect(app.textContent).toContain("Provider saved, but credentials are still missing.");
+    expect(app.textContent).toContain("credentials are still missing");
     expect(
       request.mock.calls.filter(([method]) => method === "agents.builder.verify"),
     ).toHaveLength(1);
-    expect(findButtonByText(app, "Apply Builder Plan", { exact: true })?.disabled).toBe(true);
+    expectApplyBlocked(app);
 
     const apiKeyInput = app.querySelector<HTMLInputElement>(
       '.quick-setup__assist input[type="password"]',

@@ -33,7 +33,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { diffConfigPaths } from "../config-reload.js";
+import { diffConfigPaths, shouldScheduleRestartForConfigWrite } from "../config-reload.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
@@ -429,31 +429,40 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     await writeConfigFile(validated.config, writeOptions);
 
-    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
-      resolveConfigRestartRequest(params);
-    const payload = buildConfigRestartSentinelPayload({
-      kind: "config-patch",
-      mode: "config.patch",
-      sessionKey,
-      deliveryContext,
-      threadId,
-      note,
+    const shouldRestart = shouldScheduleRestartForConfigWrite({
+      nextConfig: validated.config,
+      changedPaths,
     });
-    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
-    const restart = scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "config.patch",
-      audit: {
-        actor: actor.actor,
-        deviceId: actor.deviceId,
-        clientIp: actor.clientIp,
-        changedPaths,
-      },
-    });
-    if (restart.coalesced) {
-      context?.logGateway?.warn(
-        `config.patch restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
-      );
+    let restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
+    let sentinelPath: string | null = null;
+    let payload: RestartSentinelPayload | null = null;
+    if (shouldRestart) {
+      const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+        resolveConfigRestartRequest(params);
+      payload = buildConfigRestartSentinelPayload({
+        kind: "config-patch",
+        mode: "config.patch",
+        sessionKey,
+        deliveryContext,
+        threadId,
+        note,
+      });
+      sentinelPath = await tryWriteRestartSentinelPayload(payload);
+      restart = scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: "config.patch",
+        audit: {
+          actor: actor.actor,
+          deviceId: actor.deviceId,
+          clientIp: actor.clientIp,
+          changedPaths,
+        },
+      });
+      if (restart.coalesced) {
+        context?.logGateway?.warn(
+          `config.patch restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
+        );
+      }
     }
     respond(
       true,
@@ -489,31 +498,40 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     await writeConfigFile(parsed.config, writeOptions);
 
-    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
-      resolveConfigRestartRequest(params);
-    const payload = buildConfigRestartSentinelPayload({
-      kind: "config-apply",
-      mode: "config.apply",
-      sessionKey,
-      deliveryContext,
-      threadId,
-      note,
+    const shouldRestart = shouldScheduleRestartForConfigWrite({
+      nextConfig: parsed.config,
+      changedPaths,
     });
-    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
-    const restart = scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "config.apply",
-      audit: {
-        actor: actor.actor,
-        deviceId: actor.deviceId,
-        clientIp: actor.clientIp,
-        changedPaths,
-      },
-    });
-    if (restart.coalesced) {
-      context?.logGateway?.warn(
-        `config.apply restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
-      );
+    let restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
+    let sentinelPath: string | null = null;
+    let payload: RestartSentinelPayload | null = null;
+    if (shouldRestart) {
+      const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+        resolveConfigRestartRequest(params);
+      payload = buildConfigRestartSentinelPayload({
+        kind: "config-apply",
+        mode: "config.apply",
+        sessionKey,
+        deliveryContext,
+        threadId,
+        note,
+      });
+      sentinelPath = await tryWriteRestartSentinelPayload(payload);
+      restart = scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: "config.apply",
+        audit: {
+          actor: actor.actor,
+          deviceId: actor.deviceId,
+          clientIp: actor.clientIp,
+          changedPaths,
+        },
+      });
+      if (restart.coalesced) {
+        context?.logGateway?.warn(
+          `config.apply restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
+        );
+      }
     }
     respond(
       true,

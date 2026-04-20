@@ -925,9 +925,9 @@ function summarizeKnownExec(words: string[]): string {
     return `run ${bin} ${script}`;
   }
 
-  if (bin === "openclaw") {
+  if (bin === "easyclaw" || bin === "openclaw") {
     const sub = firstPositional(words, 1);
-    return sub ? `run openclaw ${sub}` : "run openclaw";
+    return sub ? `run ${bin} ${sub}` : `run ${bin}`;
   }
 
   const arg = firstPositional(words, 1);

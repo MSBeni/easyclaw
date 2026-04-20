@@ -237,7 +237,10 @@ export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
     alias: models[KIMI_CODING_MODEL_REF]?.alias ?? "Kimi for Coding",
   };
 
-  const defaultModel = buildKimiCodingProvider().models[0];
+  const defaultModel = buildKimiCodingProvider().models?.[0];
+  if (!defaultModel) {
+    throw new Error("Kimi coding provider is missing a default model definition.");
+  }
 
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
@@ -300,6 +303,9 @@ export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
   const defaultProvider = buildXiaomiProvider();
   const resolvedApi = defaultProvider.api ?? "openai-completions";
+  if (!defaultProvider.baseUrl) {
+    throw new Error("Xiaomi provider is missing a baseUrl.");
+  }
   return applyProviderConfigWithDefaultModels(cfg, {
     agentModels: models,
     providerId: "xiaomi",

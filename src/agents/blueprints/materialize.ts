@@ -572,8 +572,9 @@ function sanitizeCronSlug(value: string): string {
 }
 
 function buildCronMessage(plan: AgentBlueprintPlan, schedule: BlueprintScheduleEntry): string {
+  const agentLabel = plan.agent.name?.trim() || plan.manifest.displayName;
   const lines = [
-    `Run the "${plan.manifest.displayName}" workflow now.`,
+    `Complete the scheduled task for "${agentLabel}" now.`,
     schedule.purpose,
     `Follow the workspace instructions in ${plan.agent.workspaceDir}.`,
   ];

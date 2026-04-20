@@ -1,1 +1,1 @@
-export { sendMessageWhatsApp, sendPollWhatsApp } from "../../../extensions/whatsapp/src/send.js";
+export { sendMessageWhatsApp, sendPollWhatsApp } from "../../channels/web/index.js";

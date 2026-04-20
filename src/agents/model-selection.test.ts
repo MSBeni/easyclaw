@@ -108,11 +108,15 @@ function createModelConfigEntry(id: string, opts?: { reasoning?: boolean }) {
   } as const;
 }
 
-function resolveConfiguredRefForTest(cfg: Partial<OpenClawConfig>) {
+function resolveConfiguredRefForTest(
+  cfg: Partial<OpenClawConfig>,
+  opts?: { preferConfiguredProviderFallback?: boolean },
+) {
   return resolveConfiguredModelRef({
     cfg: cfg as OpenClawConfig,
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
+    preferConfiguredProviderFallback: opts?.preferConfiguredProviderFallback,
   });
 }
 
@@ -731,7 +735,7 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
     });
 
-    it("should prefer configured custom provider when default provider is not in models.providers", () => {
+    it("keeps the built-in Claude default when no explicit model is configured", () => {
       const cfg = createProviderWithModelsConfig("n1n", [
         {
           id: "gpt-5.4",
@@ -744,6 +748,24 @@ describe("model-selection", () => {
         },
       ]);
       const result = resolveConfiguredRefForTest(cfg);
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("prefers a configured provider only when legacy fallback is explicitly requested", () => {
+      const cfg = createProviderWithModelsConfig("n1n", [
+        {
+          id: "gpt-5.4",
+          name: "GPT 5.4",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+          maxTokens: 4096,
+        },
+      ]);
+      const result = resolveConfiguredRefForTest(cfg, {
+        preferConfiguredProviderFallback: true,
+      });
       expect(result).toEqual({ provider: "n1n", model: "gpt-5.4" });
     });
 
@@ -763,7 +785,7 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
     });
 
-    it("prefers a provider with configured auth hints when the default provider has none", () => {
+    it("keeps the built-in Claude default even when another provider has auth configured", () => {
       const cfg = {
         models: {
           providers: {
@@ -779,10 +801,31 @@ describe("model-selection", () => {
       } as Partial<OpenClawConfig>;
 
       const result = resolveConfiguredRefForTest(cfg);
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("prefers a provider with configured auth hints only in legacy fallback mode", () => {
+      const cfg = {
+        models: {
+          providers: {
+            anthropic: {
+              models: [createModelConfigEntry("claude-opus-4-6", { reasoning: true })],
+            },
+            openai: {
+              apiKey: "sk-test",
+              models: [createModelConfigEntry("gpt-5.2")],
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>;
+
+      const result = resolveConfiguredRefForTest(cfg, {
+        preferConfiguredProviderFallback: true,
+      });
       expect(result).toEqual({ provider: "openai", model: "gpt-5.2" });
     });
 
-    it("uses provider default model hints when a configured provider omits models[]", () => {
+    it("uses provider default model hints only in legacy fallback mode", () => {
       const cfg = {
         models: {
           providers: {
@@ -793,7 +836,9 @@ describe("model-selection", () => {
         },
       } as Partial<OpenClawConfig>;
 
-      const result = resolveConfiguredRefForTest(cfg);
+      const result = resolveConfiguredRefForTest(cfg, {
+        preferConfiguredProviderFallback: true,
+      });
       expect(result).toEqual({ provider: "openai", model: "gpt-4o" });
     });
 

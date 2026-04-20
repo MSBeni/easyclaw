@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   loadChannels: vi.fn(async (state: Record<string, unknown>) => {
     state.channelsSnapshot = {
       channelAccounts: {
-        whatsapp: [{ connected: true, linked: true, lastError: null }],
+        whatsapp: [{ connected: true, linked: true, running: true, lastError: null }],
       },
     };
   }),
@@ -115,5 +115,122 @@ describe("app-channels whatsapp automation", () => {
       connectorId: "channel:whatsapp:auto-default-target",
       inputs: {},
     });
+  });
+
+  it("rewrites the already-linked message when WhatsApp is linked but the listener is down", async () => {
+    mocks.startWhatsAppLogin.mockImplementationOnce(async (state: Record<string, unknown>) => {
+      state.whatsappLoginConnected = null;
+      state.whatsappLoginMessage =
+        "WhatsApp is already linked (+15551234567). Use relink (or force) if you want a fresh QR.";
+      state.whatsappLoginQrDataUrl = null;
+    });
+    mocks.loadChannels.mockImplementationOnce(async (state: Record<string, unknown>) => {
+      state.channelsSnapshot = {
+        channelAccounts: {
+          whatsapp: [
+            {
+              accountId: "+15551234567",
+              linked: true,
+              running: false,
+              connected: false,
+              lastError: "Listener missing",
+              probe: {
+                error: "WhatsApp Web is linked, but no active listener is running for this account.",
+              },
+            },
+          ],
+        },
+      };
+    });
+    mocks.loadChannels.mockImplementationOnce(async (state: Record<string, unknown>) => {
+      state.channelsSnapshot = {
+        channelAccounts: {
+          whatsapp: [
+            {
+              accountId: "+15551234567",
+              linked: true,
+              running: false,
+              connected: false,
+              lastError: "Listener missing",
+              probe: {
+                error: "WhatsApp Web is linked, but no active listener is running for this account.",
+              },
+            },
+          ],
+        },
+      };
+    });
+    const host = createHost();
+
+    await handleWhatsAppStart(host as never, false);
+
+    expect(host.whatsappLoginMessage).toContain("live listener is not running");
+    expect(host.whatsappLoginMessage).toContain("Restart the gateway first");
+  });
+
+  it("rewrites QR timeout guidance when relink is attempted while the listener is down", async () => {
+    mocks.startWhatsAppLogin.mockImplementationOnce(async (state: Record<string, unknown>) => {
+      state.whatsappLoginConnected = null;
+      state.whatsappLoginMessage = "Error: Timed out waiting for WhatsApp QR";
+      state.whatsappLoginQrDataUrl = null;
+    });
+    mocks.loadChannels.mockImplementationOnce(async (state: Record<string, unknown>) => {
+      state.channelsSnapshot = {
+        channelAccounts: {
+          whatsapp: [
+            {
+              accountId: "+15551234567",
+              linked: true,
+              running: false,
+              connected: false,
+              lastError: "Listener missing",
+            },
+          ],
+        },
+      };
+    });
+    const host = createHost();
+
+    await handleWhatsAppStart(host as never, true);
+
+    expect(host.whatsappLoginMessage).toContain("timed out waiting for a fresh QR");
+    expect(host.whatsappLoginMessage).toContain("Logout, then Show QR");
+  });
+
+  it("does not auto-configure when pairing succeeded but the runtime listener never becomes ready", async () => {
+    mocks.waitWhatsAppLogin.mockImplementationOnce(async (state: Record<string, unknown>) => {
+      state.whatsappLoginConnected = true;
+      state.whatsappLoginMessage = "Linked.";
+    });
+    mocks.loadChannels.mockImplementation(async (state: Record<string, unknown>) => {
+      state.channelsSnapshot = {
+        channelAccounts: {
+          whatsapp: [
+            {
+              accountId: "+15551234567",
+              linked: true,
+              running: false,
+              connected: false,
+              lastError: "Listener missing",
+              probe: {
+                ok: false,
+                error: "WhatsApp Web is linked, but no active listener is running for this account.",
+              },
+            },
+          ],
+        },
+      };
+    });
+    const host = createHost();
+
+    await handleWhatsAppWait(host as never);
+
+    expect(host.request).not.toHaveBeenCalledWith("agents.builder.setup.run", {
+      connectorId: "channel:whatsapp:auto-default-target",
+      inputs: {},
+    });
+    expect(host.whatsappLoginConnected).toBe(false);
+    expect(host.whatsappLoginMessage).toContain("live listener is not running");
+    expect(host.whatsappLoginMessage).toContain("Restart the gateway first");
   });
 });

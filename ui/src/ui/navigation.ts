@@ -2,25 +2,11 @@ import { t } from "../i18n/index.ts";
 import type { IconName } from "./icons.js";
 
 export const TAB_GROUPS = [
+  { label: "builder", tabs: ["builder"] },
+  { label: "setup", tabs: ["onboarding"] },
   { label: "chat", tabs: ["chat"] },
-  {
-    label: "control",
-    tabs: ["overview", "onboarding", "channels", "instances", "sessions", "usage", "cron"],
-  },
-  { label: "agent", tabs: ["builder", "agents", "templates", "skills", "nodes"] },
-  {
-    label: "settings",
-    tabs: [
-      "config",
-      "communications",
-      "appearance",
-      "automation",
-      "infrastructure",
-      "aiAgents",
-      "debug",
-      "logs",
-    ],
-  },
+  { label: "agents", tabs: ["agents"] },
+  { label: "advanced", tabs: ["advanced"] },
 ] as const;
 
 export type Tab =
@@ -29,6 +15,7 @@ export type Tab =
   | "templates"
   | "overview"
   | "onboarding"
+  | "advanced"
   | "channels"
   | "instances"
   | "sessions"
@@ -51,7 +38,8 @@ const TAB_PATHS: Record<Tab, string> = {
   agents: "/agents",
   templates: "/templates",
   overview: "/overview",
-  onboarding: "/onboarding",
+  onboarding: "/setup",
+  advanced: "/advanced",
   channels: "/channels",
   instances: "/instances",
   sessions: "/sessions",
@@ -70,7 +58,12 @@ const TAB_PATHS: Record<Tab, string> = {
   logs: "/logs",
 };
 
-const PATH_TO_TAB = new Map(Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]));
+const PATH_TO_TAB = new Map<string, Tab>(
+  Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]),
+);
+
+PATH_TO_TAB.set("/onboarding", "onboarding");
+PATH_TO_TAB.set("/templates", "builder");
 
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) {
@@ -124,9 +117,30 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
     normalized = "/";
   }
   if (normalized === "/") {
-    return "chat";
+    return "builder";
   }
   return PATH_TO_TAB.get(normalized) ?? null;
+}
+
+export function primaryNavTabForTab(tab: Tab): Tab {
+  switch (tab) {
+    case "builder":
+    case "templates":
+      return "builder";
+    case "onboarding":
+    case "overview":
+    case "channels":
+    case "instances":
+      return "onboarding";
+    case "chat":
+      return "chat";
+    case "agents":
+      return "agents";
+    case "advanced":
+      return "advanced";
+    default:
+      return "advanced";
+  }
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
@@ -159,6 +173,8 @@ export function iconForTab(tab: Tab): IconName {
       return "folder";
     case "templates":
       return "bookmark";
+    case "advanced":
+      return "settings";
     case "chat":
       return "messageSquare";
     case "overview":

@@ -65,6 +65,20 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
   return { mode, debounceMs };
 }
 
+export function shouldScheduleRestartForConfigWrite(params: {
+  nextConfig: OpenClawConfig;
+  changedPaths: string[];
+}): boolean {
+  const settings = resolveGatewayReloadSettings(params.nextConfig);
+  if (settings.mode === "off" || settings.mode === "hot") {
+    return false;
+  }
+  if (settings.mode === "restart") {
+    return true;
+  }
+  return buildGatewayReloadPlan(params.changedPaths).restartGateway;
+}
+
 export type GatewayConfigReloader = {
   stop: () => Promise<void>;
 };

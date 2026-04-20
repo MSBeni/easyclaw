@@ -409,7 +409,7 @@ export const OPENCLAW_CAPABILITY_CONTRACTS: CapabilityContract[] = [
     configRequirements: ["cron enabled"],
     authRequirements: [],
     setupHints: ["Use for recurring digests and background jobs."],
-    risk: "operator",
+    risk: "communicative",
     verification: [STATUS_PROBE],
   },
   {
